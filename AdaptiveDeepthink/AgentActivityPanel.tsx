@@ -45,9 +45,10 @@ const CollapsibleContent: React.FC<{ content: string; maxLines: number }> = ({ c
 };
 
 function getProximityLoopLength(toolName: string, args: unknown): number | null {
-    if (toolName !== 'generate_strategies' && toolName !== 'generate_hypothesis') return null;
+    if (toolName !== 'generate_strategies' && toolName !== 'generate_modules') return null;
     if (!args || typeof args !== 'object') return null;
-    const value = (args as { proximityLoops?: unknown }).proximityLoops;
+    const value = (args as { proximityLoops?: unknown; impactReviewLoops?: unknown }).proximityLoops
+        ?? (args as { impactReviewLoops?: unknown }).impactReviewLoops;
     return typeof value === 'number' && Number.isInteger(value) ? value : null;
 }
 
@@ -81,7 +82,7 @@ const ToolArgumentsCard: React.FC<{ toolName: string; args?: any }> = ({ toolNam
                     </div>
                 );
             }
-            case 'generate_hypothesis': {
+            case 'generate_modules': {
                 if (!args.specialContext) return null;
                 return (
                     <div className="tool-args-details">
@@ -92,12 +93,12 @@ const ToolArgumentsCard: React.FC<{ toolName: string; args?: any }> = ({ toolNam
                     </div>
                 );
             }
-            case 'test_hypothesis': {
-                const ids: string[] = args.hypothesisIds || [];
+            case 'test_modules': {
+                const ids: string[] = args.moduleIds || [];
                 return (
                     <div className="tool-args-details">
                         <div className="tool-args-row">
-                            <span className="tool-args-label">Hypotheses:</span>
+                            <span className="tool-args-label">Modules:</span>
                             <div className="tool-args-badges">
                                 {ids.map(id => (
                                     <span key={id} className="tool-args-badge text-accent-purple">{id}</span>

@@ -7,7 +7,7 @@
  *
  * Verifies all programmatic, mathematical, and orchestration mechanics:
  * 1. Specification §6.9 Worked Mathematical Examples (Example 1, Example 2, Example 3)
- * 2. Information theory, surprisal, credibility, and hypothesis utilization formulas (§5.2, §6.4)
+ * 2. Module utilization formulas (§5.2)
  * 3. Loop controller schedules, barriers, gap rules, and bounds validation (§2, §3)
  * 4. Real-time shared workspace tool isolation and concurrent editing (§8.3, §8.4)
  * 5. Complete end-to-end DeepthinkPipelineOrchestrator execution with REALISTIC model outputs
@@ -21,16 +21,10 @@ import { describe, it } from 'node:test';
 
 import {
   scoreWindow,
-  gradePrediction,
-  computeForecastQuantities,
+  computeWindowEvidence,
   computePressures,
   decideAction,
-  evaluateBranchState,
-  computeCalibrationMetrics,
-  calculateSurpriseBits,
   calculateUtilizationVector,
-  PROBABILITY_FLOOR,
-  LOG2_3,
 } from '../core/formulas.ts';
 import { BSR_WEIGHT_PRESETS, MAX_DEEPTHINK_DEPTH } from '../../Routing/ModelConfig.ts';
 import {
@@ -114,29 +108,19 @@ describe('Deepthink Consolidated Specification §6.9: Mathematical Worked Exampl
     // 3. Progress kept: net_life = 6 + 6 = 12, movement_life = 8 + 8 = 16 => 12 / (16 + 2) = 12/18 = 0.667
     assert.ok(Math.abs(windowScoring.progressKept - (12 / 18)) < 1e-4, 'Progress kept should be 12/18 ≈ 0.667');
 
-    // 4. Grade prediction: prior gave PROGRESS 0.55 => surprisal = -log2(0.55) ≈ 0.8625 bits < 1.585 => credibility = 1
-    const newPrediction = { PROGRESS: 0.45, STALL: 0.40, REGRESS: 0.15 };
-    const priorPrediction = { PROGRESS: 0.55, STALL: 0.30, REGRESS: 0.15 };
-    const graded = gradePrediction(priorPrediction, windowScoring.windowOutcome, newPrediction);
+    // 4. Window evidence: drift = 6 / (8 + 2) = 0.60, stall_evidence = (1 - 0.60) * 0.8 = 0.32
+    const evidence = computeWindowEvidence(windowScoring.net, windowScoring.movement, 0.8);
+    assert.ok(Math.abs(evidence.drift - 0.60) < 1e-4, 'Drift should be +0.60');
+    assert.ok(Math.abs(evidence.stallEvidence - 0.32) < 1e-4, 'Stall evidence should be 0.32');
 
-    assert.ok(Math.abs(graded.surprisalBits! - (-Math.log2(0.55))) < 1e-4, 'Surprisal bits should be -log2(0.55)');
-    assert.equal(graded.credibility, 1.0, 'Credibility must be 1.0 since surprisal < 1.585');
-    assert.deepEqual(graded.effectivePrediction, newPrediction, 'Effective prediction equals new prediction');
+    // 5. Pressures: CONTINUE = 0.60, EVOLVE = max(0, 0.32 * 0.667) = 0.213, PRUNE = 0.32 * (1 - 0.667) * 1 = 0.107
+    const pressures = computePressures(evidence.drift, windowScoring.lostGround, windowScoring.progressKept, evidence.stallEvidence);
+    assert.ok(Math.abs(pressures.CONTINUE - 0.60) < 1e-4, 'CONTINUE pressure should be 0.60');
+    assert.ok(Math.abs(pressures.EVOLVE - 0.213) < 0.005, 'EVOLVE pressure should be ≈ 0.213');
+    assert.ok(Math.abs(pressures.PRUNE - 0.107) < 0.005, 'PRUNE pressure should be ≈ 0.107');
 
-    // 5. Forecast quantities: expected_drift = 0.45 - 0.15 = +0.30
-    const forecast = computeForecastQuantities(graded.effectivePrediction, 0.8);
-    assert.ok(Math.abs(forecast.expectedDrift - 0.30) < 1e-4, 'Expected drift should be +0.30');
-    assert.ok(Math.abs(forecast.certainty - 0.080) < 0.005, 'Certainty should be ≈ 0.080');
-    assert.ok(Math.abs(forecast.stallEvidence - 0.035) < 0.005, 'Stall evidence should be ≈ 0.035');
-
-    // 6. Pressures: CONTINUE = 0.30, EVOLVE = max(0, 0.035 * 0.667) = 0.023, PRUNE = 0.035 * (1 - 0.667) * 1 = 0.012
-    const pressures = computePressures(forecast.expectedDrift, windowScoring.lostGround, windowScoring.progressKept, forecast.stallEvidence);
-    assert.ok(Math.abs(pressures.CONTINUE - 0.30) < 1e-4, 'CONTINUE pressure should be 0.30');
-    assert.ok(Math.abs(pressures.EVOLVE - 0.023) < 0.005, 'EVOLVE pressure should be ≈ 0.023');
-    assert.ok(Math.abs(pressures.PRUNE - 0.012) < 0.005, 'PRUNE pressure should be ≈ 0.012');
-
-    // 7. Decision: Both EVOLVE and PRUNE are far below theta (0.3) => CONTINUE
-    const decisionResult = decideAction(pressures, windowScoring.lostGround, forecast.stallEvidence, windowScoring.progressKept, windowScoring.lastGoodIteration);
+    // 6. Decision: Both EVOLVE and PRUNE are below theta (0.3) and CONTINUE beats both => CONTINUE
+    const decisionResult = decideAction(pressures, windowScoring.lostGround, evidence.stallEvidence, windowScoring.progressKept, windowScoring.lastGoodIteration);
     assert.equal(decisionResult.decision, 'CONTINUE', 'Decision must be CONTINUE');
   });
 
@@ -144,7 +128,7 @@ describe('Deepthink Consolidated Specification §6.9: Mathematical Worked Exampl
     // Window: iterations 6 to 10
     // Events: it6 progress large (4), it7 progress small (1), it9 regression large (-4), it10 regression large (-4)
     const progressEvents: BsrEvent[] = [
-      { iteration: 6, size: 'large', reason: 'Promising hypothesis exploration' },
+      { iteration: 6, size: 'large', reason: 'Promising module exploration' },
       { iteration: 7, size: 'small', reason: 'Incremental bound tightening' },
     ];
     const regressionEvents: BsrEvent[] = [
@@ -175,37 +159,19 @@ describe('Deepthink Consolidated Specification §6.9: Mathematical Worked Exampl
     // 3. Progress kept: net_life = 6 - 3 = 3, movement_life = 8 + 13 = 21 => 3 / (21 + 2) = 3/23 ≈ 0.130
     assert.ok(Math.abs(windowScoring.progressKept - (3 / 23)) < 1e-4, 'Progress kept should be 3/23 ≈ 0.130');
 
-    // 4. Grade: prior gave REGRESS 0.20 => surprisal = -log2(0.20) ≈ 2.3219 bits
-    const newPrediction = { PROGRESS: 0.10, STALL: 0.20, REGRESS: 0.70 };
-    const priorPrediction = { PROGRESS: 0.50, STALL: 0.30, REGRESS: 0.20 };
-    const graded = gradePrediction(priorPrediction, windowScoring.windowOutcome, newPrediction);
+    // 4. Window evidence: drift = -3 / (13 + 2) = -0.20, stall_evidence = (1 - 0) * 0.6 = 0.60
+    const evidence = computeWindowEvidence(windowScoring.net, windowScoring.movement, 0.6);
+    assert.ok(Math.abs(evidence.drift - (-0.20)) < 0.005, 'Drift should be -0.20');
+    assert.ok(Math.abs(evidence.stallEvidence - 0.60) < 0.005, 'Stall evidence should be 0.60');
 
-    assert.ok(Math.abs(graded.surprisalBits! - 2.3219) < 0.005, 'Surprisal should be ≈ 2.32 bits');
-    // credibility = clip(2 - 2.3219 / 1.585, 0, 1) = 2 - 1.4649 = 0.535
-    assert.ok(Math.abs(graded.credibility - 0.535) < 0.005, 'Credibility should be ≈ 0.535');
-
-    // Effective prediction: 0.535 * (0.10, 0.20, 0.70) + 0.465 * (1/3, 1/3, 1/3)
-    // PROGRESS: 0.0535 + 0.1550 = 0.2085 ≈ 0.209
-    // STALL: 0.1070 + 0.1550 = 0.2620 ≈ 0.262
-    // REGRESS: 0.3745 + 0.1550 = 0.5295 ≈ 0.530
-    assert.ok(Math.abs(graded.effectivePrediction.PROGRESS - 0.209) < 0.005);
-    assert.ok(Math.abs(graded.effectivePrediction.STALL - 0.262) < 0.005);
-    assert.ok(Math.abs(graded.effectivePrediction.REGRESS - 0.530) < 0.005);
-
-    // 5. Forecast quantities: expected_drift = 0.209 - 0.530 = -0.321
-    const forecast = computeForecastQuantities(graded.effectivePrediction, 0.6);
-    assert.ok(Math.abs(forecast.expectedDrift - (-0.321)) < 0.005, 'Expected drift should be ≈ -0.321');
-    assert.ok(Math.abs(forecast.certainty - 0.077) < 0.005, 'Certainty should be ≈ 0.077');
-    assert.ok(Math.abs(forecast.stallEvidence - 0.036) < 0.005, 'Stall evidence should be ≈ 0.036');
-
-    // 6. Pressures: CONTINUE = 0, EVOLVE = max(0.533, 0.036 * 0.130) = 0.533, PRUNE = 0.036 * (1 - 0.130) * (1 - 0.533) = 0.015
-    const pressures = computePressures(forecast.expectedDrift, windowScoring.lostGround, windowScoring.progressKept, forecast.stallEvidence);
+    // 5. Pressures: CONTINUE = 0, EVOLVE = max(0.533, 0.60 * 0.130) = 0.533, PRUNE = 0.60 * (1 - 0.130) * (1 - 0.533) = 0.243
+    const pressures = computePressures(evidence.drift, windowScoring.lostGround, windowScoring.progressKept, evidence.stallEvidence);
     assert.equal(pressures.CONTINUE, 0.0, 'CONTINUE pressure must be 0');
     assert.ok(Math.abs(pressures.EVOLVE - 0.533) < 0.005, 'EVOLVE pressure should be ≈ 0.533');
-    assert.ok(Math.abs(pressures.PRUNE - 0.015) < 0.005, 'PRUNE pressure should be ≈ 0.015');
+    assert.ok(Math.abs(pressures.PRUNE - 0.243) < 0.005, 'PRUNE pressure should be ≈ 0.243');
 
-    // 7. Decision: EVOLVE clears theta (0.3) and beats PRUNE. lost_ground > stall_evidence * progress_kept => rollback to 8
-    const decisionResult = decideAction(pressures, windowScoring.lostGround, forecast.stallEvidence, windowScoring.progressKept, windowScoring.lastGoodIteration);
+    // 6. Decision: EVOLVE clears theta (0.3) and beats PRUNE. lost_ground > stall_evidence * progress_kept => rollback to 8
+    const decisionResult = decideAction(pressures, windowScoring.lostGround, evidence.stallEvidence, windowScoring.progressKept, windowScoring.lastGoodIteration);
     assert.equal(decisionResult.decision, 'EVOLVE', 'Decision must be EVOLVE');
     assert.equal(decisionResult.form, 'rollback', 'Form must be rollback');
     assert.equal(decisionResult.rollbackTo, 8, 'Rollback target must be iteration 8');
@@ -223,14 +189,10 @@ describe('Deepthink Consolidated Specification §6.9: Mathematical Worked Exampl
     ];
 
     // Shared window totals: changes +1, 0, -1, 0, +1 => totals: 1, 1, 0, 0, 1. net = 1 => STALL. movement = 3
-    const newPrediction = { PROGRESS: 0.05, STALL: 0.85, REGRESS: 0.10 };
-    const priorPrediction = { PROGRESS: 0.25, STALL: 0.60, REGRESS: 0.15 };
-    const graded = gradePrediction(priorPrediction, 'STALL', newPrediction);
-    assert.equal(graded.credibility, 1.0, 'Credibility must be 1.0');
-
-    const forecast = computeForecastQuantities(graded.effectivePrediction, 0.9);
-    assert.ok(Math.abs(forecast.certainty - 0.528) < 0.005, 'Certainty should be ≈ 0.528');
-    assert.ok(Math.abs(forecast.stallEvidence - 0.452) < 0.005, 'Stall evidence should be ≈ 0.452');
+    // drift = 1 / (3 + 2) = 0.20, stall_evidence = (1 - 0.20) * 0.9 = 0.72
+    const evidence = computeWindowEvidence(1, 3, 0.9);
+    assert.ok(Math.abs(evidence.drift - 0.20) < 0.005, 'Drift should be 0.20');
+    assert.ok(Math.abs(evidence.stallEvidence - 0.72) < 0.005, 'Stall evidence should be 0.72');
 
     // Branch main3: High progress standing (net_life = 15, movement_life = 17 => progress_kept = 15/19 ≈ 0.789)
     const ledgerMain3: BsrLedgerEntry[] = [
@@ -242,12 +204,12 @@ describe('Deepthink Consolidated Specification §6.9: Mathematical Worked Exampl
     const scoringMain3 = scoreWindow(6, 10, progressEvents, regressionEvents, ledgerMain3);
     assert.ok(Math.abs(scoringMain3.progressKept - (15 / 19)) < 1e-4);
 
-    const pressuresMain3 = computePressures(forecast.expectedDrift, scoringMain3.lostGround, scoringMain3.progressKept, forecast.stallEvidence);
-    // EVOLVE = max(0, 0.452 * 0.789) = 0.357
-    // PRUNE = 0.452 * (1 - 0.789) * (1 - 0) = 0.095
-    assert.ok(Math.abs(pressuresMain3.EVOLVE - 0.357) < 0.005);
-    assert.ok(Math.abs(pressuresMain3.PRUNE - 0.095) < 0.005);
-    const decisionMain3 = decideAction(pressuresMain3, scoringMain3.lostGround, forecast.stallEvidence, scoringMain3.progressKept, scoringMain3.lastGoodIteration);
+    const pressuresMain3 = computePressures(evidence.drift, scoringMain3.lostGround, scoringMain3.progressKept, evidence.stallEvidence);
+    // EVOLVE = max(0, 0.72 * 0.7895) = 0.568
+    // PRUNE = 0.72 * (1 - 0.7895) * (1 - 0) = 0.152
+    assert.ok(Math.abs(pressuresMain3.EVOLVE - 0.568) < 0.005);
+    assert.ok(Math.abs(pressuresMain3.PRUNE - 0.152) < 0.005);
+    const decisionMain3 = decideAction(pressuresMain3, scoringMain3.lostGround, evidence.stallEvidence, scoringMain3.progressKept, scoringMain3.lastGoodIteration);
     assert.equal(decisionMain3.decision, 'EVOLVE', 'main3 must be EVOLVE');
     assert.equal(decisionMain3.form, 'in_place', 'main3 form must be in_place (saturation re-aim)');
 
@@ -261,35 +223,21 @@ describe('Deepthink Consolidated Specification §6.9: Mathematical Worked Exampl
     const scoringMain4 = scoreWindow(6, 10, progressEvents, regressionEvents, ledgerMain4);
     assert.ok(Math.abs(scoringMain4.progressKept - (1 / 9)) < 1e-4);
 
-    const pressuresMain4 = computePressures(forecast.expectedDrift, scoringMain4.lostGround, scoringMain4.progressKept, forecast.stallEvidence);
-    // EVOLVE = max(0, 0.452 * 0.111) = 0.050
-    // PRUNE = 0.452 * (1 - 0.111) * 1 = 0.402
-    assert.ok(Math.abs(pressuresMain4.EVOLVE - 0.050) < 0.005);
-    assert.ok(Math.abs(pressuresMain4.PRUNE - 0.402) < 0.005);
-    const decisionMain4 = decideAction(pressuresMain4, scoringMain4.lostGround, forecast.stallEvidence, scoringMain4.progressKept, scoringMain4.lastGoodIteration);
+    const pressuresMain4 = computePressures(evidence.drift, scoringMain4.lostGround, scoringMain4.progressKept, evidence.stallEvidence);
+    // EVOLVE = max(0, 0.72 * 0.111) = 0.080
+    // PRUNE = 0.72 * (1 - 0.111) * 1 = 0.640
+    assert.ok(Math.abs(pressuresMain4.EVOLVE - 0.080) < 0.005);
+    assert.ok(Math.abs(pressuresMain4.PRUNE - 0.640) < 0.005);
+    const decisionMain4 = decideAction(pressuresMain4, scoringMain4.lostGround, evidence.stallEvidence, scoringMain4.progressKept, scoringMain4.lastGoodIteration);
     assert.equal(decisionMain4.decision, 'PRUNE', 'main4 must be PRUNE (failure exhaustion)');
   });
 });
 
 // ============================================================================
-// SUITE 2: Information Theory Formulas & Hypothesis Feedback (§5.2, §6.4)
+// SUITE 2: Module Feedback (§5.2)
 // ============================================================================
 
-describe('Deepthink Consolidated Specification §5.2 & §6.4: Information Theory Formulas', () => {
-
-  it('calculates surprisal bits with floor protection and baseline calibration', () => {
-    // 1. Uniform baseline guess (1/3) gives log2(3) ≈ 1.58496 bits
-    const surpriseUniform = calculateSurpriseBits({ VALIDATED: 1 / 3, REJECTED: 1 / 3, INCONCLUSIVE: 1 / 3 }, 'VALIDATED');
-    assert.ok(Math.abs(surpriseUniform - LOG2_3) < 1e-4, 'Uniform guess should produce log2(3) bits');
-
-    // 2. Certain prediction (P = 1.0) produces 0 surprisal bits
-    const surpriseCertain = calculateSurpriseBits({ VALIDATED: 1.0, REJECTED: 0.0, INCONCLUSIVE: 0.0 }, 'VALIDATED');
-    assert.equal(surpriseCertain, 0.0, 'Certain observed event yields 0 surprisal');
-
-    // 3. Stated 0.0 outcome is clamped to PROBABILITY_FLOOR (0.01) => -log2(0.01) ≈ 6.6438 bits (§6.4)
-    const surpriseZero = calculateSurpriseBits({ VALIDATED: 0.0, REJECTED: 0.8, INCONCLUSIVE: 0.2 }, 'VALIDATED');
-    assert.ok(Math.abs(surpriseZero - (-Math.log2(PROBABILITY_FLOOR))) < 1e-4, 'Zero probability must be clamped to floor');
-  });
+describe('Deepthink Consolidated Specification §5.2: Module Feedback Formulas', () => {
 
   it('computes utilization vector U(h) = [C/T, P/T, N/T, M/T] without collapsing', () => {
     const feedbackAssignments: DosBranchUtilization[] = [
@@ -305,18 +253,6 @@ describe('Deepthink Consolidated Specification §5.2 & §6.4: Information Theory
     assert.equal(u!.partial_use, 0.25, '1/4 = 0.25 partial_use');
     assert.equal(u!.not_used, 0.25, '1/4 = 0.25 not_used');
     assert.equal(u!.misused, 0.00, '0/4 = 0.00 misused');
-  });
-
-  it('computes log-loss calibration metrics across graded predictions (§6.4)', () => {
-    const bsrRecords = [
-      { branch_id: 'main1', computed: { surprisal_bits: 1.2 } as any },
-      { branch_id: 'main2', computed: { surprisal_bits: 1.4 } as any },
-      { branch_id: 'main3', computed: { surprisal_bits: 0.9 } as any },
-    ];
-    const metrics = computeCalibrationMetrics(bsrRecords);
-    assert.equal(Object.keys(metrics.branchMetrics).length, 3);
-    assert.ok(Math.abs(metrics.meanSurprisal - ((1.2 + 1.4 + 0.9) / 3)) < 1e-4);
-    assert.ok(metrics.isInformative, 'Mean surprisal below 1.585 indicates informative forecasting');
   });
 });
 
@@ -457,8 +393,8 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
         k: 2,
         strategiesCount: 3,
         strategyProximityLoops: 2,
-        hypothesisCount: 2,
-        hypothesisProximityLoops: 1,
+        modulesCount: 2,
+        modulesImpactReviewLoops: 1,
         isolateBranches: false,
         deepthinkCodeExecutionEnabled: false,
         thinkingLevel: 'high',
@@ -467,17 +403,16 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
       initialStrategies: [],
       strategyGenerationHistory: [],
       strategyProximityHistory: [],
-      hypothesisGenerationHistory: [],
-      hypotheses: [],
-      hypothesisHistory: [],
-      hypothesisRounds: [],
+      modulesGenerationHistory: [],
+      modules: [],
+      modulesHistory: [],
+      moduleRounds: [],
       solutionCritiques: [],
       memoryBankAgents: [],
       heartbeats: [],
-      hypothesisProximityHistory: [],
+      modulesImpactReviewHistory: [],
       bsrRecords: [],
       branchLedgers: {},
-      openPredictions: {},
       dosOutputs: [],
       liveEvents: [],
     } as any;
@@ -554,7 +489,7 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
       // 3. Strategy Proximity Review
       if (kind === 'strategyProximity') {
         assert.ok(
-          args.systemInstruction.includes('You are the core agent behind generating & reviewing the strategies.'),
+          args.systemInstruction.includes('You are the Strategy Generation and Strategy Proximity Review engine of the Deepthink pipeline.'),
           'Strategy Proximity must share the unified strategy system prompt'
         );
         assert.ok(p.includes('# Core Challenge'), 'Strategy Proximity must receive full # Core Challenge');
@@ -608,7 +543,7 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
           );
         }
         if (p.includes('<LatestCustomCuratedContext>')) {
-          assert.ok(p.includes('Testing of that Hypothesis:'), 'Curated context must include Testing of that Hypothesis');
+          assert.ok(p.includes('Testing of that Module:'), 'Curated context must include Testing of that Module');
           assert.equal(p.includes('Verdict:'), false, 'Curated context must not include regex Verdict line');
         }
         if (desc.includes('Iteration 6')) {
@@ -630,9 +565,9 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
         if (desc.includes('Step-ii DOS')) {
           return wrapInRealisticLLMFence({
             core_synthesis: { status: 'Post-update branches stabilized.' },
-            hypothesis_feedback: [
+            module_feedback: [
               {
-                hypothesis_id: 'h1',
+                module_id: 'm1',
                 branch_utilization: [
                   { branch_id: 'main1', utilization: { classification: 'USED_CORRECTLY', reason: 'Applied tested bound' } },
                 ],
@@ -646,7 +581,7 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
         // Heartbeat DOS
         return wrapInRealisticLLMFence({
           core_synthesis: { heartbeat: 'Synthesis of active branches.' },
-          hypothesis_feedback: [],
+          module_feedback: [],
         });
       }
 
@@ -654,13 +589,13 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
       if (kind === 'bsr') {
         bsrCallCount++;
         const ledgerIdx = p.indexOf('<StandingEventLedger>');
-        const gradedIdx = p.indexOf('<EarlierGradedPredictionsHistory>');
         const memBeforeIdx = p.indexOf('<MemoryBankBeforeWindow>');
         const winHistIdx = p.indexOf('<WindowCorrectionCritiqueHistory>');
         assert.ok(
-          ledgerIdx >= 0 && gradedIdx > ledgerIdx && memBeforeIdx > gradedIdx && winHistIdx > memBeforeIdx,
-          'BSR context must order <StandingEventLedger> -> <EarlierGradedPredictionsHistory> -> <MemoryBankBeforeWindow> -> <WindowCorrectionCritiqueHistory>'
+          ledgerIdx >= 0 && memBeforeIdx > ledgerIdx && winHistIdx > memBeforeIdx,
+          'BSR context must order <StandingEventLedger> -> <MemoryBankBeforeWindow> -> <WindowCorrectionCritiqueHistory>'
         );
+        assert.equal(p.includes('<EarlierGradedPredictionsHistory>'), false, 'BSR context must NOT include <EarlierGradedPredictionsHistory>');
         if (desc.includes('main1') || p.includes('Branch ID: main1')) {
           // main1: Healthy branch => CONTINUE
           return wrapInRealisticLLMFence({
@@ -671,10 +606,6 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
             ],
             confirmed_regression: [],
             critique_alignment: { value: 0.85, reason: 'Followed critique points closely' },
-            next_window_prediction: {
-              reason: 'Clear trajectory towards optimality',
-              probabilities: { PROGRESS: 0.60, STALL: 0.30, REGRESS: 0.10 },
-            },
           }, 'BSR report for main1:');
         }
         if (desc.includes('main2') || p.includes('Branch ID: main2')) {
@@ -688,10 +619,6 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
               { iteration: 3, size: 'large', reason: 'Lagrangian degenerated at boundaries' },
             ],
             critique_alignment: { value: 0.6, reason: 'Partial adherence' },
-            next_window_prediction: {
-              reason: 'Unstable local minimum',
-              probabilities: { PROGRESS: 0.10, STALL: 0.20, REGRESS: 0.70 },
-            },
           }, 'BSR report for main2:');
         }
         // main3: Stall on failing branch with no progress => PRUNE (§6.5, §6.9 Example 3)
@@ -704,83 +631,70 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
             { iteration: 3, size: 'small', reason: 'Offsetting geometric error' },
           ],
           critique_alignment: { value: 0.90, reason: 'Followed critique recommendations' },
-          next_window_prediction: {
-            reason: 'Stuck in unresolvable geometric clash with no trajectory forward',
-            probabilities: { PROGRESS: 0.05, STALL: 0.85, REGRESS: 0.10 },
-          },
         }, 'BSR report for main3:');
       }
 
-      // 9. Hypothesis Generation (§4.2)
-      if (kind === 'hypothesisGeneration' || desc.includes('Hypothesis Generation')) {
-        assert.ok(p.includes('# Core Challenge'), 'HG must receive # Core Challenge');
-        assert.ok(p.includes('Requested Number of Hypotheses: 2'), 'HG must receive hypothesisCount');
-        assert.ok(p.includes('<HarnessNote>'), 'HG must receive <HarnessNote>');
-        assert.ok(p.includes('<DosCoreSynthesis>'), 'HG must receive <DosCoreSynthesis>');
-        assert.equal(p.includes('Latest Critique:'), false, 'HG must NOT receive raw branch critiques');
+      // 9. Modules Generator (§4.2)
+      if (kind === 'modulesGeneration' || desc.includes('Modules Generator')) {
+        assert.ok(p.includes('# Core Challenge'), 'MG must receive # Core Challenge');
+        assert.ok(p.includes('Requested Number of Modules: 2'), 'MG must receive modulesCount');
+        assert.ok(p.includes('<HarnessNote>'), 'MG must receive <HarnessNote>');
+        assert.ok(p.includes('<DosCoreSynthesis>'), 'MG must receive <DosCoreSynthesis>');
+        assert.equal(p.includes('Latest Critique:'), false, 'MG must NOT receive raw branch critiques');
         if (desc.includes('Heartbeat 1')) {
-          assert.ok(p.includes('<ActiveRunningStrategies>'), 'HB1 HG must receive <ActiveRunningStrategies>');
-          assert.ok(p.includes('Latest Correction:'), 'HB1 HG must receive Latest Correction from active branches');
+          assert.ok(p.includes('<ActiveRunningStrategies>'), 'HB1 MG must receive <ActiveRunningStrategies>');
+          assert.ok(p.includes('Latest Correction:'), 'HB1 MG must receive Latest Correction from active branches');
         }
         if (desc.includes('Heartbeat 2')) {
-          assert.ok(p.includes('<HypothesisProximityHistory>'), 'HB2 HG must receive <HypothesisProximityHistory>');
+          assert.ok(p.includes('<ModulesImpactReviewHistory>'), 'HB2 MG must receive <ModulesImpactReviewHistory>');
           assert.ok(
             p.includes('DOS_history/DOS_global_update_01_step_ii.md'),
             'HB2 must include reframed note for HB1 (which ran at end of GU 1) pointing to DOS_global_update_01_step_ii.md'
           );
-          assert.ok(p.includes('<PreviousHeartbeatHypothesesAndTests>'), 'HB2 must include <PreviousHeartbeatHypothesesAndTests>');
+          assert.ok(p.includes('<PreviousHeartbeatModulesAndTests>'), 'HB2 must include <PreviousHeartbeatModulesAndTests>');
           assert.ok(p.includes('<MappedBranchPackets>'), 'HB2 must include <MappedBranchPackets>');
           assert.ok(p.includes('"latest_correction"'), 'HB2 <MappedBranchPackets> must include latest_correction from all active branches');
-          assert.ok(p.includes('<RealizedHypothesisFeedback>'), 'HB2 must include <RealizedHypothesisFeedback>');
-          assert.ok(p.includes('"surprise_note"'), 'HB2 <RealizedHypothesisFeedback> must include dynamic surprise_note');
-          assert.ok(p.includes('Your prediction for this hypothesis was:'), 'HB2 surprise_note must empathetically state what was predicted vs actual outcome');
-          assert.ok(p.includes('<HypothesesFinalizedAndUsedSoFar>'), 'HB2 must include <HypothesesFinalizedAndUsedSoFar>');
+          assert.ok(p.includes('<RealizedModuleFeedback>'), 'HB2 must include <RealizedModuleFeedback>');
+          assert.equal(p.includes('"surprise_note"'), false, 'HB2 <RealizedModuleFeedback> must NOT include surprise_note');
+          assert.ok(p.includes('<ModulesFinalizedAndUsedSoFar>'), 'HB2 must include <ModulesFinalizedAndUsedSoFar>');
         }
         return wrapInRealisticLLMFence({
-          hypotheses: [
+          modules: [
             {
-              hypothesis_id: 'h1',
+              module_id: 'm1',
               text: 'The optimal 3-circle center points form an equilateral triangle homothetic to the container.',
               target_branches: ['main1'],
-              predicted_test_outcome: {
-                reason: 'Symmetry preserves homothety',
-                probabilities: { VALIDATED: 0.70, REJECTED: 0.20, INCONCLUSIVE: 0.10 },
-              },
             },
             {
-              hypothesis_id: 'h2',
+              module_id: 'm2',
               text: 'Any arrangement with 2 non-touching circles has strictly lower packing density.',
-              target_branches: [], // Global hypothesis (§4.2)
-              predicted_test_outcome: {
-                reason: 'Slack in packing implies non-optimality',
-                probabilities: { VALIDATED: 0.80, REJECTED: 0.10, INCONCLUSIVE: 0.10 },
-              },
+              target_branches: [], // Global module (§4.2)
             },
           ],
-        }, 'Generated hypotheses:');
+        }, 'Generated modules:');
       }
 
-      // 10. Hypothesis Proximity
-      if (kind === 'hypothesisProximity') {
+      // 10. Modules Impact Reviewer
+      if (kind === 'modulesImpactReview') {
         assert.ok(
-          args.systemInstruction.includes('You are the core agent behind generating & reviewing the hypotheses.'),
-          'Hypothesis Proximity must share the unified hypothesis system prompt'
+          args.systemInstruction.includes('You are the Curated Context (Modules Generator and Modules Impact Reviewer) engine of the Deepthink pipeline.'),
+          'Modules Impact Reviewer must share the unified modules generator system prompt'
         );
-        assert.ok(p.includes('# Core Challenge'), 'HP must receive # Core Challenge');
-        assert.ok(p.includes('Requested Number of Hypotheses: 2'), 'HP must receive hypothesisCount');
-        assert.ok(p.includes('<HarnessNote>'), 'HP must receive <HarnessNote>');
-        assert.ok(p.includes('<DosCoreSynthesis>'), 'HP must receive <DosCoreSynthesis>');
-        assert.ok(p.includes('<CurrentHeartbeatProximityTurns>'), 'HP must receive <CurrentHeartbeatProximityTurns>');
+        assert.ok(p.includes('# Core Challenge'), 'MIR must receive # Core Challenge');
+        assert.ok(p.includes('Requested Number of Modules: 2'), 'MIR must receive modulesCount');
+        assert.ok(p.includes('<HarnessNote>'), 'MIR must receive <HarnessNote>');
+        assert.ok(p.includes('<DosCoreSynthesis>'), 'MIR must receive <DosCoreSynthesis>');
+        assert.ok(p.includes('<CurrentHeartbeatImpactReviewTurns>'), 'MIR must receive <CurrentHeartbeatImpactReviewTurns>');
         assert.ok(
           p.includes('Latest Correction:') || p.includes('"latest_correction"'),
-          'HP must receive the latest corrections from all active branches'
+          'MIR must receive the latest corrections from all active branches'
         );
-        assert.equal(p.includes('Latest Critique:'), false, 'HP must NOT receive raw branch critiques');
-        return 'Proximity: Hypotheses h1 and h2 are crisp, falsifiable, and orthogonal.';
+        assert.equal(p.includes('Latest Critique:'), false, 'MIR must NOT receive raw branch critiques');
+        return 'Impact Review: Modules m1 and m2 are crisp, falsifiable, and orthogonal.';
       }
 
-      // 11. Hypothesis Tester (§4.3)
-      if (kind === 'hypothesisTester') {
+      // 11. Modules Tester (§4.3)
+      if (kind === 'modulesTester') {
         return 'Tested analytically. Result confirms centers form an equilateral triangle.\n\nCLASSIFICATION: VALIDATED';
       }
 
@@ -884,30 +798,42 @@ describe('Deepthink Consolidated Specification: Complete End-to-End Pipeline Orc
     assert.ok(state.heartbeats.length > 0, 'Heartbeats must be recorded');
     assert.ok(state.dosOutputs.length >= 2, 'Step-i and Step-ii DOS outputs must be recorded');
 
-    // 10. Realized hypothesis feedback attached (§5.1, §5.4)
+    // 10. Realized module feedback attached (§5.1, §5.4)
     const hb1 = state.heartbeats[0];
     assert.ok(hb1, 'Heartbeat 1 must exist');
-    const realizedH1 = hb1.realized_feedback.find(rf => rf.hypothesis_id === 'h1');
-    assert.ok(realizedH1, 'Realized feedback for h1 must be present');
-    assert.equal(realizedH1.observed_test_outcome, 'VALIDATED');
-    assert.ok(realizedH1.surprise_bits > 0, 'Surprise bits must be computed');
+    const realizedM1 = hb1.realized_feedback.find(rf => rf.module_id === 'm1');
+    assert.ok(realizedM1, 'Realized feedback for m1 must be present');
+    assert.equal(realizedM1.observed_test_outcome, 'VALIDATED');
 
     // 11. Durable Repository Files Verification (§8.1, §8.2)
     const git = orchestrator.getGitHarness();
     const files = git.getCommittedFiles();
 
-    // Verify seed strategies file and its companion .jsonl trajectory file
-    assert.ok(files.has('strategies_history/seed_strategies.md'), 'Seed strategies history must be committed');
-    assert.ok(files.has('strategies_history/seed_strategies.jsonl'), 'Seed strategies trajectory .jsonl must be committed');
+    // Verify seed strategies generator & proximity reviewer files and their companion .jsonl trajectory files
+    assert.ok(files.has('strategies_history/seed_strategies.md'), 'Seed strategies generator history must be committed');
+    assert.ok(files.has('strategies_history/seed_strategies.jsonl'), 'Seed strategies generator trajectory .jsonl must be committed');
+    assert.ok(files.has('strategies_history/seed_strategies_proximity_review.md'), 'Seed strategies proximity review history must be committed');
+    assert.ok(files.has('strategies_history/seed_strategies_proximity_review.jsonl'), 'Seed strategies proximity review trajectory .jsonl must be committed');
     assert.ok(files.get('strategies_history/seed_strategies.md')!.includes('Strategy main1'));
 
-    // Verify strategies finalized and used so far (.md and .jsonl)
-    assert.ok(files.has('strategies_history/strategies_finalized_and_used_so_far.md'), 'strategies_finalized_and_used_so_far.md must be committed');
-    assert.ok(files.has('strategies_history/strategies_finalized_and_used_so_far.jsonl'), 'strategies_finalized_and_used_so_far.jsonl must be committed');
+    // Verify global update strategies generator & proximity reviewer files and their companion .jsonl trajectory files
+    assert.ok(files.has('strategies_history/strategies_global_update01.md'), 'Global update 1 strategy generator history must be committed');
+    assert.ok(files.has('strategies_history/strategies_global_update01.jsonl'), 'Global update 1 strategy generator trajectory .jsonl must be committed');
+    assert.ok(files.has('strategies_history/strategies_global_update01_proximity_review.md'), 'Global update 1 strategy proximity review history must be committed');
+    assert.ok(files.has('strategies_history/strategies_global_update01_proximity_review.jsonl'), 'Global update 1 strategy proximity review trajectory .jsonl must be committed');
 
-    // Verify hypotheses finalized and used so far (.md and .jsonl)
-    assert.ok(files.has('Custom_Curated_Context/hypotheses_finalized_and_used_so_far.md'), 'hypotheses_finalized_and_used_so_far.md must be committed');
-    assert.ok(files.has('Custom_Curated_Context/hypotheses_finalized_and_used_so_far.jsonl'), 'hypotheses_finalized_and_used_so_far.jsonl must be committed');
+    // Verify strategies finalized and used so far (.md only, no .jsonl)
+    assert.ok(files.has('strategies_history/strategies_finalized_and_used_so_far.md'), 'strategies_finalized_and_used_so_far.md must be committed');
+    assert.equal(files.has('strategies_history/strategies_finalized_and_used_so_far.jsonl'), false, 'strategies_finalized_and_used_so_far.jsonl must NOT exist');
+
+    // Verify modules finalized and used so far (.md only, no .jsonl) and Heartbeat directory layout (2 .md and 2 .jsonl)
+    assert.ok(files.has('Modules/modules_finalized_and_used_so_far.md'), 'modules_finalized_and_used_so_far.md must be committed');
+    assert.equal(files.has('Modules/modules_finalized_and_used_so_far.jsonl'), false, 'modules_finalized_and_used_so_far.jsonl must NOT exist');
+    assert.ok(files.has('Modules/Heartbeat-1/generation_history.md'), 'Modules/Heartbeat-1/generation_history.md must be committed');
+    assert.ok(files.has('Modules/Heartbeat-1/generation_history.jsonl'), 'Modules/Heartbeat-1/generation_history.jsonl must be committed');
+    assert.ok(files.has('Modules/Heartbeat-1/modules_impact_review_history_heartbeat_01.md'), 'Modules/Heartbeat-1/modules_impact_review_history_heartbeat_01.md must be committed');
+    assert.ok(files.has('Modules/Heartbeat-1/modules_impact_review_history_heartbeat_01.jsonl'), 'Modules/Heartbeat-1/modules_impact_review_history_heartbeat_01.jsonl must be committed');
+    assert.ok(files.has('Modules/Heartbeat-1/Module-1/module.md'), 'Modules/Heartbeat-1/Module-1/module.md must be committed');
 
     // Verify DOS history files (§8.1) (.md and .jsonl)
     assert.ok(files.has('DOS_history/DOS_global_update_01_step_i.md'), 'Step-i DOS must be recorded in repository');
@@ -1006,17 +932,17 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
 
     const est10 = calculateDeepthinkTokenEstimate({
       strategiesCount: 3,
-      hypothesisCount: 2,
+      modulesCount: 2,
       deepthinkDepth: 10,
     });
     const est15 = calculateDeepthinkTokenEstimate({
       strategiesCount: 3,
-      hypothesisCount: 2,
+      modulesCount: 2,
       deepthinkDepth: 15,
     });
     const est20 = calculateDeepthinkTokenEstimate({
       strategiesCount: 3,
-      hypothesisCount: 2,
+      modulesCount: 2,
       deepthinkDepth: 20,
     });
 
@@ -1040,7 +966,7 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
     // Verify buildDeepthinkTokenTrend produces full 20-point series
     const trend20 = buildDeepthinkTokenTrend({
       strategiesCount: 3,
-      hypothesisCount: 2,
+      modulesCount: 2,
       maxDepth: 20,
     });
     assert.strictEqual(trend20.length, 20);
@@ -1054,8 +980,8 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
       thinkingLevel: 'medium',
       strategiesCount: 3,
       strategyProximityLoops: 1,
-      hypothesisCount: 2,
-      hypothesisProximityLoops: 1,
+      modulesCount: 2,
+      modulesImpactReviewLoops: 1,
       i: 10,
     });
     const apiCalls20 = calculateDeepthinkApiCallsFromParams({
@@ -1064,8 +990,8 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
       thinkingLevel: 'medium',
       strategiesCount: 3,
       strategyProximityLoops: 1,
-      hypothesisCount: 2,
-      hypothesisProximityLoops: 1,
+      modulesCount: 2,
+      modulesImpactReviewLoops: 1,
       i: 20,
     });
     assert.ok(apiCalls20.min > apiCalls10.min, 'apiCalls20 min > apiCalls10 min');
@@ -1082,14 +1008,14 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
     for (const d of testDepths) {
       const base = calculateDeepthinkTokenEstimate({
         strategiesCount: 3,
-        hypothesisCount: 2,
+        modulesCount: 2,
         deepthinkDepth: d,
         codeExecutionEnabled: false,
       });
 
       const withSandbox = calculateDeepthinkTokenEstimate({
         strategiesCount: 3,
-        hypothesisCount: 2,
+        modulesCount: 2,
         deepthinkDepth: d,
         codeExecutionEnabled: true,
       });
@@ -1166,15 +1092,15 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
 
   it('accurately accounts for every possible agent across heartbeats, global updates, and iterations', () => {
     // Test §3 worked example: i = 15, j = 5, k = 3
-    // S = 3, strategyProx = 2, hypCount = 4, hypProx = 1
+    // S = 3, strategyProx = 2, modCount = 4, modImpact = 1
     const res15 = calculateDeepthinkApiCallsFromParams({
       strategiesCount: 3,
       i: 15,
       j: 5,
       k: 3,
       strategyProximityLoops: 2,
-      hypothesisCount: 4,
-      hypothesisProximityLoops: 1,
+      modulesCount: 4,
+      modulesImpactReviewLoops: 1,
     });
 
     const b15 = res15.breakdown;
@@ -1198,12 +1124,12 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
     assert.strictEqual(b15.solutionCorrection, 42);
     // 6. DOS: 3 standalone heartbeat DOS + 2 step-i DOS + 2 step-ii DOS = 7 calls
     assert.strictEqual(b15.dos, 7);
-    // 7. Hypothesis Generation: 5 heartbeats * (1 + 1 loops) = 10 calls
-    assert.strictEqual(b15.hypothesisGeneration, 10);
-    // 8. Hypothesis Proximity: 5 heartbeats * 1 loop = 5 calls
-    assert.strictEqual(b15.hypothesisProximity, 5);
-    // 9. Hypothesis Tester: 5 heartbeats * 4 hypotheses = 20 calls
-    assert.strictEqual(b15.hypothesisTester, 20);
+    // 7. Modules Generation: 5 heartbeats * (1 + 1 loops) = 10 calls
+    assert.strictEqual(b15.modulesGeneration, 10);
+    // 8. Modules Impact Review: 5 heartbeats * 1 loop = 5 calls
+    assert.strictEqual(b15.modulesImpactReview, 5);
+    // 9. Modules Tester: 5 heartbeats * 4 modules = 20 calls
+    assert.strictEqual(b15.modulesTester, 20);
     // 10. BSR: 2 global updates * 3 branches = 6 calls
     assert.strictEqual(b15.bsr, 6);
     // 11. Memory Bank: min 2 GU * 3 branches = 6 calls, max 0
@@ -1219,9 +1145,9 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
       b15.solutionCritique.min +
       b15.solutionCorrection +
       b15.dos +
-      b15.hypothesisGeneration +
-      b15.hypothesisProximity +
-      b15.hypothesisTester +
+      b15.modulesGeneration +
+      b15.modulesImpactReview +
+      b15.modulesTester +
       b15.bsr +
       b15.memoryBank.min +
       b15.finalJudge;
@@ -1233,9 +1159,9 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
       b15.solutionCritique.max +
       b15.solutionCorrection +
       b15.dos +
-      b15.hypothesisGeneration +
-      b15.hypothesisProximity +
-      b15.hypothesisTester +
+      b15.modulesGeneration +
+      b15.modulesImpactReview +
+      b15.modulesTester +
       b15.bsr +
       b15.memoryBank.max +
       b15.finalJudge;
@@ -1247,12 +1173,12 @@ describe('Deepthink Token Volume & API Call Estimations (Schedule 5..20 & Sandbo
       i: 10,
       j: 5,
       k: 3,
-      hypothesisCount: 0,
+      modulesCount: 0,
     });
     assert.strictEqual(resDisabled.breakdown.standaloneHeartbeats, 0);
     assert.strictEqual(resDisabled.breakdown.totalHeartbeats, 0);
-    assert.strictEqual(resDisabled.breakdown.hypothesisGeneration, 0);
-    assert.strictEqual(resDisabled.breakdown.hypothesisTester, 0);
+    assert.strictEqual(resDisabled.breakdown.modulesGeneration, 0);
+    assert.strictEqual(resDisabled.breakdown.modulesTester, 0);
     assert.strictEqual(resDisabled.breakdown.dos, 1, 'Only Step-i DOS runs for 1 global update at iteration 5');
   });
 });

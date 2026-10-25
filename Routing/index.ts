@@ -50,12 +50,12 @@ export function getStrategyProximityLoops(): number {
     return getRoutingManager().getStrategyProximityLoops();
 }
 
-export function getSelectedHypothesisCount(): number {
-    return getRoutingManager().getHypothesisCount();
+export function getSelectedModulesCount(): number {
+    return getRoutingManager().getModulesCount();
 }
 
-export function getHypothesisProximityLoops(): number {
-    return getRoutingManager().getHypothesisProximityLoops();
+export function getModulesImpactReviewLoops(): number {
+    return getRoutingManager().getModulesImpactReviewLoops();
 }
 
 export function getDeepthinkDepth(): number {

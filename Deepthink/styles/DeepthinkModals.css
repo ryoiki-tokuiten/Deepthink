@@ -441,7 +441,7 @@
 
 /* Shared typography for active modal content areas */
 .embedded-modal-content .deepthink-response-content,
-.embedded-modal-content .hypothesis-argument-content,
+.embedded-modal-content .module-argument-content,
 .agent-analysis {
     font-size: 1rem;
     line-height: 1.7;

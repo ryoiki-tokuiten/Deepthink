@@ -52,6 +52,7 @@ interface SandboxToolAgentOptions {
     modelName: string;
     seedFiles?: SeedFile[];
     filesystemFiles?: SeedFile[];
+    omitUploadedFileMessage?: boolean;
     runScopeDescription?: string;
     agentFilesystemRules?: string[];
     repositoryAccess?: SandboxRepositoryAccess;
@@ -118,8 +119,8 @@ export interface SandboxRepositoryAccess {
 export interface SandboxFinalOutputContract {
     /** Human-readable role/mode name used in tool descriptions and errors. */
     name: string;
-    /** JSON Schema used for final_output.response when this role is structured. */
-    responseSchema: Record<string, unknown>;
+    /** Optional JSON Schema used for final_output.response when this role is structured. */
+    responseSchema?: Record<string, unknown>;
     /**
      * Validate the parsed JSON payload. Throw an Error with a correction
      * message when the payload does not match the role's accepted scheme.
@@ -331,6 +332,9 @@ interface SandboxToolAgentResult {
     /** Raw BaseMessage[] from this private tool loop. This is kept only for
      *  diagnostics/trace export; downstream agent histories must use promptText. */
     loopMessages?: BaseMessage[];
+    /** Full conversation messages up through the accepted final_output call,
+     *  used when continuing the same agent's trajectory across loop rounds. */
+    messages?: BaseMessage[];
 }
 
 type ContextualSandboxToolAgentResult = SandboxToolAgentResult;
@@ -522,7 +526,7 @@ const sandboxToolDefinition: ToolDefinition = {
 };
 
 function createFinalOutputToolDefinition(contract?: SandboxFinalOutputContract): ToolDefinition {
-    const structuredResponse = !!contract;
+    const structuredResponse = !!contract?.responseSchema;
     return {
         type: 'function',
         function: {
@@ -538,7 +542,7 @@ function createFinalOutputToolDefinition(contract?: SandboxFinalOutputContract):
                 type: 'object',
                 properties: {
                     response: structuredResponse
-                        ? contract!.responseSchema
+                        ? contract!.responseSchema!
                         : {
                             type: 'string',
                             description: 'The complete final answer, solution, critique, test result, or role-specific output to submit to the multi-agent system.'
@@ -860,7 +864,7 @@ function buildSystemPrompt(
         `- When your work is complete, call ${FINAL_OUTPUT_TOOL_NAME}. Do not end with ordinary prose when tool calling is available. If the tool returns a validation error, correct the payload and call it again.`,
         `- Your ${FINAL_OUTPUT_TOOL_NAME} submission is strictly gated at a maximum of ${options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS} tokens. Keep your final submission within ${options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS} tokens.`,
         `- The ${FINAL_OUTPUT_TOOL_NAME} response is the only text submitted to the multi-agent system and the only text future agents receive as your answer.`,
-        options.finalOutputContract
+        options.finalOutputContract?.responseSchema
             ? `- This role has a structured final-output contract (${options.finalOutputContract.name}). Put the required JSON object directly in ${FINAL_OUTPUT_TOOL_NAME}.response; do not serialize it as prose or surround it with markdown. If the environment rejects it, fix only that payload and call ${FINAL_OUTPUT_TOOL_NAME} again—your sandbox research remains available.`
             : '- Submit the complete role-specific result in the final_output.response string.',
         '- Do not include private scratchpad, command transcripts, tool logs, or exploratory dead ends in the final output unless they are essential evidence for your role.',
@@ -1240,8 +1244,19 @@ function structuredFinalOutputText(
 
     let payload = response;
     if (typeof payload === 'string') {
+        let candidate = payload.trim();
+        const fenceMatch = candidate.match(/```(?:json|json5)?\s*\n?([\s\S]*?)\n?\s*```/i);
+        if (fenceMatch && fenceMatch[1]?.trim()) {
+            candidate = fenceMatch[1].trim();
+        } else if (!candidate.startsWith('{') && !candidate.startsWith('[')) {
+            const firstBrace = candidate.indexOf('{');
+            const lastBrace = candidate.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace > firstBrace) {
+                candidate = candidate.substring(firstBrace, lastBrace + 1).trim();
+            }
+        }
         try {
-            payload = JSON.parse(payload);
+            payload = JSON.parse(candidate);
         } catch (error) {
             const details = error instanceof Error ? error.message : 'invalid JSON';
             throw new Error(`${contract.name} requires a JSON object in final_output.response. JSON parsing failed: ${details}`);
@@ -1253,7 +1268,7 @@ function structuredFinalOutputText(
     }
 
     contract.validate(payload);
-    return JSON.stringify(payload);
+    return typeof response === 'string' ? response.trim() : JSON.stringify(payload);
 }
 
 function isLikelyImageDataUri(value: string): boolean {
@@ -1453,6 +1468,53 @@ function isHarnessReminderText(text: string): boolean {
 }
 
 /**
+ * Controls whether model reasoning/thinking blocks are emitted into `.jsonl` trajectory files.
+ * Disabled by default to keep on-disk `.jsonl` files compact for downstream agent inspection.
+ */
+export const INCLUDE_REASONING_IN_TRAJECTORY_JSONL = false;
+
+export function sanitizeTrajectoryRecordsForJsonl(
+    records: ReadonlyArray<Record<string, any>>,
+    includeReasoning = INCLUDE_REASONING_IN_TRAJECTORY_JSONL
+): Array<Record<string, unknown>> {
+    let firstUserDropped = false;
+    const cleaned: Array<Record<string, unknown>> = [];
+
+    for (const record of records) {
+        if (!record || typeof record !== 'object') continue;
+        const roleOrKind = record.role ?? record.kind;
+
+        if (roleOrKind === 'system') continue;
+        if (roleOrKind === 'user' && !firstUserDropped) {
+            firstUserDropped = true;
+            continue;
+        }
+        if (roleOrKind === 'reasoning' && !includeReasoning) continue;
+
+        const copy: Record<string, unknown> = { ...record };
+        delete copy.timestamp;
+        delete copy.captured_at;
+        delete copy.id;
+        delete copy.tool_call_id;
+        delete copy.source_message_id;
+        delete copy.source_line_id;
+
+        if (Array.isArray(copy.tool_calls)) {
+            copy.tool_calls = copy.tool_calls.map((tc: any) => {
+                if (!tc || typeof tc !== 'object') return tc;
+                const tcCopy: Record<string, unknown> = { ...tc };
+                delete tcCopy.id;
+                return tcCopy;
+            });
+        }
+
+        cleaned.push(copy);
+    }
+
+    return cleaned;
+}
+
+/**
  * Formats a simple system/user/assistant exchange (or single-message fallback)
  * into `@letta-ai/trajectory` validated `.jsonl` records.
  */
@@ -1472,7 +1534,7 @@ export function formatTrajectoryWithLetta(args: {
         messages.push(new HumanMessage('[agent invocation]'));
     }
     const aiMsg = new AIMessage(args.assistantResponse || '[empty response]');
-    if (args.reasoningText?.trim()) {
+    if (INCLUDE_REASONING_IN_TRAJECTORY_JSONL && args.reasoningText?.trim()) {
         (aiMsg as any).additional_kwargs = { reasoning_content: args.reasoningText.trim() };
     }
     messages.push(aiMsg);
@@ -1493,7 +1555,6 @@ export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
         toolResultByCallId.set(callId, { content, ok });
     }
 
-    let systemText = '';
     const lettaRows: Array<Record<string, unknown>> = [];
     const baseMs = Date.now();
     let stepIdx = 0;
@@ -1504,10 +1565,6 @@ export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
         const messageType = messageTypeForTrace(message);
 
         if (messageType === 'system') {
-            const text = messageContentToText(raw.content).trim();
-            if (text && !systemText) {
-                systemText = text;
-            }
             continue;
         }
 
@@ -1524,14 +1581,16 @@ export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
 
         if (messageType === 'ai') {
             const msgId = typeof raw.id === 'string' && raw.id ? raw.id : `msg_${stepIdx}`;
-            const reasoningTexts = extractReasoningTextsFromMessage(message);
-            for (const reasoning of reasoningTexts) {
-                lettaRows.push({
-                    kind: 'reasoning',
-                    source_message_id: msgId,
-                    text: reasoning,
-                    captured_at: nextTimestamp(),
-                });
+            if (INCLUDE_REASONING_IN_TRAJECTORY_JSONL) {
+                const reasoningTexts = extractReasoningTextsFromMessage(message);
+                for (const reasoning of reasoningTexts) {
+                    lettaRows.push({
+                        kind: 'reasoning',
+                        source_message_id: msgId,
+                        text: reasoning,
+                        captured_at: nextTimestamp(),
+                    });
+                }
             }
 
             const text = messageContentToText(raw.content).trim();
@@ -1555,7 +1614,7 @@ export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
                     : '';
 
                 const matchedResult = toolResultByCallId.get(callId);
-                let resultText = matchedResult?.content ?? '';
+                let resultText = matchedResult?.content ?? (toolName === FINAL_OUTPUT_TOOL_NAME ? 'final_output accepted.' : '');
                 const resultOk = matchedResult?.ok ?? true;
 
                 // Pass 2 (just-bash AST classification): mask output of read-only commands when exit_code === 0
@@ -1600,27 +1659,19 @@ export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
                 toolResults: { maxCharacters: null, strategy: 'head-tail' },
             },
             filters: {
-                systemMessages: 'include',
+                systemMessages: 'omit',
                 toolResults: 'include',
             },
         });
 
-        const records = systemText
-            ? [
-                normalized.records[0],
-                {
-                    role: 'system' as const,
-                    content: systemText,
-                    timestamp: new Date(baseMs).toISOString(),
-                },
-                ...normalized.records.slice(1),
-            ]
-            : normalized.records;
-
-        validateTranscript(records);
-        return records.map(record => JSON.stringify(record)).join('\n');
+        validateTranscript(normalized.records);
+        return sanitizeTrajectoryRecordsForJsonl(normalized.records)
+            .map(record => JSON.stringify(record))
+            .join('\n');
     } catch {
-        return lettaRows.map(row => JSON.stringify(row)).join('\n');
+        return sanitizeTrajectoryRecordsForJsonl(lettaRows)
+            .map(row => JSON.stringify(row))
+            .join('\n');
     }
 }
 
@@ -1644,7 +1695,7 @@ export async function runSandboxToolAgent(
     const transcriptParts: string[] = [];
     const historyImages = new Map<string, SandboxToolImage>();
     let finalText = '';
-    let shouldSeedBackend = true;
+    let shouldSeedBackend = !messages.some(m => messageTypeForTrace(m) === 'tool' && (m as any).name === SANDBOX_TOOL_NAME);
 
     const maxToolTurns = Math.max(1, options.maxToolTurns ?? MAX_TOOL_TURNS);
     const maxDurationMs = Math.max(1, options.maxDurationMs ?? MAX_SANDBOX_DURATION_MS);
@@ -1657,7 +1708,9 @@ export async function runSandboxToolAgent(
     let timeExpiredRevoked = false;
     let forcedTimeExpiredTurnsUsed = 0;
 
-    const uploadedFileMessage = buildUploadedFileMessage(provider.providerName, seedFiles);
+    const uploadedFileMessage = (options.omitUploadedFileMessage || options.messages.length > 1)
+        ? null
+        : buildUploadedFileMessage(provider.providerName, seedFiles);
     if (uploadedFileMessage) {
         messages.push(uploadedFileMessage);
     }
@@ -1685,6 +1738,9 @@ export async function runSandboxToolAgent(
 
         const onlyFinalOutputTool = timeExpiredRevoked || turn >= maxToolTurns + OVERTIME_GRACE_TURNS;
         const response = await invokeAgentTurn(provider, messages, systemPrompt, options, onlyFinalOutputTool, turn + 1);
+        for (const call of response.tool_calls ?? []) {
+            if (!call.id) call.id = nanoid(8);
+        }
         messages.push(response);
 
         const modelText = getFinalText(response);
@@ -1724,6 +1780,15 @@ export async function runSandboxToolAgent(
                     tool_call_id: toolCall.id ?? nanoid(8),
                     status: 'error'
                 }));
+                for (const otherCall of response.tool_calls ?? []) {
+                    if (otherCall === toolCall) continue;
+                    messages.push(new ToolMessage({
+                        name: otherCall.name,
+                        content: 'Not executed: final_output was rejected in the same turn.',
+                        tool_call_id: otherCall.id ?? nanoid(8),
+                        status: 'error',
+                    }));
+                }
             } else {
                 const outputTokenCount = countTextTokens(candidateFinalText);
                 if (outputTokenCount > maxOutputTokens) {
@@ -1734,6 +1799,15 @@ export async function runSandboxToolAgent(
                         tool_call_id: toolCall.id ?? nanoid(8),
                         status: 'error',
                     }));
+                    for (const otherCall of response.tool_calls ?? []) {
+                        if (otherCall === toolCall) continue;
+                        messages.push(new ToolMessage({
+                            name: otherCall.name,
+                            content: 'Not executed: final_output exceeded the token limit in the same turn.',
+                            tool_call_id: otherCall.id ?? nanoid(8),
+                            status: 'error',
+                        }));
+                    }
                     messages.push(new HumanMessage(
                         buildFinalOutputTokenGateHarnessNote(options.agentName, outputTokenCount, maxOutputTokens)
                     ));
@@ -1959,7 +2033,8 @@ export async function runSandboxToolAgent(
         geminiContent: provider.providerName === 'gemini'
             ? buildGeminiHistoryContent(displayText, [...historyImages.values()])
             : undefined,
-        loopMessages
+        loopMessages,
+        messages,
     };
 }
 

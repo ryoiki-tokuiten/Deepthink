@@ -254,18 +254,6 @@
   color: var(--text-color);
 }
 
-.bsr-branch-open-pred {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.775rem;
-  color: var(--accent-blue, #60a5fa);
-}
-
-.bsr-branch-open-pred .mini-icon {
-  font-size: 0.9rem;
-}
-
 .bsr-inspect-btn {
   margin-top: auto;
   display: flex;
@@ -622,43 +610,6 @@
 .bsr-pressure-fill.evolve { background: var(--accent-yellow, #facc15); }
 .bsr-pressure-fill.prune { background: var(--accent-red, #f87171); }
 
-/* Prediction Section */
-.bsr-prediction-section {
-  padding: 0.85rem 1rem;
-  background: rgba(var(--card-bg-base-rgb, 30, 30, 42), 0.5);
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius-md, 6px);
-}
-
-.bsr-prediction-section h5 {
-  margin: 0 0 0.5rem 0;
-  font-size: 0.825rem;
-  font-weight: 600;
-  color: var(--accent-blue, #60a5fa);
-}
-
-.bsr-prob-chips {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.bsr-prob-chip {
-  font-size: 0.775rem;
-  font-weight: 600;
-  padding: 0.2rem 0.55rem;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-color);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.bsr-prediction-reason {
-  margin: 0.5rem 0 0 0;
-  font-size: 0.8rem;
-  line-height: 1.4;
-  color: var(--text-secondary-color);
-}
-
 /* Raw JSON */
 .bsr-json-section {
   display: flex;
@@ -702,17 +653,6 @@
   border-radius: var(--border-radius-md, 6px);
   color: var(--text-secondary-color);
   font-size: 0.85rem;
-}
-
-.bsr-open-prediction-box {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.65rem;
-  padding: 0.75rem 1rem;
-  background: rgba(var(--accent-blue-rgb, 96, 165, 250), 0.08);
-  border: 1px solid rgba(var(--accent-blue-rgb, 96, 165, 250), 0.2);
-  border-radius: var(--border-radius-md, 6px);
-  font-size: 0.8rem;
 }
 
 /* ==========================================================================
@@ -1049,17 +989,6 @@ body.light-mode .dos-header-bar {
   letter-spacing: 0.04em;
 }
 
-.bsr-forecast-probability-strip {
-  display: flex;
-  gap: 16px;
-  font-size: 0.8rem;
-  margin-bottom: 8px;
-  padding: 6px 12px;
-  background: var(--sub-panel-bg-color);
-  border-radius: var(--bsr-panel-radius);
-  width: fit-content;
-}
-
 .bsr-update-tabs {
   display: flex;
   gap: 0.3rem;
@@ -1226,95 +1155,9 @@ body.light-mode .dos-header-bar {
   color: #f87171;
 }
 
-/* Vertical Forecast Bars */
-.bsr-vbars-row {
-  display: flex;
-  justify-content: space-around;
-  align-items: flex-end;
-  gap: 0.65rem;
-  padding: 0.2rem 0;
-}
-
-.bsr-vbar-unit {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.2rem;
-  flex: 1;
-}
-
-.bsr-vbar-value {
-  font-size: 0.72rem;
-  font-weight: 700;
-  font-family: monospace;
-}
-
-.bsr-vbar-unit.progress .bsr-vbar-value {
-  color: #4ade80;
-}
-
-.bsr-vbar-unit.stall .bsr-vbar-value {
-  color: #facc15;
-}
-
-.bsr-vbar-unit.regress .bsr-vbar-value {
-  color: #f87171;
-}
-
-.bsr-vbar-shaft {
-  width: 16px;
-  height: 32px;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  overflow: hidden;
-}
-
-.bsr-vbar-meter {
-  width: 100%;
-  border-radius: 2px;
-  transition: height 0.3s ease;
-}
-
-.bsr-vbar-meter.progress {
-  background: #10b981;
-}
-
-.bsr-vbar-meter.stall {
-  background: #f59e0b;
-}
-
-.bsr-vbar-meter.regress {
-  background: #ef4444;
-}
-
-.bsr-vbar-tag {
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--text-secondary-color);
-}
-
-.bsr-forecast-rationale {
-  font-size: 0.75rem;
-  line-height: 1.35;
-  color: var(--text-secondary-color);
-  margin: 0.1rem 0 0 0;
-}
-
-.rationale-lead {
-  font-weight: 600;
-  color: var(--text-color);
-}
-
-.bsr-forecast-empty {
+.bsr-alignment-note {
   font-size: 0.72rem;
   color: var(--text-secondary-color);
-  font-style: italic;
   padding: 0.4rem 0;
 }
 

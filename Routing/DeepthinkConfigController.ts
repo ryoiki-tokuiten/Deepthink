@@ -2,9 +2,9 @@
 
 import {
     MAX_DEEPTHINK_STRATEGIES,
-    MAX_HYPOTHESIS_COUNT,
+    MAX_MODULES_COUNT,
     MAX_STRATEGY_PROXIMITY_LOOPS,
-    MAX_HYPOTHESIS_PROXIMITY_LOOPS,
+    MAX_MODULES_IMPACT_REVIEW_LOOPS,
     ModelConfigManager,
     type BsrWeightPresetId,
 } from './ModelConfig';
@@ -12,9 +12,9 @@ import {
 export interface DeepthinkConfigState {
     strategiesCount: number;
     strategyProximityLoops: number;
-    hypothesisCount: number;
-    hypothesisProximityLoops: number;
-    hypothesisEnabled: boolean;
+    modulesCount: number;
+    modulesImpactReviewLoops: number;
+    modulesEnabled: boolean;
     deepthinkDepth: number;
     i: number;
     j: number;
@@ -43,9 +43,9 @@ export class DeepthinkConfigController extends EventTarget {
         return {
             strategiesCount: this.modelConfig.getStrategiesCount(),
             strategyProximityLoops: this.modelConfig.getStrategyProximityLoops(),
-            hypothesisCount: this.modelConfig.getHypothesisCount(),
-            hypothesisProximityLoops: this.modelConfig.getHypothesisProximityLoops(),
-            hypothesisEnabled: this.modelConfig.getHypothesisCount() > 0,
+            modulesCount: this.modelConfig.getModulesCount(),
+            modulesImpactReviewLoops: this.modelConfig.getModulesImpactReviewLoops(),
+            modulesEnabled: this.modelConfig.getModulesCount() > 0,
             deepthinkDepth: this.modelConfig.getDeepthinkDepth(),
             i: this.modelConfig.getI(),
             j: this.modelConfig.getJ(),
@@ -63,9 +63,9 @@ export class DeepthinkConfigController extends EventTarget {
 
     public getStrategiesCount(): number { return this.modelConfig.getStrategiesCount(); }
     public getStrategyProximityLoops(): number { return this.modelConfig.getStrategyProximityLoops(); }
-    public getHypothesisCount(): number { return this.modelConfig.getHypothesisCount(); }
-    public getHypothesisProximityLoops(): number { return this.modelConfig.getHypothesisProximityLoops(); }
-    public isHypothesisEnabled(): boolean { return this.getHypothesisCount() > 0; }
+    public getModulesCount(): number { return this.modelConfig.getModulesCount(); }
+    public getModulesImpactReviewLoops(): number { return this.modelConfig.getModulesImpactReviewLoops(); }
+    public isModulesEnabled(): boolean { return this.getModulesCount() > 0; }
     public getDeepthinkDepth(): number { return this.modelConfig.getDeepthinkDepth(); }
     public getI(): number { return this.modelConfig.getI(); }
     public getJ(): number { return this.modelConfig.getJ(); }
@@ -90,19 +90,19 @@ export class DeepthinkConfigController extends EventTarget {
         this.emitChange('strategyProximityLoops');
     }
 
-    public setHypothesisCount(count: number): void {
-        this.modelConfig.updateParameter('hypothesisCount', Math.max(0, Math.min(Math.round(count), MAX_HYPOTHESIS_COUNT)));
-        this.emitChange('hypothesisCount');
+    public setModulesCount(count: number): void {
+        this.modelConfig.updateParameter('modulesCount', Math.max(0, Math.min(Math.round(count), MAX_MODULES_COUNT)));
+        this.emitChange('modulesCount');
     }
 
-    public setHypothesisProximityLoops(count: number): void {
-        this.modelConfig.updateParameter('hypothesisProximityLoops', Math.max(1, Math.min(MAX_HYPOTHESIS_PROXIMITY_LOOPS, Math.round(count))));
-        this.emitChange('hypothesisProximityLoops');
+    public setModulesImpactReviewLoops(count: number): void {
+        this.modelConfig.updateParameter('modulesImpactReviewLoops', Math.max(1, Math.min(MAX_MODULES_IMPACT_REVIEW_LOOPS, Math.round(count))));
+        this.emitChange('modulesImpactReviewLoops');
     }
 
-    public setHypothesisEnabled(enabled: boolean): void {
-        this.modelConfig.updateParameter('hypothesisCount', enabled && this.getHypothesisCount() === 0 ? 4 : enabled ? this.getHypothesisCount() : 0);
-        this.emitChange('hypothesisEnabled');
+    public setModulesEnabled(enabled: boolean): void {
+        this.modelConfig.updateParameter('modulesCount', enabled && this.getModulesCount() === 0 ? 4 : enabled ? this.getModulesCount() : 0);
+        this.emitChange('modulesEnabled');
     }
 
     public setDeepthinkDepth(depth: number): void {

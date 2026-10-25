@@ -26,7 +26,7 @@ import type {
     BsrLedgerEntry,
     DosOutput,
     HeartbeatBlock,
-    HypothesisRoundSnapshot,
+    ModuleRoundSnapshot,
 } from './types';
 
 export type { DeepthinkRunConfig } from './types';
@@ -85,16 +85,15 @@ export interface DeepthinkMainStrategyData {
     memoryBank?: string;
 }
 
-export interface DeepthinkHypothesisData {
+export interface DeepthinkModuleData {
     id: string;
-    hypothesisText: string;
+    moduleText: string;
     testerAttempt?: string;
     testerAttemptDisplay?: string;
     testerAttemptFinal?: string;
     testerAttemptExecutionTraceText?: string;
     testerStatus: AgentStatus;
     testerVerdict?: 'VALIDATED' | 'REJECTED' | 'INCONCLUSIVE';
-    predicted_test_outcome?: any;
     targetBranchIds?: string[];
     roundNumber?: number;
     globalIteration?: number;
@@ -116,16 +115,16 @@ export interface DeepthinkPipelineState {
     isStopRequested?: boolean;
     strategyGenerationHistory?: ProximityTurn[];
     initialStrategies: DeepthinkMainStrategyData[];
-    hypothesisGenerationHistory?: ProximityTurn[];
-    hypotheses: DeepthinkHypothesisData[];
-    hypothesisHistory?: DeepthinkHypothesisData[][];
-    hypothesisRounds?: HypothesisRoundSnapshot[];
-    hypothesisGenStatus?: AgentStatus;
+    modulesGenerationHistory?: ProximityTurn[];
+    modules: DeepthinkModuleData[];
+    modulesHistory?: DeepthinkModuleData[][];
+    moduleRounds?: ModuleRoundSnapshot[];
+    modulesGenStatus?: AgentStatus;
     knowledgePacket?: string;
     solutionCritiques: DeepthinkSolutionCritiqueData[];
     solutionCritiquesStatus?: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled';
     memoryBankAgents?: DeepthinkMemoryBankAgentData[];
-    hypothesisExplorerComplete?: boolean;
+    modulesExplorerComplete?: boolean;
     finalJudgedBestSolution?: string;
     finalJudgingResponseText?: string;
     finalJudgingExecutionTraceText?: string;
@@ -143,10 +142,6 @@ export interface DeepthinkPipelineState {
     /** BSR Global Update Records & Decision tracking */
     bsrRecords?: BsrGlobalUpdateRecord[];
     branchLedgers?: Record<string, BsrLedgerEntry[]>;
-    openPredictions?: Record<string, {
-        issuedAtUpdate: number;
-        probabilities: { PROGRESS: number; STALL: number; REGRESS: number };
-    }>;
     /** DOS synthesis outputs */
     dosOutputs?: Array<{
         callType: 'heartbeat' | 'step_i' | 'step_ii';
@@ -199,8 +194,8 @@ export interface DeepthinkCoreDeps {
     getSelectedModel: () => string;
     getSelectedStrategiesCount: () => number;
     getStrategyProximityLoops: () => number;
-    getSelectedHypothesisCount: () => number;
-    getHypothesisProximityLoops: () => number;
+    getSelectedModulesCount: () => number;
+    getModulesImpactReviewLoops: () => number;
     getDeepthinkDepth: () => number;
     getI?: () => number;
     getJ?: () => number;
@@ -240,8 +235,8 @@ function captureRunConfig(): DeepthinkRunConfig {
         k,
         strategiesCount: deps.getSelectedStrategiesCount(),
         strategyProximityLoops: deps.getStrategyProximityLoops(),
-        hypothesisCount: deps.getSelectedHypothesisCount(),
-        hypothesisProximityLoops: deps.getHypothesisProximityLoops(),
+        modulesCount: deps.getSelectedModulesCount(),
+        modulesImpactReviewLoops: deps.getModulesImpactReviewLoops(),
         isolateBranches: Boolean(deps.getIsolateBranchesEnabled()),
         deepthinkCodeExecutionEnabled: Boolean(deps.getDeepthinkCodeExecutionEnabled()),
         thinkingLevel: deps.getSelectedThinkingLevel?.() || 'high',
@@ -351,8 +346,8 @@ export async function saveLatestDeepthinkState(pipeline: DeepthinkPipelineState)
                 modelParameters: {
                     strategiesCount: pipeline.runConfig?.strategiesCount ?? (deps?.getSelectedStrategiesCount ? deps.getSelectedStrategiesCount() : 3),
                     strategyProximityLoops: pipeline.runConfig?.strategyProximityLoops ?? (deps?.getStrategyProximityLoops ? deps.getStrategyProximityLoops() : 1),
-                    hypothesisCount: pipeline.runConfig?.hypothesisCount ?? (deps?.getSelectedHypothesisCount ? deps.getSelectedHypothesisCount() : 4),
-                    hypothesisProximityLoops: pipeline.runConfig?.hypothesisProximityLoops ?? (deps?.getHypothesisProximityLoops ? deps.getHypothesisProximityLoops() : 1),
+                    modulesCount: pipeline.runConfig?.modulesCount ?? (deps?.getSelectedModulesCount ? deps.getSelectedModulesCount() : 4),
+                    modulesImpactReviewLoops: pipeline.runConfig?.modulesImpactReviewLoops ?? (deps?.getModulesImpactReviewLoops ? deps.getModulesImpactReviewLoops() : 1),
                     deepthinkDepth: pipeline.runConfig?.i ?? (deps?.getDeepthinkDepth ? deps.getDeepthinkDepth() : 10),
                     isolateBranches: pipeline.runConfig?.isolateBranches ?? (deps?.getIsolateBranchesEnabled ? deps.getIsolateBranchesEnabled() : false),
                     deepthinkCodeExecutionEnabled: pipeline.runConfig?.deepthinkCodeExecutionEnabled ?? (deps?.getDeepthinkCodeExecutionEnabled ? deps.getDeepthinkCodeExecutionEnabled() : false),
@@ -418,8 +413,8 @@ export function resetInFlightPipelineExecution(pipeline: DeepthinkPipelineState)
     if (pipeline.solutionCritiquesStatus === 'processing') {
         pipeline.solutionCritiquesStatus = 'pending';
     }
-    if ((pipeline as any).hypothesisGenStatus === 'processing') {
-        (pipeline as any).hypothesisGenStatus = 'pending';
+    if ((pipeline as any).modulesGenStatus === 'processing') {
+        (pipeline as any).modulesGenStatus = 'pending';
     }
 }
 
@@ -507,17 +502,16 @@ export async function startDeepthinkAnalysisProcess(challengeText: string, direc
         initialStrategies: [],
         strategyGenerationHistory: [],
         strategyProximityHistory: [],
-        hypothesisGenerationHistory: [],
-        hypotheses: [],
-        hypothesisHistory: [],
-        hypothesisRounds: [],
+        modulesGenerationHistory: [],
+        modules: [],
+        modulesHistory: [],
+        moduleRounds: [],
         solutionCritiques: [],
         memoryBankAgents: [],
         heartbeats: [],
-        hypothesisProximityHistory: [],
+        modulesImpactReviewHistory: [],
         bsrRecords: [],
         branchLedgers: {},
-        openPredictions: {},
         dosOutputs: [],
         liveEvents: [],
         directContextFiles: directContextFiles.map(f => ({

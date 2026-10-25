@@ -4,7 +4,7 @@
  */
 
 import type { ToolDefinition } from '@langchain/core/language_models/base';
-import { AIMessage, AIMessageChunk, BaseMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { type Content as GeminiContent, type Part as GeminiPart } from '@google/genai';
 import { ChatOpenAI } from '@langchain/openai';
@@ -343,6 +343,66 @@ async function streamLangChainModelTurn(
     });
 }
 
+function normalizeHumanMessageForLangChain(
+    message: BaseMessage,
+    providerName: Exclude<ResolvedProvider['providerName'], 'gemini'>
+): BaseMessage {
+    if (!(message instanceof HumanMessage) || !Array.isArray(message.content)) {
+        return message;
+    }
+
+    const needsNormalization = message.content.some(
+        (part: any) => part && typeof part === 'object' && (!('type' in part) || 'inlineData' in part)
+    );
+    if (!needsNormalization) {
+        return message;
+    }
+
+    const normalizedContent: any[] = [];
+    for (const part of message.content as any[]) {
+        if (typeof part === 'string') {
+            if (part) normalizedContent.push({ type: 'text', text: part });
+            continue;
+        }
+        if (!part || typeof part !== 'object') continue;
+
+        if ('inlineData' in part && part.inlineData?.mimeType && part.inlineData?.data) {
+            const { mimeType, data } = part.inlineData;
+            if (providerName === 'anthropic') {
+                normalizedContent.push({
+                    type: 'image',
+                    source: {
+                        type: 'base64',
+                        media_type: mimeType,
+                        data,
+                    },
+                });
+            } else {
+                normalizedContent.push({
+                    type: 'image_url',
+                    image_url: {
+                        url: `data:${mimeType};base64,${data}`,
+                    },
+                });
+            }
+            continue;
+        }
+
+        if ('text' in part && typeof part.text === 'string' && !('type' in part)) {
+            normalizedContent.push({ type: 'text', text: part.text });
+            continue;
+        }
+
+        normalizedContent.push(part);
+    }
+
+    return new HumanMessage({
+        content: normalizedContent.length === 1 && normalizedContent[0].type === 'text'
+            ? normalizedContent[0].text
+            : normalizedContent,
+    });
+}
+
 /**
  * Unified tool-calling turn invocation across all providers:
  * - Streams responses with reasoning/thought traces enabled
@@ -369,10 +429,11 @@ export async function invokeToolCallingAgentTurn(
         );
     }
 
+    const nonGeminiProvider = provider.providerName as Exclude<ResolvedProvider['providerName'], 'gemini'>;
     const label = options.label || `${provider.providerName}:${provider.modelName}`;
     const inputMessages: BaseMessage[] = [
         new SystemMessage(systemPrompt),
-        ...messages,
+        ...messages.map(m => normalizeHumanMessageForLangChain(m, nonGeminiProvider)),
     ];
 
     return await executeWithInferenceRetry(

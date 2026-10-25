@@ -4,9 +4,9 @@
  */
 
 import {
-    MAX_HYPOTHESIS_COUNT,
+    MAX_MODULES_COUNT,
     MAX_STRATEGY_PROXIMITY_LOOPS,
-    MAX_HYPOTHESIS_PROXIMITY_LOOPS,
+    MAX_MODULES_IMPACT_REVIEW_LOOPS,
     MAX_DEEPTHINK_DEPTH,
     MAX_DEEPTHINK_STRATEGIES,
 } from './ModelConfig.ts';
@@ -19,8 +19,8 @@ import {
 export interface DeepthinkTokenEstimateInput {
     strategiesCount: number;
     strategyProximityLoops?: number;
-    hypothesisCount: number;
-    hypothesisProximityLoops?: number;
+    modulesCount: number;
+    modulesImpactReviewLoops?: number;
     deepthinkDepth?: number;
     i?: number;
     j?: number;
@@ -46,7 +46,7 @@ export interface ApiCallRange {
 export interface DeepthinkTokenEstimate {
     depth: number;
     strategiesCount: number;
-    hypothesisCount: number;
+    modulesCount: number;
     input: TokenRange;
     output: TokenRange;
     total: TokenRange;
@@ -55,8 +55,8 @@ export interface DeepthinkTokenEstimate {
 
 /**
  * Per-role output token caps enforced by the harness (§8.3, agentRegistry.ts):
- * - 5,000 tokens for Strategy Generator, Strategy Proximity, Hypothesis Generator,
- *   Hypothesis Proximity, Hypothesis Tester, Solution Attempt, Solution Critique,
+ * - 5,000 tokens for Strategy Generator, Strategy Proximity, Modules Generator,
+ *   Modules Impact Reviewer, Modules Tester, Solution Attempt, Solution Critique,
  *   DOS, BSR, and Final Judge.
  * - 10,000 tokens for Solution Correction and Memory Bank.
  */
@@ -72,12 +72,12 @@ interface TokenProfile {
     reframedNoteTokens: number;
     /** Single strategy text size */
     strategyGenerationOutputPerStrategy: number;
-    /** Single hypothesis object entry size */
-    hypothesisGenerationOutputPerHypothesis: number;
+    /** Single module object entry size */
+    modulesGenerationOutputPerModule: number;
     /** Strategy Proximity Reviewer output (5k cap) */
     strategyProximityOutput: number;
-    /** Hypothesis Proximity Reviewer output (5k cap) */
-    hypothesisProximityOutput: number;
+    /** Modules Impact Reviewer output (5k cap) */
+    modulesImpactReviewOutput: number;
     /** Iteration 1 & Pruned replacement first execution output (5k cap) */
     solutionAttemptOutput: number;
     /** Iterations 2..i Solution Correction output (10k cap) */
@@ -86,13 +86,13 @@ interface TokenProfile {
     critiqueOutput: number;
     /** Memory Bank distillation output (10k cap) */
     memoryOutput: number;
-    /** Independent Hypothesis Tester output (5k cap) */
-    hypothesisTestOutput: number;
+    /** Independent Modules Tester output (5k cap) */
+    modulesTestOutput: number;
     /** Step-i DOS output (core_synthesis only, 5k cap) */
     dosStepIOutput: number;
-    /** Heartbeat DOS & Step-ii DOS output (core_synthesis + hypothesis_feedback, 5k cap) */
+    /** Heartbeat DOS & Step-ii DOS output (core_synthesis + module_feedback, 5k cap) */
     dosFullOutput: number;
-    /** DOS core_synthesis portion routed into Strategy/Hypothesis generators */
+    /** DOS core_synthesis portion routed into Strategy/Modules generators */
     dosCoreSynthesisContext: number;
     /** BSR report output per branch (5k cap) */
     bsrOutput: number;
@@ -100,7 +100,7 @@ interface TokenProfile {
     bsrLedgerGrowthPerUpdate: number;
     /** Final Judge output (5k cap) */
     finalJudgeOutput: number;
-    /** Share of hypotheses routed to each branch in mapped packets */
+    /** Share of modules routed to each branch in mapped packets */
     branchPacketShare: number;
 }
 
@@ -129,14 +129,14 @@ const WORST_PROFILE: TokenProfile = {
     harnessNoteTokens: 400,
     reframedNoteTokens: 250,
     strategyGenerationOutputPerStrategy: 1_000,
-    hypothesisGenerationOutputPerHypothesis: 800,
+    modulesGenerationOutputPerModule: 800,
     strategyProximityOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
-    hypothesisProximityOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    modulesImpactReviewOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     solutionAttemptOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     solutionCorrectionOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
     critiqueOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     memoryOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
-    hypothesisTestOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    modulesTestOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     dosStepIOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     dosFullOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     dosCoreSynthesisContext: 3_500,
@@ -151,14 +151,14 @@ const AVERAGE_PROFILE: TokenProfile = {
     harnessNoteTokens: 250,
     reframedNoteTokens: 150,
     strategyGenerationOutputPerStrategy: 550,
-    hypothesisGenerationOutputPerHypothesis: 450,
+    modulesGenerationOutputPerModule: 450,
     strategyProximityOutput: 2_000,
-    hypothesisProximityOutput: 2_000,
+    modulesImpactReviewOutput: 2_000,
     solutionAttemptOutput: 3_200,
     solutionCorrectionOutput: 6_000,
     critiqueOutput: 2_400,
     memoryOutput: 5_500,
-    hypothesisTestOutput: 2_800,
+    modulesTestOutput: 2_800,
     dosStepIOutput: 2_200,
     dosFullOutput: 3_000,
     dosCoreSynthesisContext: 1_800,
@@ -251,8 +251,8 @@ function simulatePipelineTokens(
     profile: TokenProfile,
     strategyCount: number,
     strategyProximityLoops: number,
-    hypothesisCount: number,
-    hypothesisProximityLoops: number,
+    modulesCount: number,
+    modulesImpactReviewLoops: number,
     i: number,
     j: number,
     k: number,
@@ -263,7 +263,7 @@ function simulatePipelineTokens(
     let totalOutput = 0;
 
     const strategyTextTokens = profile.strategyGenerationOutputPerStrategy;
-    const hypothesisItemTokens = profile.hypothesisGenerationOutputPerHypothesis;
+    const moduleItemTokens = profile.modulesGenerationOutputPerModule;
 
     // 1. Seed Strategy Generation & Proximity Loop (§4.1, §7)
     const seedGenTurnOutput = Math.min(
@@ -283,9 +283,9 @@ function simulatePipelineTokens(
     let priorStrategyProximityHistoryTokens = seedLoop.transcriptTokens;
     let strategiesFinalizedAndUsedCount = strategyCount;
 
-    // Track hypothesis proximity history across Heartbeats
-    let priorHypothesisProximityHistoryTokens = 0;
-    let hypothesesFinalizedAndUsedCount = 0;
+    // Track modules impact review history across Heartbeats
+    let priorModulesImpactReviewHistoryTokens = 0;
+    let modulesFinalizedAndUsedCount = 0;
 
     // Initialize N active branch states
     const branches: BranchSimState[] = Array.from({ length: strategyCount }, () => ({
@@ -297,14 +297,14 @@ function simulatePipelineTokens(
         updatesSurvived: 0,
     }));
 
-    const curatedContextEnabled = hypothesisCount > 0;
+    const curatedContextEnabled = modulesCount > 0;
     let sinceHeartbeat = 0;
     let heartbeatNo = 0;
     let globalUpdateNo = 0;
 
-    // Helper to execute a Hypothesis Generation ↔ Proximity + Independent Testing heartbeat (§4.2, §4.3, §4.4, §7)
-    const runHeartbeatHypothesesAndTesters = (currentHbNo: number) => {
-        // [HB-h Context] (§7 context_for_hypothesis_generate)
+    // Helper to execute a Modules Generation ↔ Impact Review + Independent Testing heartbeat (§4.2, §4.3, §4.4, §7)
+    const runHeartbeatModulesAndTesters = (currentHbNo: number) => {
+        // [HB-h Context] (§7 context_for_modules_generate)
         let hbActiveContextTokens = profile.harnessNoteTokens;
         if (currentHbNo === 1) {
             // Heartbeat 1: ActiveRunningStrategies (strategy + latest correction) + DosCoreSynthesis
@@ -315,20 +315,20 @@ function simulatePipelineTokens(
             hbActiveContextTokens += activeStrategiesTokens + profile.dosCoreSynthesisContext;
         } else {
             // Heartbeat h >= 2:
-            // (1) PreviousHeartbeatHypothesesAndTests (H hypotheses + H independent testing outputs)
-            const prevHypAndTestsTokens = hypothesisCount * (hypothesisItemTokens + profile.hypothesisTestOutput);
+            // (1) PreviousHeartbeatModulesAndTests (M modules + M independent testing outputs)
+            const prevModAndTestsTokens = modulesCount * (moduleItemTokens + profile.modulesTestOutput);
             // (2) MappedBranchPackets (S strategies + latest corrections + mapped IDs)
             const mappedPacketsSchemaTokens = branches.reduce(
                 (acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + 80,
                 0
             );
-            // (3) RealizedHypothesisFeedback (predicted, observed, surprise_bits, surprise_note, utilization, counterevidence)
-            const realizedFeedbackTokens = hypothesisCount * 350;
-            // (4) HypothesesFinalizedAndUsedSoFar
-            const usedSoFarTokens = hypothesesFinalizedAndUsedCount * hypothesisItemTokens;
+            // (3) RealizedModuleFeedback (observed_test_outcome, utilization, counterevidence)
+            const realizedFeedbackTokens = modulesCount * 350;
+            // (4) ModulesFinalizedAndUsedSoFar
+            const usedSoFarTokens = modulesFinalizedAndUsedCount * moduleItemTokens;
             // (5) DosCoreSynthesis
             hbActiveContextTokens +=
-                prevHypAndTestsTokens +
+                prevModAndTestsTokens +
                 mappedPacketsSchemaTokens +
                 realizedFeedbackTokens +
                 usedSoFarTokens +
@@ -337,32 +337,32 @@ function simulatePipelineTokens(
 
         const hbBaseInput =
             profile.promptBase +
-            priorHypothesisProximityHistoryTokens +
+            priorModulesImpactReviewHistoryTokens +
             hbActiveContextTokens;
 
-        const hypGenTurnOutput = Math.min(
+        const modGenTurnOutput = Math.min(
             DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
-            hypothesisCount * hypothesisItemTokens
+            modulesCount * moduleItemTokens
         );
 
-        const hypLoop = computeProximityLoopTokens(
+        const modLoop = computeProximityLoopTokens(
             hbBaseInput,
-            hypothesisProximityLoops,
-            hypGenTurnOutput,
-            profile.hypothesisProximityOutput
+            modulesImpactReviewLoops,
+            modGenTurnOutput,
+            profile.modulesImpactReviewOutput
         );
-        totalInput += hypLoop.inputTokens;
-        totalOutput += hypLoop.outputTokens;
+        totalInput += modLoop.inputTokens;
+        totalOutput += modLoop.outputTokens;
 
         // Once Heartbeat h is in the past, {HB_Note(h)} + [HB-h Context] is replaced by {HB_Reframed_Note(h)} + [HB-h G↔P]
-        priorHypothesisProximityHistoryTokens += profile.reframedNoteTokens + hypLoop.transcriptTokens;
-        hypothesesFinalizedAndUsedCount += hypothesisCount;
+        priorModulesImpactReviewHistoryTokens += profile.reframedNoteTokens + modLoop.transcriptTokens;
+        modulesFinalizedAndUsedCount += modulesCount;
 
-        // Independent Hypothesis Testers (H calls in parallel, §4.3)
-        // Each tester receives Challenge + its single assigned hypothesis
-        const testerInputPerHyp = profile.promptBase + hypothesisItemTokens;
-        totalInput += hypothesisCount * testerInputPerHyp;
-        totalOutput += hypothesisCount * profile.hypothesisTestOutput;
+        // Independent Modules Testers (M calls in parallel, §4.3)
+        // Each tester receives Challenge + its single assigned module
+        const testerInputPerMod = profile.promptBase + moduleItemTokens;
+        totalInput += modulesCount * testerInputPerMod;
+        totalOutput += modulesCount * profile.modulesTestOutput;
     };
 
     // 2. Main Iteration Loop (1 .. i) (§3)
@@ -397,7 +397,7 @@ function simulatePipelineTokens(
 
             // Mapped curated context packet exists ONLY after at least one heartbeat has completed
             const mappedPacketTokens = (curatedContextEnabled && heartbeatNo >= 1)
-                ? hypothesisCount * profile.branchPacketShare * (hypothesisItemTokens + profile.hypothesisTestOutput)
+                ? modulesCount * profile.branchPacketShare * (moduleItemTokens + profile.modulesTestOutput)
                 : 0;
 
             for (const branch of branches) {
@@ -428,7 +428,7 @@ function simulatePipelineTokens(
                 // Critique Agent (§7 context_for_critique_agent):
                 // Challenge + Strategy + <BranchHistoryAndMemory> (preUpdateIteration + DistilledMemoryBank +
                 // WindowCorrectionCritiqueHistory + newly produced iteration-n Correction).
-                // Receives NO hypothesis packets and NO cross-strategy peer context.
+                // Receives NO module packets and NO cross-strategy peer context.
                 const critiqueInput =
                     profile.promptBase +
                     strategyTextTokens +
@@ -476,21 +476,21 @@ function simulatePipelineTokens(
                     (acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens,
                     0
                 );
-                // PreviousHeartbeatHypothesesAndTests is only present when a previous heartbeat exists (heartbeatNo >= 2)
-                const prevHypAndTestsForDos = heartbeatNo >= 2
-                    ? hypothesisCount * (hypothesisItemTokens + profile.hypothesisTestOutput)
+                // PreviousHeartbeatModulesAndTests is only present when a previous heartbeat exists (heartbeatNo >= 2)
+                const prevModAndTestsForDos = heartbeatNo >= 2
+                    ? modulesCount * (moduleItemTokens + profile.modulesTestOutput)
                     : 0;
 
                 const hbDosInput =
                     profile.promptBase +
                     profile.harnessNoteTokens +
                     activeBranchesTokens +
-                    prevHypAndTestsForDos;
+                    prevModAndTestsForDos;
                 totalInput += hbDosInput;
                 totalOutput += profile.dosFullOutput;
 
-                // 2. Hypothesis Generation ↔ Proximity + Testers
-                runHeartbeatHypothesesAndTesters(heartbeatNo);
+                // 2. Modules Generation ↔ Impact Review + Testers
+                runHeartbeatModulesAndTesters(heartbeatNo);
             }
             sinceHeartbeat = 0;
         } else if (step.action.type === 'GLOBAL_UPDATE') {
@@ -512,16 +512,16 @@ function simulatePipelineTokens(
             totalOutput += profile.dosStepIOutput;
 
             for (const branch of branches) {
-                // BSR receives Challenge + Strategy + StandingEventLedger + EarlierGradedPredictionsHistory +
+                // BSR receives Challenge + Strategy + StandingEventLedger +
                 // MemoryBankBeforeWindow (only if branch already distilled a memory bank before this window) +
                 // WindowCorrectionCritiqueHistory
                 const memBeforeWindowTokens = branch.hasMemoryBank ? profile.memoryOutput : 0;
-                const ledgerAndGradedTokens = branch.updatesSurvived * profile.bsrLedgerGrowthPerUpdate;
+                const ledgerTokens = branch.updatesSurvived * profile.bsrLedgerGrowthPerUpdate;
                 const bsrInput =
                     profile.promptBase +
                     strategyTextTokens +
                     memBeforeWindowTokens +
-                    ledgerAndGradedTokens +
+                    ledgerTokens +
                     branch.windowHistoryTokens;
                 totalInput += bsrInput;
                 totalOutput += profile.bsrOutput;
@@ -611,16 +611,16 @@ function simulatePipelineTokens(
                 }
             }
 
-            // Step vi & vii: Step-ii DOS (when hypotheses enabled) + Ending Heartbeat reusing Step-ii DOS (§4.5 vi-vii)
+            // Step vi & vii: Step-ii DOS (when modules enabled) + Ending Heartbeat reusing Step-ii DOS (§4.5 vi-vii)
             heartbeatNo++;
             if (curatedContextEnabled) {
                 const postUpdateBranchesTokens = branches.reduce(
                     (acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens,
                     0
                 );
-                // PreviousHeartbeatHypothesesAndTests is included if at least one heartbeat ran before this GU
-                const prevHypAndTestsForStepIi = heartbeatNo >= 2
-                    ? hypothesisCount * (hypothesisItemTokens + profile.hypothesisTestOutput)
+                // PreviousHeartbeatModulesAndTests is included if at least one heartbeat ran before this GU
+                const prevModAndTestsForStepIi = heartbeatNo >= 2
+                    ? modulesCount * (moduleItemTokens + profile.modulesTestOutput)
                     : 0;
                 const slotStatusesTokens = strategyCount * 80;
 
@@ -629,13 +629,13 @@ function simulatePipelineTokens(
                     profile.harnessNoteTokens +
                     slotStatusesTokens +
                     profile.dosStepIOutput +
-                    prevHypAndTestsForStepIi +
+                    prevModAndTestsForStepIi +
                     postUpdateBranchesTokens;
                 totalInput += stepIiDosInput;
                 totalOutput += profile.dosFullOutput;
 
-                // Ending Heartbeat reuses Step-ii DOS output and runs Hypothesis G↔P + Testers
-                runHeartbeatHypothesesAndTesters(heartbeatNo);
+                // Ending Heartbeat reuses Step-ii DOS output and runs Modules G↔P + Testers
+                runHeartbeatModulesAndTesters(heartbeatNo);
             }
             sinceHeartbeat = 0;
         }
@@ -650,8 +650,8 @@ function simulatePipelineTokens(
 export function calculateDeepthinkTokenEstimate(args: DeepthinkTokenEstimateInput): DeepthinkTokenEstimate {
     const strategiesCount = clampInteger(args.strategiesCount, 1, MAX_DEEPTHINK_STRATEGIES);
     const strategyProximityLoops = clampInteger(args.strategyProximityLoops ?? 1, 0, MAX_STRATEGY_PROXIMITY_LOOPS);
-    const hypothesisCount = clampInteger(args.hypothesisCount, 0, MAX_HYPOTHESIS_COUNT);
-    const hypothesisProximityLoops = clampInteger(args.hypothesisProximityLoops ?? 1, 0, MAX_HYPOTHESIS_PROXIMITY_LOOPS);
+    const modulesCount = clampInteger(args.modulesCount, 0, MAX_MODULES_COUNT);
+    const modulesImpactReviewLoops = clampInteger(args.modulesImpactReviewLoops ?? 1, 0, MAX_MODULES_IMPACT_REVIEW_LOOPS);
     const depth = clampInteger(args.i ?? args.deepthinkDepth ?? 10, 1, MAX_DEEPTHINK_DEPTH);
     const i = depth;
     const j = clampInteger(args.j ?? 4, 3, 8);
@@ -668,8 +668,8 @@ export function calculateDeepthinkTokenEstimate(args: DeepthinkTokenEstimateInpu
         AVERAGE_PROFILE,
         strategiesCount,
         strategyProximityLoops,
-        hypothesisCount,
-        hypothesisProximityLoops,
+        modulesCount,
+        modulesImpactReviewLoops,
         i,
         j,
         k,
@@ -681,8 +681,8 @@ export function calculateDeepthinkTokenEstimate(args: DeepthinkTokenEstimateInpu
         WORST_PROFILE,
         strategiesCount,
         strategyProximityLoops,
-        hypothesisCount,
-        hypothesisProximityLoops,
+        modulesCount,
+        modulesImpactReviewLoops,
         i,
         j,
         k,
@@ -698,8 +698,8 @@ export function calculateDeepthinkTokenEstimate(args: DeepthinkTokenEstimateInpu
     const apiCalls = calculateDeepthinkApiCallsFromParams({
         strategiesCount,
         strategyProximityLoops,
-        hypothesisCount,
-        hypothesisProximityLoops,
+        modulesCount,
+        modulesImpactReviewLoops,
         i,
         j,
         k,
@@ -739,7 +739,7 @@ export function calculateDeepthinkTokenEstimate(args: DeepthinkTokenEstimateInpu
     return {
         depth: i,
         strategiesCount,
-        hypothesisCount,
+        modulesCount,
         input: {
             average: totalAverageInput,
             worst: totalWorstInput,

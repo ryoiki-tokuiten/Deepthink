@@ -37,8 +37,8 @@ import {
     getSelectedModel,
     getSelectedStrategiesCount,
     getStrategyProximityLoops,
-    getSelectedHypothesisCount,
-    getHypothesisProximityLoops,
+    getSelectedModulesCount,
+    getModulesImpactReviewLoops,
     getDeepthinkDepth,
     getIsolateBranchesEnabled,
     getSelectedThinkingLevel
@@ -98,8 +98,8 @@ export async function exportConfiguration(format: ExportFormat = 'auto'): Promis
             modelParameters: {
                 strategiesCount: getSelectedStrategiesCount(),
                 strategyProximityLoops: getStrategyProximityLoops(),
-                hypothesisCount: getSelectedHypothesisCount(),
-                hypothesisProximityLoops: getHypothesisProximityLoops(),
+                modulesCount: getSelectedModulesCount(),
+                modulesImpactReviewLoops: getModulesImpactReviewLoops(),
                 deepthinkDepth: getDeepthinkDepth(),
                 isolateBranches: getIsolateBranchesEnabled(),
                 deepthinkCodeExecutionEnabled: routingManager.getDeepthinkConfigController().isCodeExecutionEnabled(),
@@ -280,8 +280,8 @@ function restoreModelParameters(params: ExportedConfig['modelParameters']): void
     const modelParameterKeys: Array<keyof ExportedConfig['modelParameters']> = [
         'strategiesCount',
         'strategyProximityLoops',
-        'hypothesisCount',
-        'hypothesisProximityLoops',
+        'modulesCount',
+        'modulesImpactReviewLoops',
         'deepthinkDepth',
         'isolateBranches',
         'deepthinkCodeExecutionEnabled',

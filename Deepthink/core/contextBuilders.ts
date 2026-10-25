@@ -18,10 +18,8 @@ import type {
   HeartbeatBlock,
 } from './types.ts';
 import {
-  buildBsrGradedPredictionsHistoryWithNote,
   buildDosStepIiNote,
-  buildHypothesisHeartbeatNote,
-  buildHypothesisSurpriseNote,
+  buildModuleHeartbeatNote,
   buildStrategyGlobalUpdateNote,
   DOS_HEARTBEAT_NOTE,
   DOS_STEP_I_NOTE,
@@ -90,7 +88,7 @@ export function buildContextForStrategyGlobalUpdate(
   )).join('\n\n');
 
   // Consolidated BSR decisions carry decisions, forms, rollback points, and event reasons ONLY.
-  // Never probabilities, surprisal, credibility, or scores (§6.7).
+  // Never window scores or pressures (§6.7).
   const formattedDecisions = bsrDecisions.map(d => {
     let detail = `Decision: ${d.decision}`;
     if (d.form) {
@@ -155,39 +153,39 @@ export function buildContextForStrategyGlobalUpdate(
 }
 
 // ============================================================================
-// Hypothesis Generation & Proximity Context (§7)
+// Modules Generator & Modules Impact Reviewer Context (§7)
 // ============================================================================
 
-export function buildContextForHypothesisGenerate(
+export function buildContextForModulesGenerate(
   challenge: string,
   heartbeatNo: number,
   activeStrategies: DeepthinkMainStrategyData[],
   dosOutput?: DosOutput,
   previousHeartbeat?: HeartbeatBlock,
-  priorProximityHistoryText?: string,
+  priorImpactReviewHistoryText?: string,
   currentHbTurns?: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>,
-  hypothesisCount?: number,
-  hypothesesUsedSoFar?: Array<{ heartbeatNo: number; iterationFinalized: number; hypothesisId: string; text: string }>
+  modulesCount?: number,
+  modulesUsedSoFar?: Array<{ heartbeatNo: number; iterationFinalized: number; moduleId: string; text: string }>
 ): string {
-  const count = hypothesisCount ?? 1;
-  const note = buildHypothesisHeartbeatNote(heartbeatNo);
+  const count = modulesCount ?? 1;
+  const note = buildModuleHeartbeatNote(heartbeatNo);
 
   const parts: string[] = [
     `# Core Challenge`,
     challenge,
     '',
-    `Requested Number of Hypotheses: ${count}`,
+    `Requested Number of Modules: ${count}`,
   ];
 
   // 2. Prior Heartbeat Reframed Notes + G↔P histories (for Heartbeat >= 2)
-  if (priorProximityHistoryText && priorProximityHistoryText.trim()) {
-    parts.push('', fence('HypothesisProximityHistory', priorProximityHistoryText));
+  if (priorImpactReviewHistoryText && priorImpactReviewHistoryText.trim()) {
+    parts.push('', fence('ModulesImpactReviewHistory', priorImpactReviewHistoryText));
   }
 
   // 3. Active Note {HB_Note(h)}
   parts.push(
     '',
-    `# Hypothesis Generation Context for Heartbeat ${heartbeatNo}`,
+    `# Modules Generator Context for Heartbeat ${heartbeatNo}`,
     fence('HarnessNote', note),
   );
 
@@ -206,58 +204,49 @@ export function buildContextForHypothesisGenerate(
     }
   } else {
     // Heartbeat h >= 2:
-    // (1) Final generated hypothesis object from Heartbeat h-1 + independent testing outputs
-    const prevHypothesesAndTests = previousHeartbeat.hypotheses.map(h => ({
-      hypothesis_id: h.id,
-      text: h.hypothesisText,
-      target_branches: h.targetBranchIds || [],
-      predicted_test_outcome: h.predicted_test_outcome,
-      testing_output: h.testerAttempt || 'None',
+    // (1) Final generated module object from Heartbeat h-1 + independent testing outputs
+    const prevModulesAndTests = previousHeartbeat.modules.map(m => ({
+      module_id: m.id,
+      text: m.moduleText,
+      target_branches: m.targetBranchIds || [],
+      testing_output: m.testerAttempt || 'None',
     }));
 
-    // (2) Mapped branch packets schema (current running strategies + latest corrections + which hypotheses were mapped to which branches)
+    // (2) Mapped branch packets schema (current running strategies + latest corrections + which modules were mapped to which branches)
     const mappedBranchPackets = activeStrategies.map(s => {
-      const mappedHypothesisIds = previousHeartbeat.hypotheses
-        .filter(h => !h.targetBranchIds || h.targetBranchIds.length === 0 || h.targetBranchIds.includes(s.id))
-        .map(h => h.id);
+      const mappedModuleIds = previousHeartbeat.modules
+        .filter(m => !m.targetBranchIds || m.targetBranchIds.length === 0 || m.targetBranchIds.includes(s.id))
+        .map(m => m.id);
       return {
         branch_id: s.id,
         strategy_text: s.strategyText,
         latest_correction: s.refinedSolution || s.solutionAttempt || 'None',
-        mapped_hypotheses_from_previous_heartbeat: mappedHypothesisIds,
+        mapped_modules_from_previous_heartbeat: mappedModuleIds,
       };
     });
 
-    // (3) Realized hypothesis feedback (predicted test outcome, observed test outcome, surprise bits + dynamic surprise_note, utilization, counterevidence)
-    const enrichedFeedback = previousHeartbeat.realized_feedback.map(rf => ({
-      ...rf,
-      surprise_note: rf.surprise_note || buildHypothesisSurpriseNote(
-        rf.surprise_bits,
-        rf.observed_test_outcome,
-        rf.your_predicted_test_outcome
-      ),
-    }));
-    const feedbackText = enrichedFeedback.length > 0
-      ? JSON.stringify(enrichedFeedback, null, 2)
+    // (3) Realized module feedback (observed test outcome, utilization, counterevidence)
+    const feedbackText = previousHeartbeat.realized_feedback.length > 0
+      ? JSON.stringify(previousHeartbeat.realized_feedback, null, 2)
       : 'No prior feedback recorded.';
 
-    // (4) Hypotheses finalized and used so far across prior heartbeats
-    const formattedUsedSoFar = (hypothesesUsedSoFar || []).map(u => (
-      `- [Heartbeat ${u.heartbeatNo}, Iteration ${u.iterationFinalized}] ${u.hypothesisId}: ${u.text}`
+    // (4) Modules finalized and used so far across prior heartbeats
+    const formattedUsedSoFar = (modulesUsedSoFar || []).map(u => (
+      `- [Heartbeat ${u.heartbeatNo}, Iteration ${u.iterationFinalized}] ${u.moduleId}: ${u.text}`
     )).join('\n');
 
     parts.push(
       '',
-      fence('PreviousHeartbeatHypothesesAndTests', JSON.stringify({
+      fence('PreviousHeartbeatModulesAndTests', JSON.stringify({
         heartbeat_no: previousHeartbeat.heartbeat_no,
-        hypotheses: prevHypothesesAndTests,
+        modules: prevModulesAndTests,
       }, null, 2)),
       '',
       fence('MappedBranchPackets', JSON.stringify(mappedBranchPackets, null, 2)),
       '',
-      fence('RealizedHypothesisFeedback', feedbackText),
+      fence('RealizedModuleFeedback', feedbackText),
       '',
-      fence('HypothesesFinalizedAndUsedSoFar', formattedUsedSoFar),
+      fence('ModulesFinalizedAndUsedSoFar', formattedUsedSoFar),
     );
 
     // (5) DOS Core Synthesis for Heartbeat h
@@ -269,17 +258,17 @@ export function buildContextForHypothesisGenerate(
   // 5. Current Heartbeat G↔P turns so far
   if (currentHbTurns && currentHbTurns.length > 0) {
     const formattedCurrentTurns = currentHbTurns.map(
-      t => `### Hypothesis ${t.role === 'generator' ? 'Generator' : 'Proximity Reviewer'} (Turn ${t.turnNumber ?? 1})\n${t.content}`
+      t => `### Modules ${t.role === 'generator' ? 'Generator' : 'Impact Reviewer'} (Turn ${t.turnNumber ?? 1})\n${t.content}`
     ).join('\n\n');
-    parts.push('', fence('CurrentHeartbeatProximityTurns', formattedCurrentTurns));
+    parts.push('', fence('CurrentHeartbeatImpactReviewTurns', formattedCurrentTurns));
   }
 
-  const isProximityTurn = Boolean(
+  const isImpactReviewTurn = Boolean(
     currentHbTurns &&
     currentHbTurns.length > 0 &&
     currentHbTurns[currentHbTurns.length - 1].role === 'generator'
   );
-  parts.push('', isProximityTurn ? 'Immediate Role: Hypothesis Proximity Reviewer' : 'Immediate Role: Hypothesis Generator');
+  parts.push('', isImpactReviewTurn ? 'Immediate Role: Modules Impact Reviewer' : 'Immediate Role: Modules Generator');
 
   return parts.join('\n\n');
 }
@@ -324,15 +313,14 @@ export function buildContextForDos(
     ].join('\n\n');
   }
 
-  const formatPrevHypothesesForDos = (hb?: HeartbeatBlock): string => {
-    if (!hb || !hb.hypotheses || hb.hypotheses.length === 0) return 'None.';
+  const formatPrevModulesForDos = (hb?: HeartbeatBlock): string => {
+    if (!hb || !hb.modules || hb.modules.length === 0) return 'None.';
     return JSON.stringify(
-      hb.hypotheses.map(h => ({
-        hypothesis_id: h.id,
-        text: h.hypothesisText,
-        target_branches: h.targetBranchIds || [],
-        predicted_test_outcome: h.predicted_test_outcome,
-        testing_output: h.testerAttempt || 'None',
+      hb.modules.map(m => ({
+        module_id: m.id,
+        text: m.moduleText,
+        target_branches: m.targetBranchIds || [],
+        testing_output: m.testerAttempt || 'None',
       })),
       null,
       2
@@ -340,7 +328,7 @@ export function buildContextForDos(
   };
 
   if (kind === 'heartbeat') {
-    const prevHypotheses = formatPrevHypothesesForDos(options?.previousHeartbeat);
+    const prevModules = formatPrevModulesForDos(options?.previousHeartbeat);
 
     return [
       `# Core Challenge`,
@@ -349,7 +337,7 @@ export function buildContextForDos(
       `# Dissected Observations Synthesis - Heartbeat DOS`,
       fence('HarnessNote', DOS_HEARTBEAT_NOTE),
       '',
-      fence('PreviousHeartbeatHypothesesAndTests', prevHypotheses),
+      fence('PreviousHeartbeatModulesAndTests', prevModules),
       '',
       fence('ActiveBranchesState', formattedBranches),
     ].join('\n\n');
@@ -357,7 +345,7 @@ export function buildContextForDos(
 
   // Step-ii DOS
   const note = buildDosStepIiNote(options?.slotStatuses || []);
-  const prevHypotheses = formatPrevHypothesesForDos(options?.previousHeartbeat);
+  const prevModules = formatPrevModulesForDos(options?.previousHeartbeat);
 
   return [
     `# Core Challenge`,
@@ -368,7 +356,7 @@ export function buildContextForDos(
     '',
     fence('StepIOutputBaseline', JSON.stringify(options?.stepIOutput, null, 2)),
     '',
-    fence('PreviousHeartbeatHypothesesAndTests', prevHypotheses),
+    fence('PreviousHeartbeatModulesAndTests', prevModules),
     '',
     fence('SurvivingAndNewBranchesState', formattedBranches),
   ].join('\n\n');
@@ -505,21 +493,11 @@ export function buildContextForBsr(
   strategyText: string,
   windowHistoryText: string,
   distilledMemoryBeforeWindow: string | undefined,
-  ledgerEntries: BsrLedgerEntry[],
-  earlierGradedPredictions: Array<{
-    windowOutcome: string;
-    surprisalBits: number;
-    predictedProbabilities?: { PROGRESS: number; STALL: number; REGRESS: number };
-    updateNumber?: number;
-  }>
+  ledgerEntries: BsrLedgerEntry[]
 ): string {
-  // HIDDEN PREDICTION RULE (§6.7):
-  // Never pass the prediction for the window being judged!
   const formattedLedger = ledgerEntries.length > 0
     ? ledgerEntries.map(e => `[Iter ${e.iteration}] ${e.direction.toUpperCase()} (${e.size}): ${e.reason}`).join('\n')
     : 'Empty ledger.';
-
-  const formattedGraded = buildBsrGradedPredictionsHistoryWithNote(earlierGradedPredictions);
 
   return [
     `# Core Challenge`,
@@ -529,8 +507,6 @@ export function buildContextForBsr(
     `Current Strategy: ${strategyText}`,
     '',
     fence('StandingEventLedger', formattedLedger),
-    '',
-    fence('EarlierGradedPredictionsHistory', formattedGraded),
     '',
     fence('MemoryBankBeforeWindow', distilledMemoryBeforeWindow || 'None available.'),
     '',

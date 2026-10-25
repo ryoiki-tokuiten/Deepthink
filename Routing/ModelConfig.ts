@@ -13,8 +13,8 @@ export interface ModelOption {
 
 export const MAX_DEEPTHINK_STRATEGIES = 5;
 export const MAX_STRATEGY_PROXIMITY_LOOPS = 2;
-export const MAX_HYPOTHESIS_COUNT = 6;
-export const MAX_HYPOTHESIS_PROXIMITY_LOOPS = 2;
+export const MAX_MODULES_COUNT = 6;
+export const MAX_MODULES_IMPACT_REVIEW_LOOPS = 2;
 export const MAX_DEEPTHINK_DEPTH = 20;
 export const MIN_BSR_NOISE_LEVEL = 1;
 export const MAX_BSR_NOISE_LEVEL = 4;
@@ -68,8 +68,8 @@ export const BSR_WEIGHT_PRESETS: BsrWeightPreset[] = [
 export interface ModelParameters {
     strategiesCount: number;
     strategyProximityLoops: number;
-    hypothesisCount: number;
-    hypothesisProximityLoops: number;
+    modulesCount: number;
+    modulesImpactReviewLoops: number;
     deepthinkDepth: number;
     i?: number;
     j?: number;
@@ -88,8 +88,8 @@ export interface ModelParameters {
 const DEFAULT_MODEL_PARAMETERS: ModelParameters = {
     strategiesCount: 3,
     strategyProximityLoops: 1,
-    hypothesisCount: 4,
-    hypothesisProximityLoops: 1,
+    modulesCount: 4,
+    modulesImpactReviewLoops: 1,
     deepthinkDepth: 10,
     i: 10,
     j: 4,
@@ -140,12 +140,12 @@ export class ModelConfigManager {
         return Math.max(1, Math.min(MAX_STRATEGY_PROXIMITY_LOOPS, Math.round(this.parameters.strategyProximityLoops || 1)));
     }
 
-    public getHypothesisCount(): number {
-        return Math.max(0, Math.min(MAX_HYPOTHESIS_COUNT, this.parameters.hypothesisCount));
+    public getModulesCount(): number {
+        return Math.max(0, Math.min(MAX_MODULES_COUNT, this.parameters.modulesCount));
     }
 
-    public getHypothesisProximityLoops(): number {
-        return Math.max(1, Math.min(MAX_HYPOTHESIS_PROXIMITY_LOOPS, Math.round(this.parameters.hypothesisProximityLoops || 1)));
+    public getModulesImpactReviewLoops(): number {
+        return Math.max(1, Math.min(MAX_MODULES_IMPACT_REVIEW_LOOPS, Math.round(this.parameters.modulesImpactReviewLoops || 1)));
     }
 
     public getDeepthinkDepth(): number {

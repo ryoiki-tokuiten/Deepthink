@@ -12,6 +12,7 @@
 import type { DeepthinkResultsContextFile } from './types.ts';
 
 async function getSandboxRuntime() {
+  if (typeof window === 'undefined') return null;
   try {
     return await import('../../Core/SandboxToolRuntime.ts');
   } catch {

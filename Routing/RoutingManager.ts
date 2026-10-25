@@ -144,12 +144,12 @@ export class RoutingManager {
         return this.modelConfigManager.getStrategyProximityLoops();
     }
 
-    public getHypothesisProximityLoops(): number {
-        return this.modelConfigManager.getHypothesisProximityLoops();
+    public getModulesImpactReviewLoops(): number {
+        return this.modelConfigManager.getModulesImpactReviewLoops();
     }
 
-    public getHypothesisCount(): number {
-        return this.modelConfigManager.getHypothesisCount();
+    public getModulesCount(): number {
+        return this.modelConfigManager.getModulesCount();
     }
 
     public getDeepthinkDepth(): number {

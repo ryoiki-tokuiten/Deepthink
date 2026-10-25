@@ -18,8 +18,8 @@ export interface DeepthinkRunConfig {
     thinkingLevel: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | string;
     strategyCount: number;
     strategyProximityLoops: number;
-    hypothesisCount: number;
-    hypothesisProximityLoops: number;
+    modulesCount: number;
+    modulesImpactReviewLoops: number;
     depth: number;
     i?: number;
     j?: number;
@@ -221,13 +221,13 @@ export function validateAllowedUniqueIds(
     }
 }
 
-export function selectRoutedHypotheses<T extends { targetBranchIds?: string[] }>(
-    hypotheses: readonly T[],
+export function selectRoutedModules<T extends { targetBranchIds?: string[] }>(
+    modules: readonly T[],
     strategyId: string,
-    awaitingFreshHypotheses = false,
+    awaitingFreshModules = false,
 ): T[] {
-    if (awaitingFreshHypotheses) return [];
-    return hypotheses.filter(hypothesis =>
-        !hypothesis.targetBranchIds?.length
-        || hypothesis.targetBranchIds.includes(strategyId));
+    if (awaitingFreshModules) return [];
+    return modules.filter(mod =>
+        !mod.targetBranchIds?.length
+        || mod.targetBranchIds.includes(strategyId));
 }

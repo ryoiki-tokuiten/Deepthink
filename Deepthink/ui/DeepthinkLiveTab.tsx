@@ -133,9 +133,12 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
         if (name.includes('judge') || desc.includes('judge')) {
             return 'strategy';
         }
-        // Hypothesis / Tester
-        if (name.includes('hypothesis') || desc.includes('hypothesis') || name.includes('tester') || desc.includes('tester')) {
-            return 'hypothesis'; // Blue
+        // Modules / Tester
+        if (
+            name.includes('modules') || desc.includes('modules') ||
+            name.includes('tester') || desc.includes('tester')
+        ) {
+            return 'modules'; // Blue
         }
         // Strategy / Execution / Attempt / Solver / Proximity
         if (
@@ -193,15 +196,19 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
             return parts.length > 0 ? `Memory Bank Agent (${parts.join(', ')})` : 'Memory Bank Agent';
         }
 
-        if (lowerName.includes('hypothesis testing')) {
-            const hMatch = desc.match(/\b(h\d+)\b/i);
-            const hPart = hMatch ? hMatch[1] : '';
-            const parts = [hPart, meta].filter(Boolean);
-            return parts.length > 0 ? `Hypothesis Testing Agent (${parts.join(', ')})` : 'Hypothesis Testing Agent';
+        if (lowerName.includes('modules testing')) {
+            const mMatch = desc.match(/\b(m\d+)\b/i);
+            const mPart = mMatch ? mMatch[1] : '';
+            const parts = [mPart, meta].filter(Boolean);
+            return parts.length > 0 ? `Modules Testing Agent (${parts.join(', ')})` : 'Modules Testing Agent';
         }
         
-        if (lowerName.includes('hypothesis generation')) {
-            return meta ? `Hypothesis Generator Agent (${meta})` : 'Hypothesis Generator Agent';
+        if (lowerName.includes('modules generation') || lowerName.includes('modules generator')) {
+            return meta ? `Modules Generator Agent (${meta})` : 'Modules Generator Agent';
+        }
+
+        if (lowerName.includes('modules impact review') || lowerName.includes('modules impact reviewer')) {
+            return meta ? `Modules Impact Reviewer Agent (${meta})` : 'Modules Impact Reviewer Agent';
         }
 
         if (meta) {

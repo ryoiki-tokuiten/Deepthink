@@ -66,20 +66,20 @@ function buildStrategyPrompt(question: string, numStrategies: number): string {
 Generate exactly ${numStrategies} distinct high-level strategic interpretations. Return JSON with a "strategies" array. Do not solve the challenge.`;
 }
 
-function buildHypothesisGenerationPrompt(question: string, numHypotheses: number, allowFewer = false): string {
+function buildModulesGenerationPrompt(question: string, numModules: number, allowFewer = false): string {
     return `Core Challenge: ${question}
 
-Generate ${allowFewer ? `up to ${numHypotheses}` : `exactly ${numHypotheses}`} hypotheses worth testing. Return JSON with a "hypotheses" array. Do not solve the challenge.`;
+Generate ${allowFewer ? `up to ${numModules}` : `exactly ${numModules}`} modules worth testing. Return JSON with a "modules" array. Do not solve the challenge.`;
 }
 
-function buildHypothesisTestingPrompt(question: string, hypothesis: string): string {
+function buildModulesTestingPrompt(question: string, moduleText: string): string {
     return `Core Challenge: ${question}
 
-<Hypothesis To Test>
-${hypothesis}
-</Hypothesis To Test>
+<Module To Test>
+${moduleText}
+</Module To Test>
 
-Test only this hypothesis. Return the full investigation and final classification.`;
+Test only this module. Return the full investigation and final classification.`;
 }
 
 function buildExecutionPrompt(question: string, strategy: string, informationPacket: string): string {
@@ -110,11 +110,11 @@ ${execution}
 Critique the solution attempt. Identify errors, gaps, unjustified claims, and strategy-fidelity issues. Do not fix the solution.`;
 }
 
-function buildCorrectionPrompt(question: string, strategy: string, execution: string, critique: string, hypothesisPacket?: string): string {
+function buildCorrectionPrompt(question: string, strategy: string, execution: string, critique: string, modulePacket?: string): string {
     return [
         `Core Challenge: ${question}`,
         `<Assigned Strategy>\n${strategy}\n</Assigned Strategy>`,
-        hypothesisPacket ? `<Hypotheses>\n${hypothesisPacket}\n</Hypotheses>` : '',
+        modulePacket ? `<Modules>\n${modulePacket}\n</Modules>` : '',
         `<Previous Solution Attempt>\n${execution}\n</Previous Solution Attempt>`,
         `<Critique>\n${critique}\n</Critique>`,
         `Produce a corrected solution that addresses the critique while remaining faithful to the assigned strategy.`
@@ -148,12 +148,12 @@ async function callAgent(
 }
 
 function buildProximityPrompt(
-    kind: 'strategies' | 'hypotheses',
+    kind: 'strategies' | 'modules',
     question: string,
     candidates: string[],
     conversationHistory: string
 ): string {
-    const label = kind === 'strategies' ? 'Strategy' : 'Hypothesis';
+    const label = kind === 'strategies' ? 'Strategy' : 'Module';
     return `Core Challenge: ${question}
 
 <Current ${label} Candidates>
@@ -164,7 +164,7 @@ ${candidates.map((candidate, index) => `<${label} ${index + 1}>\n${candidate}\n<
 ${conversationHistory || 'This is the first proximity review.'}
 </Generator Proximity History>
 
-Act as the ${kind === 'strategies' ? 'Strategies' : 'Hypothesis'} Proximity Agent. Audit the candidate set for convergence, duplication, missing orthogonal domains, structural blind spots, untested assumptions, and local-minimum behavior. Be demanding and specific. Do not solve the core challenge and do not rewrite the candidates. Return a concise critique that a generator can use for its next revision.`;
+Act as the ${kind === 'strategies' ? 'Strategies Proximity Agent' : 'Modules Impact Reviewer'}. Audit the candidate set for convergence, duplication, missing orthogonal domains, structural blind spots, untested assumptions, and local-minimum behavior. Be demanding and specific. Do not solve the core challenge and do not rewrite the candidates. Return a concise critique that a generator can use for its next revision.`;
 }
 
 /** Wraps an async agent body with standard error handling, while rethrowing terminal inference/silence/abort errors. */
@@ -206,12 +206,12 @@ export async function generateStrategiesAgent(
 }
 
 /**
- * Generate Hypotheses Agent
- * Generates N hypotheses for testing
+ * Generate Modules Agent
+ * Generates N modules for testing
  */
-export async function generateHypothesesAgent(
+export async function generateModulesAgent(
     question: string,
-    numHypotheses: number,
+    numModules: number,
     specialContext: string,
     systemPrompt: string,
     context: AgentExecutionContext,
@@ -219,14 +219,14 @@ export async function generateHypothesesAgent(
     allowFewer = false
 ): Promise<AgentResponse> {
     return wrapAgent(async () => {
-        const prompt = appendContext(buildHypothesisGenerationPrompt(question, numHypotheses, allowFewer), specialContext);
+        const prompt = appendContext(buildModulesGenerationPrompt(question, numModules, allowFewer), specialContext);
         const rawText = await callAgent(prompt, images, context, systemPrompt, true);
-        const parsed = context.parseJsonSafe(rawText, 'GenerateHypotheses');
+        const parsed = context.parseJsonSafe(rawText, 'GenerateModules');
 
-        if (!parsed || !Array.isArray(parsed.hypotheses)) {
-            return { success: false, error: 'Failed to parse hypotheses from response', rawResponse: rawText };
+        if (!parsed || !Array.isArray(parsed.modules)) {
+            return { success: false, error: 'Failed to parse modules from response', rawResponse: rawText };
         }
-        return { success: true, data: { hypotheses: parsed.hypotheses }, rawResponse: rawText };
+        return { success: true, data: { modules: parsed.modules }, rawResponse: rawText };
     });
 }
 
@@ -254,10 +254,10 @@ export async function strategiesProximityAgent(
     });
 }
 
-/** See strategiesProximityAgent; hypotheses use the same independent review contract. */
-export async function hypothesesProximityAgent(
+/** See strategiesProximityAgent; modules use the same independent review contract. */
+export async function modulesImpactReviewAgent(
     question: string,
-    hypotheses: string[],
+    modules: string[],
     conversationHistory: string,
     specialContext: string,
     systemPrompt: string,
@@ -266,7 +266,7 @@ export async function hypothesesProximityAgent(
 ): Promise<AgentResponse> {
     return wrapAgent(async () => {
         const prompt = appendContext(
-            buildProximityPrompt('hypotheses', question, hypotheses, conversationHistory),
+            buildProximityPrompt('modules', question, modules, conversationHistory),
             specialContext
         );
         const review = await callAgent(prompt, images, context, systemPrompt, false);
@@ -275,13 +275,13 @@ export async function hypothesesProximityAgent(
 }
 
 /**
- * Test Hypotheses Agent
- * Tests multiple hypotheses in parallel
+ * Test Modules Agent
+ * Tests multiple modules in parallel
  */
-export async function testHypothesesAgent(
+export async function testModulesAgent(
     question: string,
-    hypothesisIds: string[],
-    hypothesesData: Map<string, { text: string }>,
+    moduleIds: string[],
+    modulesData: Map<string, { text: string }>,
     specialContext: string,
     systemPrompt: string,
     context: AgentExecutionContext,
@@ -289,13 +289,13 @@ export async function testHypothesesAgent(
 ): Promise<AgentResponse> {
     return wrapAgent(async () => {
         const results = await Promise.all(
-            hypothesisIds.map(async (id) => {
-                const hypothesis = hypothesesData.get(id);
-                if (!hypothesis) return { id, success: false, error: 'Hypothesis not found' };
+            moduleIds.map(async (id) => {
+                const mod = modulesData.get(id);
+                if (!mod) return { id, success: false, error: 'Module not found' };
 
-                const prompt = appendContext(buildHypothesisTestingPrompt(question, hypothesis.text), specialContext);
+                const prompt = appendContext(buildModulesTestingPrompt(question, mod.text), specialContext);
                 const testing = await callAgent(prompt, images, context, systemPrompt, false);
-                return { id, success: true, hypothesis: hypothesis.text, testing };
+                return { id, success: true, module: mod.text, testing };
             })
         );
         return { success: true, data: { results } };
@@ -304,13 +304,13 @@ export async function testHypothesesAgent(
 
 /**
  * Execute Strategies Agent
- * Executes multiple strategies in parallel with selected hypothesis testing results
+ * Executes multiple strategies in parallel with selected module testing results
  */
 export async function executeStrategiesAgent(
     question: string,
-    strategyExecutions: Array<{ strategyId: string; hypothesisIds: string[] }>,
+    strategyExecutions: Array<{ strategyId: string; moduleIds: string[] }>,
     strategiesData: Map<string, { text: string }>,
-    hypothesisTestingResults: Map<string, { hypothesis: string; testing: string }>,
+    moduleTestingResults: Map<string, { module: string; testing: string }>,
     specialContext: string,
     systemPrompt: string,
     context: AgentExecutionContext,
@@ -322,7 +322,7 @@ export async function executeStrategiesAgent(
                 const strategy = strategiesData.get(exec.strategyId);
                 if (!strategy) return { id: exec.strategyId, success: false, error: 'Strategy not found' };
 
-                const informationPacket = buildInformationPacket(exec.hypothesisIds, hypothesisTestingResults);
+                const informationPacket = buildInformationPacket(exec.moduleIds, moduleTestingResults);
                 const prompt = appendContext(buildExecutionPrompt(question, strategy.text, informationPacket), specialContext);
                 const execution = await callAgent(prompt, images, context, systemPrompt, false);
                 return { id: exec.strategyId, success: true, strategy: strategy.text, execution };
@@ -332,16 +332,16 @@ export async function executeStrategiesAgent(
     });
 }
 
-/** Builds the XML information packet from hypothesis testing results. */
+/** Builds the XML information packet from module testing results. */
 function buildInformationPacket(
-    hypothesisIds: string[],
-    results: Map<string, { hypothesis: string; testing: string }>
+    moduleIds: string[],
+    results: Map<string, { module: string; testing: string }>
 ): string {
-    const entries = hypothesisIds
+    const entries = moduleIds
         .map((id, idx) => {
             const r = results.get(id);
             return r
-                ? `<Hypothesis ${idx + 1}>\nHypothesis: ${r.hypothesis}\nHypothesis Testing: ${r.testing}\n</Hypothesis ${idx + 1}>\n`
+                ? `<Module ${idx + 1}>\nModule: ${r.module}\nModule Testing: ${r.testing}\n</Module ${idx + 1}>\n`
                 : '';
         })
         .filter(Boolean)
@@ -385,7 +385,7 @@ export async function correctedSolutionsAgent(
     question: string,
     executionIds: string[],
     executionsData: Map<string, { strategy: string; execution: string }>,
-    critiquesData: Map<string, { critique: string; hypothesisPacket?: string }>,
+    critiquesData: Map<string, { critique: string; modulePacket?: string }>,
     systemPrompt: string,
     context: AgentExecutionContext,
     images: ImageInput = []
@@ -397,7 +397,7 @@ export async function correctedSolutionsAgent(
                 const critique = critiquesData.get(id);
                 if (!execution || !critique) return { id, success: false, error: 'Execution or critique not found' };
 
-                const prompt = buildCorrectionPrompt(question, execution.strategy, execution.execution, critique.critique, critique.hypothesisPacket);
+                const prompt = buildCorrectionPrompt(question, execution.strategy, execution.execution, critique.critique, critique.modulePacket);
                 const correctedSolution = await callAgent(prompt, images, context, systemPrompt, false);
                 return { id, success: true, correctedSolution };
             })

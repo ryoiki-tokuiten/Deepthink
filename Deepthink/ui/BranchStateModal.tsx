@@ -6,7 +6,7 @@
  * Provides complete mathematical and operational transparency into:
  * - Standing Event Ledger (confirmed progress/regression events)
  * - Deterministic decision rules & computed pressures (CONTINUE, EVOLVE, PRUNE)
- * - Prediction scoring, surprisal (bits), credibility, and effective predictions
+ * - Window evidence: drift, critique alignment, and stall evidence
  * - Full raw BSR schema output
  */
 
@@ -30,7 +30,6 @@ export const BranchStateModal: React.FC<BranchStateModalProps> = ({
   const branch = process.initialStrategies.find(s => s.id === branchId);
   const ledger = (process.branchLedgers && process.branchLedgers[branchId]) || [];
   const records = (process.bsrRecords || []).filter(r => r.branch_id === branchId);
-  const openPred = process.openPredictions && process.openPredictions[branchId];
 
   const [selectedUpdateIdx, setSelectedUpdateIdx] = useState<number>(
     Math.max(0, records.length - 1)
@@ -189,7 +188,7 @@ export const BranchStateModal: React.FC<BranchStateModalProps> = ({
                   <strong>Decision Rule Explanation:</strong>
                   {computed.decision === 'CONTINUE' && (
                     <p>
-                      CONTINUE was chosen because pressures for EVOLVE ({computed.pressure.EVOLVE.toFixed(3)}) and PRUNE ({computed.pressure.PRUNE.toFixed(3)}) were below threshold θ ({theta.toFixed(2)}), or CONTINUE ({computed.pressure.CONTINUE.toFixed(3)}) had higher evidence of expected improvement.
+                      CONTINUE was chosen because pressures for EVOLVE ({computed.pressure.EVOLVE.toFixed(3)}) and PRUNE ({computed.pressure.PRUNE.toFixed(3)}) were below threshold θ ({theta.toFixed(2)}), or CONTINUE ({computed.pressure.CONTINUE.toFixed(3)}) had higher evidence of improvement in the window.
                     </p>
                   )}
                   {computed.decision === 'EVOLVE' && (
@@ -236,20 +235,12 @@ export const BranchStateModal: React.FC<BranchStateModalProps> = ({
                   </div>
                 </div>
 
-                {/* Information Theory & Forecasting */}
+                {/* Window Evidence */}
                 <div className="bsr-metric-box">
-                  <h5>Forecast & Information Theory</h5>
+                  <h5>Window Evidence</h5>
                   <div className="bsr-metric-row">
-                    <span>Credibility:</span>
-                    <strong>{computed.credibility !== null ? computed.credibility.toFixed(3) : '1.000 (Default)'}</strong>
-                  </div>
-                  <div className="bsr-metric-row">
-                    <span>Surprisal (Bits):</span>
-                    <strong>{computed.surprisal_bits !== null ? `${computed.surprisal_bits.toFixed(3)} bits` : 'First Window (N/A)'}</strong>
-                  </div>
-                  <div className="bsr-metric-row">
-                    <span>Certainty (1 - H/Hmax):</span>
-                    <strong>{computed.certainty.toFixed(3)}</strong>
+                    <span>Drift:</span>
+                    <strong>{computed.drift.toFixed(3)}</strong>
                   </div>
                   <div className="bsr-metric-row">
                     <span>Critique Alignment:</span>
@@ -258,10 +249,6 @@ export const BranchStateModal: React.FC<BranchStateModalProps> = ({
                   <div className="bsr-metric-row">
                     <span>Stall Evidence:</span>
                     <strong>{computed.stall_evidence.toFixed(3)}</strong>
-                  </div>
-                  <div className="bsr-metric-row">
-                    <span>Expected Drift:</span>
-                    <strong>{computed.expected_drift.toFixed(3)}</strong>
                   </div>
                 </div>
 
@@ -300,29 +287,6 @@ export const BranchStateModal: React.FC<BranchStateModalProps> = ({
                 </div>
               </section>
 
-              {/* Prediction details */}
-              {report?.next_window_prediction && (
-                <section className="bsr-prediction-section">
-                  <h5>Next-Window Prediction Issued at this Update</h5>
-                  <div className="bsr-prob-chips">
-                    <span className="bsr-prob-chip">
-                      PROGRESS: {(report.next_window_prediction.probabilities.PROGRESS * 100).toFixed(1)}%
-                    </span>
-                    <span className="bsr-prob-chip">
-                      STALL: {(report.next_window_prediction.probabilities.STALL * 100).toFixed(1)}%
-                    </span>
-                    <span className="bsr-prob-chip">
-                      REGRESS: {(report.next_window_prediction.probabilities.REGRESS * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                  {report.next_window_prediction.reason && (
-                    <p className="bsr-prediction-reason">
-                      <strong>Forecaster Rationale:</strong> {report.next_window_prediction.reason}
-                    </p>
-                  )}
-                </section>
-              )}
-
               {/* Raw JSON Schema Toggle */}
               <section className="bsr-json-section">
                 <button
@@ -348,24 +312,6 @@ export const BranchStateModal: React.FC<BranchStateModalProps> = ({
               <p>
                 No Global Updates completed yet for branch {branchId}. Global updates occur every {process.runConfig?.j || 5} iterations according to the loop schedule.
               </p>
-            </div>
-          )}
-
-          {/* Standing Open Prediction (if waiting to be graded) */}
-          {openPred && (
-            <div className="bsr-open-prediction-box">
-              <Icon name="timelapse" />
-              <div>
-                <strong>Standing Next-Window Forecast (Issued at Update #{openPred.issuedAtUpdate}):</strong>
-                <div className="bsr-prob-chips" style={{ marginTop: '4px' }}>
-                  <span>PROGRESS: {(openPred.probabilities.PROGRESS * 100).toFixed(0)}%</span>
-                  <span>STALL: {(openPred.probabilities.STALL * 100).toFixed(0)}%</span>
-                  <span>REGRESS: {(openPred.probabilities.REGRESS * 100).toFixed(0)}%</span>
-                </div>
-                <small style={{ color: 'var(--text-secondary-color)', display: 'block', marginTop: '4px' }}>
-                  Hidden-Prediction Rule active: this forecast will be graded against the branch outcome at the next global update.
-                </small>
-              </div>
             </div>
           )}
         </div>

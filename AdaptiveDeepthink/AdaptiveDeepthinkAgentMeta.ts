@@ -8,12 +8,12 @@ const ADAPTIVE_DEEPTHINK_AGENT_META: Record<string, { displayName: string; icon:
         displayName: 'Strategy Generation Agent',
         icon: 'psychology'
     },
-    generate_hypothesis: {
-        displayName: 'Hypothesis Generation Agent',
+    generate_modules: {
+        displayName: 'Modules Generator Agent',
         icon: 'science'
     },
-    test_hypothesis: {
-        displayName: 'Hypothesis Testing Agent',
+    test_modules: {
+        displayName: 'Modules Testing Agent',
         icon: 'troubleshoot'
     },
     execute: {

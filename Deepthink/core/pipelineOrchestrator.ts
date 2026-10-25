@@ -8,30 +8,29 @@
  * and data structures (§1, §2, §3, §4, §5, §6, §7, §8, §9).
  * NOTE: For ANY minor inconvenience or uncertainty during execution, ALWAYS consult
  * Deepthink_Consolidated_Specification.md first. It contains critical operational
- * details (failure policies, hidden-prediction rules, window_start rollbacks, etc.)
+ * details (failure policies, window_start rollbacks, etc.)
  * that must never be altered or ignored.
  */
 
 import { nanoid } from 'nanoid';
-import { HumanMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import type {
   BsrAction,
   BsrComputedScores,
   BsrEvolveForm,
   BsrReport,
-  DeepthinkHypothesisData,
+  DeepthinkModuleData,
   DeepthinkLiveEvent,
   DeepthinkMainStrategyData,
   DeepthinkPipelineState,
-  DosHypothesisFeedbackItem,
+  DosModuleFeedbackItem,
   DosOutput,
   HeartbeatBlock,
   ProximityTurn,
-  RealizedHypothesisFeedback,
+  RealizedModuleFeedback,
 } from './types.ts';
 import {
   evaluateBranchState,
-  calculateSurpriseBits,
   calculateUtilizationVector,
   SIZE_WEIGHTS,
   TAU,
@@ -48,7 +47,7 @@ import {
   buildContextForCritiqueAgent,
   buildContextForDos,
   buildContextForFinalJudge,
-  buildContextForHypothesisGenerate,
+  buildContextForModulesGenerate,
   buildContextForStrategyGlobalUpdate,
   buildContextForStrategySeed,
   buildCritiqueCorrectionMemoryBankHistory,
@@ -66,8 +65,7 @@ import { createDefaultCustomPromptsDeepthink } from '../prompts/index.ts';
 import { GitRepositoryHarness } from './gitRepository.ts';
 import { SharedWorkspaceManager, type SharedWorkspaceToolInput } from './sharedWorkspace.ts';
 import {
-  buildHypothesisProximityHistoryWithNotes,
-  buildHypothesisSurpriseNote,
+  buildModulesImpactReviewHistoryWithNotes,
   buildStrategyProximityHistoryWithNotes,
 } from './harnessNotes.ts';
 import type {
@@ -86,6 +84,49 @@ import {
   isTerminalInferenceError,
   withSilenceWatchdog,
 } from '../../Core/ProviderError.ts';
+
+export const INCLUDE_REASONING_IN_TRAJECTORY_JSONL = false;
+
+export function sanitizeTrajectoryRecordsForJsonl(
+  records: ReadonlyArray<Record<string, any>>,
+  includeReasoning = INCLUDE_REASONING_IN_TRAJECTORY_JSONL
+): Array<Record<string, unknown>> {
+  let firstUserDropped = false;
+  const cleaned: Array<Record<string, unknown>> = [];
+
+  for (const record of records) {
+    if (!record || typeof record !== 'object') continue;
+    const roleOrKind = record.role ?? record.kind;
+
+    if (roleOrKind === 'system') continue;
+    if (roleOrKind === 'user' && !firstUserDropped) {
+      firstUserDropped = true;
+      continue;
+    }
+    if (roleOrKind === 'reasoning' && !includeReasoning) continue;
+
+    const copy: Record<string, unknown> = { ...record };
+    delete copy.timestamp;
+    delete copy.captured_at;
+    delete copy.id;
+    delete copy.tool_call_id;
+    delete copy.source_message_id;
+    delete copy.source_line_id;
+
+    if (Array.isArray(copy.tool_calls)) {
+      copy.tool_calls = copy.tool_calls.map((tc: any) => {
+        if (!tc || typeof tc !== 'object') return tc;
+        const tcCopy: Record<string, unknown> = { ...tc };
+        delete tcCopy.id;
+        return tcCopy;
+      });
+    }
+
+    cleaned.push(copy);
+  }
+
+  return cleaned;
+}
 
 export function formatDirectCallTrajectoryJsonl(args: {
   systemInstruction?: string;
@@ -114,25 +155,18 @@ export function formatDirectCallTrajectoryJsonl(args: {
         toolResults: { maxCharacters: null, strategy: 'head-tail' },
       },
       filters: {
-        systemMessages: 'include',
+        systemMessages: 'omit',
         toolResults: 'include',
       },
     });
-    const records = args.systemInstruction?.trim()
-      ? [
-          normalized.records[0],
-          {
-            role: 'system' as const,
-            content: args.systemInstruction.trim(),
-            timestamp: new Date(baseMs).toISOString(),
-          },
-          ...normalized.records.slice(1),
-        ]
-      : normalized.records;
-    validateTranscript(records);
-    return records.map(record => JSON.stringify(record)).join('\n');
+    validateTranscript(normalized.records);
+    return sanitizeTrajectoryRecordsForJsonl(normalized.records)
+      .map(record => JSON.stringify(record))
+      .join('\n');
   } catch {
-    return rows.map(row => JSON.stringify(row)).join('\n');
+    return sanitizeTrajectoryRecordsForJsonl(rows)
+      .map(row => JSON.stringify(row))
+      .join('\n');
   }
 }
 
@@ -143,6 +177,75 @@ async function getSandboxToolAgentRunner() {
   } catch {
     return null;
   }
+}
+
+/**
+ * One continuous sandbox trajectory for one agent of a generator ⇄ reviewer loop
+ * (Strategy Generator, Strategy Proximity Reviewer, Modules Generator, Modules Impact Reviewer).
+ * It lives for a single seed, global update, or heartbeat invocation. `messages` is empty until
+ * the agent's first round; afterwards it ends with the agent's accepted final_output call.
+ */
+interface LoopAgentConversation {
+  sessionId: string;
+  messages: BaseMessage[];
+}
+
+function createLoopAgentConversation(runId: string, agentKind: DeepthinkAgentKind): LoopAgentConversation {
+  return { sessionId: `dtsb-${runId}-${agentKind}-${nanoid(6)}`, messages: [] };
+}
+
+/**
+ * Appends the peer's latest round output as the tool result of the agent's previous final_output
+ * call, followed by the agent's Immediate Role line, so its next round continues the exact same
+ * append-only trajectory. Does nothing before the agent's first sandbox invocation.
+ */
+function appendPeerSubmission(
+  conversation: LoopAgentConversation,
+  peerHeading: string,
+  peerContent: string,
+  immediateRole: string
+): void {
+  const last = conversation.messages[conversation.messages.length - 1];
+  if (!(last instanceof AIMessage)) return;
+  const content = [
+    'final_output accepted.',
+    '',
+    peerHeading,
+    peerContent,
+    '',
+    `Immediate Role: ${immediateRole}`,
+  ].join('\n');
+  for (const call of last.tool_calls ?? []) {
+    if (!call.id) call.id = nanoid(8);
+    const isFinalOutput = call.name === 'final_output';
+    conversation.messages.push(new ToolMessage({
+      name: call.name,
+      tool_call_id: call.id,
+      content: isFinalOutput ? content : 'Not executed: final_output was submitted in the same turn.',
+      status: isFinalOutput ? 'success' : 'error',
+    }));
+  }
+}
+
+function buildLoopRoleTrajectoryJsonl(
+  turns: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number; trajectoryJsonl?: string }>,
+  isContinuousSandbox: boolean
+): string {
+  if (turns.length === 0) return '';
+  if (isContinuousSandbox) {
+    const lastTurn = turns[turns.length - 1];
+    if (lastTurn.trajectoryJsonl) return lastTurn.trajectoryJsonl;
+  }
+  return turns
+    .map(h => h.trajectoryJsonl || JSON.stringify({
+      role: 'assistant',
+      message_type: 'ai',
+      turn_role: h.role,
+      turn_number: h.turnNumber,
+      content: h.content,
+    }))
+    .filter(Boolean)
+    .join('\n');
 }
 
 // ============================================================================
@@ -174,6 +277,7 @@ export interface PipelineExecutionCallbacks {
   onStateChange?: (state: DeepthinkPipelineState) => void;
   retryDelaysMs?: number[];
   silenceTimeoutMs?: number;
+  runSandboxToolAgent?: typeof import('../../Core/SandboxToolRuntime.ts').runSandboxToolAgent;
 }
 
 export class PipelineStopRequestedError extends Error {
@@ -237,8 +341,8 @@ export class DeepthinkPipelineOrchestrator {
   private readonly gitHarness: GitRepositoryHarness;
   private readonly sharedWorkspace: SharedWorkspaceManager;
   private commitHashesPerIteration = new Map<string, string>(); // key: `slotIndex:iteration` or `slotIndex:start_${windowStart}`
-  private strategiesUsedSoFar: Array<{ slotId: string; iterationFinalized: number; text: string; trajectoryJsonl?: string }> = [];
-  private hypothesesUsedSoFar: Array<{ heartbeatNo: number; iterationFinalized: number; hypothesisId: string; text: string; trajectoryJsonl?: string }> = [];
+  private strategiesUsedSoFar: Array<{ slotId: string; iterationFinalized: number; text: string }> = [];
+  private modulesUsedSoFar: Array<{ heartbeatNo: number; iterationFinalized: number; moduleId: string; text: string }> = [];
   private globalUpdateStrategyHistories: Array<{ updateNumber: number; turns: ProximityTurn[] }> = [];
   private readonly state: DeepthinkPipelineState;
   private readonly callbacks: PipelineExecutionCallbacks;
@@ -277,8 +381,8 @@ export class DeepthinkPipelineOrchestrator {
     if (Array.isArray((state as any).strategiesUsedSoFar)) {
       this.strategiesUsedSoFar = [...(state as any).strategiesUsedSoFar];
     }
-    if (Array.isArray((state as any).hypothesesUsedSoFar)) {
-      this.hypothesesUsedSoFar = [...(state as any).hypothesesUsedSoFar];
+    if (Array.isArray((state as any).modulesUsedSoFar)) {
+      this.modulesUsedSoFar = [...(state as any).modulesUsedSoFar];
     }
     if (Array.isArray((state as any).globalUpdateStrategyHistories)) {
       this.globalUpdateStrategyHistories = [...(state as any).globalUpdateStrategyHistories];
@@ -291,7 +395,7 @@ export class DeepthinkPipelineOrchestrator {
     if (sinceHeartbeat !== undefined) (this.state as any).sinceHeartbeat = sinceHeartbeat;
     (this.state as any).commitHashesPerIteration = Array.from(this.commitHashesPerIteration.entries());
     (this.state as any).strategiesUsedSoFar = this.strategiesUsedSoFar;
-    (this.state as any).hypothesesUsedSoFar = this.hypothesesUsedSoFar;
+    (this.state as any).modulesUsedSoFar = this.modulesUsedSoFar;
     (this.state as any).globalUpdateStrategyHistories = this.globalUpdateStrategyHistories;
     void this.sharedWorkspace.read().then(content => {
       (this.state as any).sharedWorkspaceContent = content;
@@ -366,24 +470,10 @@ export class DeepthinkPipelineOrchestrator {
       const commitKey = `${slotIdx}:start_1`;
       if (!this.commitHashesPerIteration.has(commitKey)) {
         const strat = this.state.initialStrategies[slotIdx];
-        const latestGenTurn = [...(this.state.strategyProximityHistory || [])]
-          .reverse()
-          .find(h => h.role === 'generator') as any;
-        const stratJsonl = latestGenTurn?.trajectoryJsonl || JSON.stringify({
-          role: 'assistant',
-          message_type: 'ai',
-          agent_kind: 'initialStrategy',
-          slot_id: strat.id,
-          content: strat.strategyText,
-        });
         const contextFiles: DeepthinkResultsContextFile[] = [
           {
             path: `Strategy-${slotIdx + 1}/strategy.md`,
             content: `# Strategy ${slotIdx + 1} (${strat.id})\n\n${strat.strategyText}\n`,
-          },
-          {
-            path: `Strategy-${slotIdx + 1}/strategy.jsonl`,
-            content: stratJsonl,
           },
         ];
         const commit = await this.gitHarness.commitWindowStart(slotIdx, 1, contextFiles);
@@ -393,7 +483,7 @@ export class DeepthinkPipelineOrchestrator {
 
     let sinceHeartbeat = 0;
     let heartbeatNo = 0;
-    const curatedContextEnabled = config.hypothesisCount > 0;
+    const curatedContextEnabled = config.modulesCount > 0;
 
     // Helper to check if an iteration was fully completed
     const isIterationFullyComplete = (it: number, currentSinceHeartbeat: number): { complete: boolean; nextSinceHeartbeat: number; nextHeartbeatNo: number } => {
@@ -555,6 +645,8 @@ export class DeepthinkPipelineOrchestrator {
     const executionGroupName = 'Seed Strategy Proximity Loop';
 
     const targetProximityReviews = Math.max(0, config.strategyProximityLoops ?? 1);
+    const genConversation = createLoopAgentConversation(this.state.id, 'initialStrategy');
+    const proxConversation = createLoopAgentConversation(this.state.id, 'strategyProximity');
 
     for (let reviewIndex = 0; reviewIndex <= targetProximityReviews; reviewIndex++) {
       const turn = reviewIndex + 1;
@@ -579,6 +671,7 @@ export class DeepthinkPipelineOrchestrator {
           contract: seedContract,
           executionGroupId,
           executionGroupName,
+          conversation: genConversation,
           onTrajectoryJsonl: (jsonl) => {
             genTrajectoryJsonl = jsonl;
           },
@@ -586,6 +679,15 @@ export class DeepthinkPipelineOrchestrator {
 
         const parsed = this.parseJsonStrict<{ strategies: string[] }>(genOutput, 'Seed Strategy Generator');
         currentStrategies = parsed.strategies.slice(0, config.strategiesCount);
+
+        if (reviewIndex < targetProximityReviews) {
+          appendPeerSubmission(
+            proxConversation,
+            `### Strategy Generator (Turn ${turn})`,
+            genOutput,
+            'Strategy Proximity Reviewer'
+          );
+        }
 
         history.push({
           role: 'generator',
@@ -615,10 +717,18 @@ export class DeepthinkPipelineOrchestrator {
             isCritical: true,
             executionGroupId,
             executionGroupName,
+            conversation: proxConversation,
             onTrajectoryJsonl: (jsonl) => {
               proxTrajectoryJsonl = jsonl;
             },
           });
+
+          appendPeerSubmission(
+            genConversation,
+            `### Strategy Proximity Reviewer (Turn ${turn})`,
+            proxOutput,
+            'Strategy Generator'
+          );
 
           history.push({
             role: 'proximity',
@@ -635,7 +745,6 @@ export class DeepthinkPipelineOrchestrator {
 
     this.state.strategyProximityHistory = history;
 
-    const latestSeedGenTurn = [...history].reverse().find(h => h.role === 'generator') as any;
     // Initialize N branches (main1 to mainN) (§1 Invariant 1)
     this.state.initialStrategies = currentStrategies.map((text, idx) => {
       const slotId = `main${idx + 1}`;
@@ -643,7 +752,6 @@ export class DeepthinkPipelineOrchestrator {
         slotId,
         iterationFinalized: 0,
         text,
-        trajectoryJsonl: latestSeedGenTurn?.trajectoryJsonl,
       });
       return {
         id: slotId,
@@ -657,23 +765,22 @@ export class DeepthinkPipelineOrchestrator {
       this.state.branchLedgers[strat.id] = [];
     }
 
-    // Persist strategy history into repository (§8.1)
-    const seedHistoryMarkdown = [
-      '# Seed Strategies Proximity History',
-      ...history.map(h => `### ${h.role.toUpperCase()} (Turn ${h.turnNumber})\n${h.content}`),
+    // Persist strategy generator and proximity review histories into repository (§8.1)
+    const seedGenTurns = history.filter(h => h.role === 'generator');
+    const seedProxTurns = history.filter(h => h.role === 'proximity');
+    const seedGenMarkdown = [
+      '# Seed Strategies Generation History',
+      ...seedGenTurns.map(h => `### GENERATOR (Turn ${h.turnNumber})\n${h.content}`),
     ].join('\n\n');
-    const seedHistoryJsonl = history
-      .map(h => (h as any).trajectoryJsonl || JSON.stringify({
-        role: 'assistant',
-        message_type: 'ai',
-        turn_role: h.role,
-        turn_number: h.turnNumber,
-        content: h.content,
-      }))
-      .filter(Boolean)
-      .join('\n');
+    const seedProxMarkdown = [
+      '# Seed Strategies Proximity Review History',
+      ...seedProxTurns.map(h => `### PROXIMITY (Turn ${h.turnNumber})\n${h.content}`),
+    ].join('\n\n');
+    const seedGenJsonl = buildLoopRoleTrajectoryJsonl(seedGenTurns as any, !!config.deepthinkCodeExecutionEnabled);
+    const seedProxJsonl = buildLoopRoleTrajectoryJsonl(seedProxTurns as any, !!config.deepthinkCodeExecutionEnabled);
 
-    await this.gitHarness.commitStrategyHistory('seed_strategies.md', seedHistoryMarkdown, seedHistoryJsonl);
+    await this.gitHarness.commitStrategyHistory('seed_strategies.md', seedGenMarkdown, seedGenJsonl);
+    await this.gitHarness.commitStrategyHistory('seed_strategies_proximity_review.md', seedProxMarkdown, seedProxJsonl);
     await this.updateStrategiesUsedSoFarFile();
 
     this.callbacks.onStateChange?.(this.state);
@@ -886,9 +993,9 @@ export class DeepthinkPipelineOrchestrator {
       // Latest curated context packet from most recent heartbeat
       const latestHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
       const mappedPacket = latestHeartbeat
-        ? latestHeartbeat.hypotheses
-            .filter(h => !h.targetBranchIds || h.targetBranchIds.length === 0 || h.targetBranchIds.includes(branch.id))
-            .map(h => `Hypothesis ${h.id}: ${h.hypothesisText}\nTesting of that Hypothesis:\n${h.testerAttempt}`)
+        ? latestHeartbeat.modules
+            .filter(m => !m.targetBranchIds || m.targetBranchIds.length === 0 || m.targetBranchIds.includes(branch.id))
+            .map(m => `Module ${m.id}: ${m.moduleText}\nTesting of that Module:\n${m.testerAttempt}`)
             .join('\n\n')
         : null;
 
@@ -1053,16 +1160,16 @@ export class DeepthinkPipelineOrchestrator {
     reusedDosFilePath?: string
   ): Promise<void> {
     const config = this.state.runConfig;
-    if (config.hypothesisCount === 0) {
+    if (config.modulesCount === 0) {
       return; // Curated context disabled (§3, §4.5)
     }
 
     const previousHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
     const currentDosFilePath = reusedDosFilePath || `DOS_history/DOS_heartbeat_${String(heartbeatNo).padStart(2, '0')}.md`;
 
-    // 1. DOS (if hypotheses are enabled)
+    // 1. DOS (if modules are enabled)
     let dosOutput = reusedDos;
-    if (!dosOutput && config.hypothesisCount > 0) {
+    if (!dosOutput && config.modulesCount > 0) {
       const existingDos = this.state.dosOutputs?.find(
         d => d.callType === 'heartbeat' && d.iteration === iteration
       );
@@ -1070,7 +1177,7 @@ export class DeepthinkPipelineOrchestrator {
         dosOutput = existingDos.output;
       }
     }
-    if (!dosOutput && config.hypothesisCount > 0) {
+    if (!dosOutput && config.modulesCount > 0) {
       const activeState = this.state.initialStrategies.map(s => ({
         branchId: s.id,
         strategyText: s.strategyText,
@@ -1121,49 +1228,39 @@ export class DeepthinkPipelineOrchestrator {
         ]
       );
 
-      // Process and attach realized hypothesis feedback for the previous heartbeat (§5.1, §5.4)
-      if (dosOutput.hypothesis_feedback && previousHeartbeat) {
-        await this.attachRealizedDosFeedback(dosOutput.hypothesis_feedback, previousHeartbeat.heartbeat_no);
+      // Process and attach realized module feedback for the previous heartbeat (§5.1, §5.4)
+      if (dosOutput.module_feedback && previousHeartbeat) {
+        await this.attachRealizedDosFeedback(dosOutput.module_feedback, previousHeartbeat.heartbeat_no);
       }
     }
 
-    // 2. Generate Hypotheses + Proximity (§4.2)
-    const newHypotheses: DeepthinkHypothesisData[] = [];
-    const realizedFeedback: RealizedHypothesisFeedback[] = [];
+    // 2. Generate Modules + Impact Review (§4.2)
+    const newModules: DeepthinkModuleData[] = [];
+    const realizedFeedback: RealizedModuleFeedback[] = [];
     const heartbeatFiles: DeepthinkResultsContextFile[] = [];
 
-    if (config.hypothesisCount > 0) {
+    if (config.modulesCount > 0) {
       let parsedGen: {
-        hypotheses: Array<{
-          hypothesis_id: string;
+        modules: Array<{
+          module_id: string;
           text: string;
           target_branches: string[];
-          predicted_test_outcome: {
-            reason: string;
-            probabilities: { VALIDATED: number; REJECTED: number; INCONCLUSIVE: number };
-          };
         }>;
-      } = { hypotheses: [] };
+      } = { modules: [] };
 
-      const hypContract: OutputValidationContract<{ hypotheses: Array<{ hypothesis_id: string; text: string; predicted_test_outcome: { probabilities: { VALIDATED: number; REJECTED: number; INCONCLUSIVE: number } } }> }> = {
-        name: 'HypothesisGenerationContract',
+      const modContract: OutputValidationContract<{ modules: Array<{ module_id: string; text: string }> }> = {
+        name: 'ModulesGenerationContract',
         validate: (parsed) => {
-          if (!parsed || !Array.isArray(parsed.hypotheses)) {
-            throw new Error('Hypothesis output must contain a "hypotheses" array.');
+          if (!parsed || !Array.isArray(parsed.modules)) {
+            throw new Error('Modules output must contain a "modules" array.');
           }
-          for (const h of parsed.hypotheses) {
-            if (!h.hypothesis_id || !h.text) throw new Error('Hypothesis missing id or text.');
-            const probs = h.predicted_test_outcome?.probabilities;
-            if (!probs) throw new Error(`Hypothesis ${h.hypothesis_id} missing predicted probabilities.`);
-            const sum = (probs.VALIDATED ?? 0) + (probs.REJECTED ?? 0) + (probs.INCONCLUSIVE ?? 0);
-            if (Math.abs(sum - 1.0) > 0.05) {
-              throw new Error(`Hypothesis ${h.hypothesis_id} probabilities must sum to 1.0 (got ${sum.toFixed(3)}).`);
-            }
+          for (const m of parsed.modules) {
+            if (!m.module_id || !m.text) throw new Error('Module missing id or text.');
           }
         },
       };
 
-      // Assemble reframed historical hypothesis proximity transcript across prior heartbeats 1..heartbeatNo-1 (§7)
+      // Assemble reframed historical modules impact review transcript across prior heartbeats 1..heartbeatNo-1 (§7)
       const priorHeartbeatEntries: Array<{
         heartbeatNo: number;
         dosFilePath?: string;
@@ -1174,8 +1271,8 @@ export class DeepthinkPipelineOrchestrator {
         const defaultDosPath = hbBlock && hbBlock.iteration % config.j === 0
           ? `DOS_history/DOS_global_update_${String(Math.round(hbBlock.iteration / config.j)).padStart(2, '0')}_step_ii.md`
           : `DOS_history/DOS_heartbeat_${String(m).padStart(2, '0')}.md`;
-        const turnsForHb = Array.isArray(this.state.hypothesisProximityHistory)
-          ? this.state.hypothesisProximityHistory.filter(h => (h as any).roundNumber === m)
+        const turnsForHb = Array.isArray(this.state.modulesImpactReviewHistory)
+          ? this.state.modulesImpactReviewHistory.filter(h => (h as any).roundNumber === m)
           : [];
         if (turnsForHb.length > 0) {
           priorHeartbeatEntries.push({
@@ -1185,221 +1282,228 @@ export class DeepthinkPipelineOrchestrator {
           });
         }
       }
-      const priorHypProximityHistory = buildHypothesisProximityHistoryWithNotes(priorHeartbeatEntries);
+      const priorModImpactReviewHistory = buildModulesImpactReviewHistoryWithNotes(priorHeartbeatEntries);
 
-      const hypHistory: ProximityTurn[] = Array.isArray(this.state.hypothesisProximityHistory)
-        ? this.state.hypothesisProximityHistory.filter(h => (h as any).roundNumber === heartbeatNo)
+      const modHistory: ProximityTurn[] = Array.isArray(this.state.modulesImpactReviewHistory)
+        ? this.state.modulesImpactReviewHistory.filter(h => (h as any).roundNumber === heartbeatNo)
         : [];
 
-      const targetHypProximityReviews = Math.max(0, config.hypothesisProximityLoops ?? 1);
+      const targetModImpactReviews = Math.max(0, config.modulesImpactReviewLoops ?? 1);
+      const modGenConversation = createLoopAgentConversation(this.state.id, 'modulesGeneration');
+      const modProxConversation = createLoopAgentConversation(this.state.id, 'modulesImpactReview');
 
-      for (let reviewIndex = 0; reviewIndex <= targetHypProximityReviews; reviewIndex++) {
+      for (let reviewIndex = 0; reviewIndex <= targetModImpactReviews; reviewIndex++) {
         const turn = reviewIndex + 1;
         this.checkStopRequested();
 
-        let rawHypGen: string;
-        const existingGen = hypHistory.find(h => h.role === 'generator' && h.turnNumber === turn);
+        let rawModGen: string;
+        const existingGen = modHistory.find(h => h.role === 'generator' && h.turnNumber === turn);
         if (existingGen) {
-          rawHypGen = existingGen.content;
+          rawModGen = existingGen.content;
         } else {
-          const hypContext = buildContextForHypothesisGenerate(
+          const modContext = buildContextForModulesGenerate(
             this.state.challenge,
             heartbeatNo,
             this.state.initialStrategies,
             dosOutput,
             previousHeartbeat,
-            priorHypProximityHistory,
-            hypHistory,
-            config.hypothesisCount,
-            this.hypothesesUsedSoFar
+            priorModImpactReviewHistory,
+            modHistory,
+            config.modulesCount,
+            this.modulesUsedSoFar
           );
 
-          let hypGenTrajectoryJsonl = '';
-          rawHypGen = await this.callAgentModelWithRetry({
-            kind: 'hypothesisGeneration',
-            promptText: hypContext,
-            stepDescription: `Hypothesis Generation (Heartbeat ${heartbeatNo}, Turn ${turn})`,
+          let modGenTrajectoryJsonl = '';
+          rawModGen = await this.callAgentModelWithRetry({
+            kind: 'modulesGeneration',
+            promptText: modContext,
+            stepDescription: `Modules Generator (Heartbeat ${heartbeatNo}, Turn ${turn})`,
             jsonResponse: true,
             isCritical: true,
-            contract: hypContract,
-            executionGroupId: `group-heartbeat-${heartbeatNo}-hypotheses`,
-            executionGroupName: `Heartbeat ${heartbeatNo}: Hypothesis Proximity Loop`,
+            contract: modContract,
+            executionGroupId: `group-heartbeat-${heartbeatNo}-modules`,
+            executionGroupName: `Heartbeat ${heartbeatNo}: Modules Generator & Impact Review Loop`,
+            conversation: modGenConversation,
             onTrajectoryJsonl: (jsonl) => {
-              hypGenTrajectoryJsonl = jsonl;
+              modGenTrajectoryJsonl = jsonl;
             },
           });
 
-          hypHistory.push({
+          if (reviewIndex < targetModImpactReviews) {
+            appendPeerSubmission(
+              modProxConversation,
+              `### Modules Generator (Turn ${turn})`,
+              rawModGen,
+              'Modules Impact Reviewer'
+            );
+          }
+
+          modHistory.push({
             role: 'generator',
-            content: rawHypGen,
+            content: rawModGen,
             timestamp: Date.now(),
             turnNumber: turn,
             roundNumber: heartbeatNo,
-            trajectoryJsonl: hypGenTrajectoryJsonl,
+            trajectoryJsonl: modGenTrajectoryJsonl,
           } as any);
 
-          this.state.hypothesisProximityHistory = [
-            ...(this.state.hypothesisProximityHistory || []).filter(h => (h as any).roundNumber !== heartbeatNo),
-            ...hypHistory,
+          this.state.modulesImpactReviewHistory = [
+            ...(this.state.modulesImpactReviewHistory || []).filter(h => (h as any).roundNumber !== heartbeatNo),
+            ...modHistory,
           ];
           this.callbacks.onStateChange?.(this.state);
         }
 
         parsedGen = this.parseJsonStrict<{
-          hypotheses: Array<{
-            hypothesis_id: string;
+          modules: Array<{
+            module_id: string;
             text: string;
             target_branches: string[];
-            predicted_test_outcome: {
-              reason: string;
-              probabilities: { VALIDATED: number; REJECTED: number; INCONCLUSIVE: number };
-            };
           }>;
-        }>(rawHypGen, `Hypothesis Generation (Heartbeat ${heartbeatNo}, Turn ${turn})`);
+        }>(rawModGen, `Modules Generator (Heartbeat ${heartbeatNo}, Turn ${turn})`);
 
-        if (reviewIndex < targetHypProximityReviews) {
-          const existingProx = hypHistory.find(h => h.role === 'proximity' && h.turnNumber === turn);
+        if (reviewIndex < targetModImpactReviews) {
+          const existingProx = modHistory.find(h => h.role === 'proximity' && h.turnNumber === turn);
           if (existingProx) {
-            // Already completed proximity review for this turn
+            // Already completed impact review for this turn
           } else {
-            // Proximity review turn receives the exact same full context as the generator (§4.2, §7)
-            const proxPrompt = buildContextForHypothesisGenerate(
+            // Impact review turn receives the exact same full context as the generator (§4.2, §7)
+            const proxPrompt = buildContextForModulesGenerate(
               this.state.challenge,
               heartbeatNo,
               this.state.initialStrategies,
               dosOutput,
               previousHeartbeat,
-              priorHypProximityHistory,
-              hypHistory,
-              config.hypothesisCount,
-              this.hypothesesUsedSoFar
+              priorModImpactReviewHistory,
+              modHistory,
+              config.modulesCount,
+              this.modulesUsedSoFar
             );
 
-            let hypProxTrajectoryJsonl = '';
+            let modProxTrajectoryJsonl = '';
             const proxOutput = await this.callAgentModelWithRetry({
-              kind: 'hypothesisProximity',
+              kind: 'modulesImpactReview',
               promptText: proxPrompt,
-              stepDescription: `Hypothesis Proximity Review (Heartbeat ${heartbeatNo}, Turn ${turn})`,
+              stepDescription: `Modules Impact Reviewer (Heartbeat ${heartbeatNo}, Turn ${turn})`,
               isCritical: true,
-              executionGroupId: `group-heartbeat-${heartbeatNo}-hypotheses`,
-              executionGroupName: `Heartbeat ${heartbeatNo}: Hypothesis Proximity Loop`,
+              executionGroupId: `group-heartbeat-${heartbeatNo}-modules`,
+              executionGroupName: `Heartbeat ${heartbeatNo}: Modules Generator & Impact Review Loop`,
+              conversation: modProxConversation,
               onTrajectoryJsonl: (jsonl) => {
-                hypProxTrajectoryJsonl = jsonl;
+                modProxTrajectoryJsonl = jsonl;
               },
             });
 
-            hypHistory.push({
+            appendPeerSubmission(
+              modGenConversation,
+              `### Modules Impact Reviewer (Turn ${turn})`,
+              proxOutput,
+              'Modules Generator'
+            );
+
+            modHistory.push({
               role: 'proximity',
               content: proxOutput,
               timestamp: Date.now(),
               turnNumber: turn,
               roundNumber: heartbeatNo,
-              trajectoryJsonl: hypProxTrajectoryJsonl,
+              trajectoryJsonl: modProxTrajectoryJsonl,
             } as any);
 
-            this.state.hypothesisProximityHistory = [
-              ...(this.state.hypothesisProximityHistory || []).filter(h => (h as any).roundNumber !== heartbeatNo),
-              ...hypHistory,
+            this.state.modulesImpactReviewHistory = [
+              ...(this.state.modulesImpactReviewHistory || []).filter(h => (h as any).roundNumber !== heartbeatNo),
+              ...modHistory,
             ];
             this.callbacks.onStateChange?.(this.state);
           }
         }
       }
 
-      this.state.hypothesisProximityHistory = [
-        ...(this.state.hypothesisProximityHistory || []).filter(h => (h as any).roundNumber !== heartbeatNo),
-        ...hypHistory,
+      this.state.modulesImpactReviewHistory = [
+        ...(this.state.modulesImpactReviewHistory || []).filter(h => (h as any).roundNumber !== heartbeatNo),
+        ...modHistory,
       ];
 
-      const latestHypGenTurn = [...hypHistory].reverse().find(h => h.role === 'generator') as any;
-      for (const hypItem of parsedGen.hypotheses.slice(0, config.hypothesisCount)) {
-        this.hypothesesUsedSoFar.push({
+      for (const modItem of parsedGen.modules.slice(0, config.modulesCount)) {
+        this.modulesUsedSoFar.push({
           heartbeatNo,
           iterationFinalized: iteration,
-          hypothesisId: hypItem.hypothesis_id,
-          text: hypItem.text,
-          trajectoryJsonl: latestHypGenTurn?.trajectoryJsonl,
+          moduleId: modItem.module_id,
+          text: modItem.text,
         });
       }
-      (this.state as any).hypothesesUsedSoFar = this.hypothesesUsedSoFar;
+      (this.state as any).modulesUsedSoFar = this.modulesUsedSoFar;
 
-      const hypUsedMarkdown = [
-        '# Hypotheses Finalized and Used So Far',
-        ...this.hypothesesUsedSoFar.map(
-          h => `## Heartbeat ${h.heartbeatNo} — ${h.hypothesisId} (Iteration ${h.iterationFinalized})\n${h.text}`
+      const modUsedMarkdown = [
+        '# Modules Finalized and Used So Far',
+        ...this.modulesUsedSoFar.map(
+          m => `## Heartbeat ${m.heartbeatNo} — ${m.moduleId} (Iteration ${m.iterationFinalized})\n${m.text}`
         ),
       ].join('\n\n');
-      const hypUsedJsonl = this.hypothesesUsedSoFar
-        .map(h => h.trajectoryJsonl || JSON.stringify({
-          role: 'assistant',
-          message_type: 'ai',
-          heartbeat_no: h.heartbeatNo,
-          iteration_finalized: h.iterationFinalized,
-          hypothesis_id: h.hypothesisId,
-          content: h.text,
-        }))
-        .filter(Boolean)
-        .join('\n');
 
-      // Save generation & proximity history into repository (§8.1) along with .jsonl trajectories
-      const hypHistoryMarkdown = hypHistory.map(h => `### ${h.role.toUpperCase()} (Turn ${h.turnNumber ?? 1})\n${h.content}`).join('\n\n');
-      const genOnlyTrajectoriesJsonl = hypHistory
-        .filter(h => h.role === 'generator')
-        .map(h => (h as any).trajectoryJsonl || JSON.stringify({ role: 'assistant', message_type: 'ai', turn_role: h.role, turn_number: h.turnNumber, content: h.content }))
-        .filter(Boolean)
-        .join('\n');
-      const fullHypProximityJsonl = hypHistory
-        .map(h => (h as any).trajectoryJsonl || JSON.stringify({ role: 'assistant', message_type: 'ai', turn_role: h.role, turn_number: h.turnNumber, content: h.content }))
-        .filter(Boolean)
-        .join('\n');
+      // Save generator & impact reviewer histories into repository (§8.1) along with their continuous .jsonl trajectories
+      const modGenTurns = modHistory.filter(h => h.role === 'generator');
+      const modProxTurns = modHistory.filter(h => h.role === 'proximity');
+      const modGenHistoryMarkdown = [
+        `# Modules Generator History (Heartbeat ${heartbeatNo})`,
+        ...modGenTurns.map(h => `### GENERATOR (Turn ${h.turnNumber ?? 1})\n${h.content}`),
+      ].join('\n\n');
+      const modProxHistoryMarkdown = [
+        `# Modules Impact Review History (Heartbeat ${heartbeatNo})`,
+        ...modProxTurns.map(h => `### PROXIMITY (Turn ${h.turnNumber ?? 1})\n${h.content}`),
+      ].join('\n\n');
+      const genOnlyTrajectoriesJsonl = buildLoopRoleTrajectoryJsonl(
+        modGenTurns as any,
+        !!config.deepthinkCodeExecutionEnabled
+      );
+      const proxOnlyTrajectoriesJsonl = buildLoopRoleTrajectoryJsonl(
+        modProxTurns as any,
+        !!config.deepthinkCodeExecutionEnabled
+      );
 
       heartbeatFiles.push(
         {
-          path: `Custom_Curated_Context/hypotheses_finalized_and_used_so_far.md`,
-          content: hypUsedMarkdown,
+          path: `Modules/modules_finalized_and_used_so_far.md`,
+          content: modUsedMarkdown,
         },
         {
-          path: `Custom_Curated_Context/hypotheses_finalized_and_used_so_far.jsonl`,
-          content: hypUsedJsonl,
+          path: `Modules/Heartbeat-${heartbeatNo}/generation_history.md`,
+          content: modGenHistoryMarkdown,
         },
         {
-          path: `Custom_Curated_Context/Heartbeat-${heartbeatNo}/Hypotheses/generation_history.md`,
-          content: `# Hypothesis Generation Heartbeat ${heartbeatNo}\n\n\`\`\`json\n${JSON.stringify(parsedGen, null, 2)}\n\`\`\``,
-        },
-        {
-          path: `Custom_Curated_Context/Heartbeat-${heartbeatNo}/Hypotheses/generation_history.jsonl`,
+          path: `Modules/Heartbeat-${heartbeatNo}/generation_history.jsonl`,
           content: genOnlyTrajectoriesJsonl,
         },
         {
-          path: `Custom_Curated_Context/Heartbeat-${heartbeatNo}/Hypotheses/hypothesis_proximity_history_heartbeat_${String(heartbeatNo).padStart(2, '0')}.md`,
-          content: `# Hypothesis Proximity History (Heartbeat ${heartbeatNo})\n\n${hypHistoryMarkdown}`,
+          path: `Modules/Heartbeat-${heartbeatNo}/modules_impact_review_history_heartbeat_${String(heartbeatNo).padStart(2, '0')}.md`,
+          content: modProxHistoryMarkdown,
         },
         {
-          path: `Custom_Curated_Context/Heartbeat-${heartbeatNo}/Hypotheses/hypothesis_proximity_history_heartbeat_${String(heartbeatNo).padStart(2, '0')}.jsonl`,
-          content: fullHypProximityJsonl,
+          path: `Modules/Heartbeat-${heartbeatNo}/modules_impact_review_history_heartbeat_${String(heartbeatNo).padStart(2, '0')}.jsonl`,
+          content: proxOnlyTrajectoriesJsonl,
         }
       );
 
-      // 3. Test Hypotheses in parallel (§4.3)
-      await Promise.all(parsedGen.hypotheses.slice(0, config.hypothesisCount).map(async (hypItem, idx) => {
+      // 3. Test Modules in parallel (§4.3)
+      await Promise.all(parsedGen.modules.slice(0, config.modulesCount).map(async (modItem, idx) => {
         this.checkStopRequested();
 
         const testerPrompt = [
           `# Core Challenge\n${this.state.challenge}`,
-          `Assigned Hypothesis ${hypItem.hypothesis_id}:\n${hypItem.text}`,
-          'Test this hypothesis within your assigned folder.',
+          `Assigned Module ${modItem.module_id}:\n${modItem.text}`,
+          'Test this module within your assigned folder.',
         ].join('\n\n');
 
         const folderIndex = idx + 1;
         let testerTrajectoryJsonl = '';
         const testResult = await this.callAgentModelWithRetry({
-          kind: 'hypothesisTester',
+          kind: 'modulesTester',
           promptText: testerPrompt,
-          stepDescription: `Hypothesis Tester for ${hypItem.hypothesis_id}`,
-          workingDirectory: `Custom_Curated_Context/Heartbeat-${heartbeatNo}/Hypotheses/Hypothesis-${folderIndex}`,
+          stepDescription: `Modules Tester for ${modItem.module_id}`,
+          workingDirectory: `Modules/Heartbeat-${heartbeatNo}/Module-${folderIndex}`,
           isCritical: false,
           executionGroupId: `group-heartbeat-${heartbeatNo}-testing`,
-          executionGroupName: `Heartbeat ${heartbeatNo}: Independent Hypothesis Testers (Parallel)`,
+          executionGroupName: `Heartbeat ${heartbeatNo}: Independent Modules Testers (Parallel)`,
           onTrajectoryJsonl: (jsonl) => {
             testerTrajectoryJsonl = jsonl;
           },
@@ -1411,11 +1515,10 @@ export class DeepthinkPipelineOrchestrator {
         else if (testResult.includes('CLASSIFICATION: REFUTED') || testResult.includes('CLASSIFICATION: REJECTED')) verdict = 'REJECTED';
         else if (testResult.includes('CLASSIFICATION: INCONCLUSIVE')) verdict = 'INCONCLUSIVE';
 
-        const hypData: DeepthinkHypothesisData = {
-          id: hypItem.hypothesis_id,
-          hypothesisText: hypItem.text,
-          targetBranchIds: hypItem.target_branches,
-          predicted_test_outcome: hypItem.predicted_test_outcome,
+        const modData: DeepthinkModuleData = {
+          id: modItem.module_id,
+          moduleText: modItem.text,
+          targetBranchIds: modItem.target_branches,
           testerAttempt: testResult,
           testerStatus: 'completed',
           testerVerdict: verdict,
@@ -1423,44 +1526,29 @@ export class DeepthinkPipelineOrchestrator {
           globalIteration: iteration,
         };
 
-        newHypotheses.push(hypData);
+        newModules.push(modData);
 
-        // Record hypothesis file and .jsonl trajectory in repository (§8.1)
+        // Record module file and .jsonl trajectory in repository (§8.1)
         heartbeatFiles.push(
           {
-            path: `Custom_Curated_Context/Heartbeat-${heartbeatNo}/Hypotheses/Hypothesis-${folderIndex}/hypothesis.md`,
+            path: `Modules/Heartbeat-${heartbeatNo}/Module-${folderIndex}/module.md`,
             content: [
-              `# Hypothesis ${hypItem.hypothesis_id}`,
-              `**Claim**: ${hypItem.text}`,
-              `**Target Branches**: ${hypItem.target_branches?.join(', ') || 'Global'}`,
-              `**Predicted Outcome**: ${JSON.stringify(hypItem.predicted_test_outcome)}`,
+              `# Module ${modItem.module_id}`,
+              `**Claim**: ${modItem.text}`,
+              `**Target Branches**: ${modItem.target_branches?.join(', ') || 'Global'}`,
               `**Verdict**: ${verdict}`,
               `\n## Tester Execution & Output\n${testResult}`,
             ].join('\n\n'),
           },
           {
-            path: `Custom_Curated_Context/Heartbeat-${heartbeatNo}/Hypotheses/Hypothesis-${folderIndex}/hypothesis.jsonl`,
+            path: `Modules/Heartbeat-${heartbeatNo}/Module-${folderIndex}/module.jsonl`,
             content: testerTrajectoryJsonl,
           }
         );
 
-        // Calculate initial surprise bits (§5.2)
-        const surpriseBits = calculateSurpriseBits(
-          hypItem.predicted_test_outcome.probabilities,
-          verdict
-        );
-
         realizedFeedback.push({
-          hypothesis_id: hypItem.hypothesis_id,
-          your_predicted_test_outcome: hypItem.predicted_test_outcome.probabilities,
-          prediction_note: hypItem.predicted_test_outcome.reason,
+          module_id: modItem.module_id,
           observed_test_outcome: verdict,
-          surprise_bits: surpriseBits,
-          surprise_note: buildHypothesisSurpriseNote(
-            surpriseBits,
-            verdict,
-            hypItem.predicted_test_outcome.probabilities
-          ),
         });
       }));
     }
@@ -1470,11 +1558,11 @@ export class DeepthinkPipelineOrchestrator {
       heartbeat_no: heartbeatNo,
       iteration,
       dosFilePath: currentDosFilePath,
-      hypotheses: newHypotheses,
+      modules: newModules,
       realized_feedback: realizedFeedback,
     };
     this.state.heartbeats.push(heartbeatBlock);
-    this.state.hypotheses = newHypotheses;
+    this.state.modules = newModules;
 
     // Commit heartbeat artifacts to repository (§8.2)
     await this.gitHarness.commitHeartbeat(heartbeatNo, heartbeatFiles);
@@ -1535,24 +1623,13 @@ export class DeepthinkPipelineOrchestrator {
       )).join('\n\n');
 
       const ledger = this.state.branchLedgers[branch.id] || [];
-      const earlierGraded = this.state.bsrRecords
-        .filter(r => r.branch_id === branch.id && r.computed.surprisal_bits !== null && !(r as any).archivedOnPrune)
-        .map(r => ({
-          updateNumber: r.updateNumber,
-          windowOutcome: r.computed.window_outcome,
-          surprisalBits: r.computed.surprisal_bits!,
-          predictedProbabilities: r.graded_prediction?.probabilities,
-        }));
 
-      // NOTE: Hidden-prediction rule (§6.7): context_bsr never receives the prediction
-      // for the window being judged.
       const bsrPrompt = buildContextForBsr(this.state.challenge, 
         branch.id,
         branch.strategyText,
         formattedWindow,
         branch.memoryBank,
-        ledger,
-        earlierGraded
+        ledger
       );
 
       const bsrContract: OutputValidationContract<BsrReport> = {
@@ -1563,12 +1640,6 @@ export class DeepthinkPipelineOrchestrator {
           }
           if (!Array.isArray(parsed.confirmed_progress) || !Array.isArray(parsed.confirmed_regression)) {
             throw new Error('BSR report missing progress/regression events arrays.');
-          }
-          const p = parsed.next_window_prediction?.probabilities;
-          if (!p) throw new Error('BSR report missing next_window_prediction probabilities.');
-          const sum = (p.PROGRESS ?? 0) + (p.STALL ?? 0) + (p.REGRESS ?? 0);
-          if (Math.abs(sum - 1.0) > 0.05) {
-            throw new Error(`BSR prediction probabilities must sum to 1.0 (got ${sum.toFixed(3)}).`);
           }
         },
       };
@@ -1607,7 +1678,7 @@ export class DeepthinkPipelineOrchestrator {
       ]
     );
 
-    // ii. Deterministic Code Computes Decisions (§4.6 ii, §6.3, §6.4, §6.5)
+    // ii. Deterministic Code Computes Decisions (§4.6 ii, §6.3, §6.5)
     const evaluatedRecords: Array<{ report: BsrReport; computed: BsrComputedScores }> = [];
     const consolidatedDecisions: Array<{
       slotId: string;
@@ -1629,8 +1700,6 @@ export class DeepthinkPipelineOrchestrator {
     };
 
     for (const report of bsrReports) {
-      const openPred = this.state.openPredictions[report.branch_id];
-      const prevPrediction = openPred?.probabilities;
       const ledger = this.state.branchLedgers[report.branch_id] || [];
 
       const computed = evaluateBranchState(
@@ -1638,7 +1707,6 @@ export class DeepthinkPipelineOrchestrator {
         windowStart,
         iteration,
         ledger,
-        prevPrediction,
         bsrOptions
       );
 
@@ -1663,10 +1731,6 @@ export class DeepthinkPipelineOrchestrator {
         branch_id: report.branch_id,
         report,
         computed,
-        graded_prediction: openPred ? {
-          issuedAtUpdate: openPred.issuedAtUpdate,
-          probabilities: { ...openPred.probabilities },
-        } : undefined,
       });
     }
 
@@ -1720,6 +1784,8 @@ export class DeepthinkPipelineOrchestrator {
       } = {};
 
       const targetGuProximityReviews = Math.max(0, config.strategyProximityLoops ?? 1);
+      const guGenConversation = createLoopAgentConversation(this.state.id, 'initialStrategy');
+      const guProxConversation = createLoopAgentConversation(this.state.id, 'strategyProximity');
 
       for (let reviewIndex = 0; reviewIndex <= targetGuProximityReviews; reviewIndex++) {
         const turn = reviewIndex + 1;
@@ -1753,10 +1819,20 @@ export class DeepthinkPipelineOrchestrator {
             contract: stratUpdateContract,
             executionGroupId: `group-global-update-${updateNumber}-strategies`,
             executionGroupName: `Global Update ${updateNumber}: Strategy Revision Loop`,
+            conversation: guGenConversation,
             onTrajectoryJsonl: (jsonl) => {
               guGenTrajectoryJsonl = jsonl;
             },
           });
+
+          if (reviewIndex < targetGuProximityReviews) {
+            appendPeerSubmission(
+              guProxConversation,
+              `### Strategy Generator (Turn ${turn})`,
+              rawStratUpdate,
+              'Strategy Proximity Reviewer'
+            );
+          }
 
           currentGuTurns.push({
             role: 'generator',
@@ -1808,10 +1884,18 @@ export class DeepthinkPipelineOrchestrator {
               isCritical: true,
               executionGroupId: `group-global-update-${updateNumber}-strategies`,
               executionGroupName: `Global Update ${updateNumber}: Strategy Revision Loop`,
+              conversation: guProxConversation,
               onTrajectoryJsonl: (jsonl) => {
                 guProxTrajectoryJsonl = jsonl;
               },
             });
+
+            appendPeerSubmission(
+              guGenConversation,
+              `### Strategy Proximity Reviewer (Turn ${turn})`,
+              proxOutput,
+              'Strategy Generator'
+            );
 
             currentGuTurns.push({
               role: 'proximity',
@@ -1843,8 +1927,6 @@ export class DeepthinkPipelineOrchestrator {
         });
       }
 
-      const latestGuGenTurn = [...currentGuTurns].reverse().find(t => t.role === 'generator') as any;
-
       // Apply surgical slot changes onto active strategies (§4.1)
       if (parsedStrat.evolved_slots) {
         for (const ev of parsedStrat.evolved_slots) {
@@ -1857,7 +1939,6 @@ export class DeepthinkPipelineOrchestrator {
               slotId: branch.id,
               iterationFinalized: iteration,
               text: ev.updated_strategy_text,
-              trajectoryJsonl: latestGuGenTurn?.trajectoryJsonl,
             });
           }
         }
@@ -1873,28 +1954,40 @@ export class DeepthinkPipelineOrchestrator {
               slotId: branch.id,
               iterationFinalized: iteration,
               text: pr.new_strategy_text,
-              trajectoryJsonl: latestGuGenTurn?.trajectoryJsonl,
             });
           }
         }
       }
 
-      // Commit strategy update history and strategies used so far (§8.1)
-      const guHistoryMarkdown = currentGuTurns.map(t => `### ${t.role.toUpperCase()} (Turn ${t.turnNumber ?? 1})\n${t.content}`).join('\n\n');
-      const guHistoryJsonl = currentGuTurns
-        .map(t => (t as any).trajectoryJsonl || JSON.stringify({
-          role: 'assistant',
-          message_type: 'ai',
-          turn_role: t.role,
-          turn_number: t.turnNumber,
-          content: t.content,
-        }))
-        .filter(Boolean)
-        .join('\n');
+      // Commit strategy generator and proximity review histories and strategies used so far (§8.1)
+      const guGenTurns = currentGuTurns.filter(t => t.role === 'generator');
+      const guProxTurns = currentGuTurns.filter(t => t.role === 'proximity');
+      const guGenMarkdown = [
+        `# Global Update ${updateNumber} Strategy Generation History`,
+        ...guGenTurns.map(t => `### GENERATOR (Turn ${t.turnNumber ?? 1})\n${t.content}`),
+      ].join('\n\n');
+      const guProxMarkdown = [
+        `# Global Update ${updateNumber} Strategy Proximity Review History`,
+        ...guProxTurns.map(t => `### PROXIMITY (Turn ${t.turnNumber ?? 1})\n${t.content}`),
+      ].join('\n\n');
+      const guGenJsonl = buildLoopRoleTrajectoryJsonl(
+        guGenTurns as any,
+        !!config.deepthinkCodeExecutionEnabled
+      );
+      const guProxJsonl = buildLoopRoleTrajectoryJsonl(
+        guProxTurns as any,
+        !!config.deepthinkCodeExecutionEnabled
+      );
+      const paddedGu = String(updateNumber).padStart(2, '0');
       await this.gitHarness.commitStrategyHistory(
-        `strategies_global_update${String(updateNumber).padStart(2, '0')}.md`,
-        guHistoryMarkdown,
-        guHistoryJsonl
+        `strategies_global_update${paddedGu}.md`,
+        guGenMarkdown,
+        guGenJsonl
+      );
+      await this.gitHarness.commitStrategyHistory(
+        `strategies_global_update${paddedGu}_proximity_review.md`,
+        guProxMarkdown,
+        guProxJsonl
       );
       await this.updateStrategiesUsedSoFarFile();
     }
@@ -1910,23 +2003,20 @@ export class DeepthinkPipelineOrchestrator {
       if (!dec || dec.decision === 'CONTINUE') {
         survivingBranches.push(branch);
         this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
-        this.state.openPredictions[branch.id] = {
-          issuedAtUpdate: updateNumber,
-          probabilities: evaluatedRecords.find(r => r.report.branch_id === branch.id)!.report.next_window_prediction.probabilities,
-        };
       } else if (dec.decision === 'EVOLVE') {
         survivingBranches.push(branch);
         if (dec.form === 'rollback' && dec.rollbackTo !== undefined) {
+          this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
+          const cutoffIteration = dec.rollbackTo === 'window_start'
+            ? windowStart - 1
+            : (dec.rollbackTo as number);
+
           if (dec.rollbackTo === 'window_start') {
             // Rollback to window beginning (§6.3, §6.6, §8.2)
             const startCommit = this.commitHashesPerIteration.get(`${slotIdx}:start_${windowStart}`);
             if (startCommit) {
               await this.gitHarness.rollbackStrategy(slotIdx, startCommit);
             }
-            // Discard all window events from ledger
-            this.state.branchLedgers[branch.id] = (this.state.branchLedgers[branch.id] || []).filter(
-              e => e.iteration < windowStart
-            );
           } else {
             // Rollback to specific iteration
             const commitKey = `${slotIdx}:${dec.rollbackTo}`;
@@ -1934,17 +2024,40 @@ export class DeepthinkPipelineOrchestrator {
             if (targetCommit) {
               await this.gitHarness.rollbackStrategy(slotIdx, targetCommit);
             }
-            // Drop discarded events after rollback point from ledger (§6.8)
-            this.state.branchLedgers[branch.id] = (this.state.branchLedgers[branch.id] || []).filter(
-              e => e.iteration <= (dec.rollbackTo as number)
+          }
+
+          // Drop discarded events after rollback point from ledger (§6.8)
+          this.state.branchLedgers[branch.id] = (this.state.branchLedgers[branch.id] || []).filter(
+            e => e.iteration <= cutoffIteration
+          );
+
+          // Trim branch iteration history and restore branch state to the rollback point
+          if (branch.iterationHistory?.iterations) {
+            branch.iterationHistory.iterations = branch.iterationHistory.iterations.filter(
+              it => it.iterationNumber <= cutoffIteration
             );
+          }
+          if (this.state.solutionCritiques) {
+            this.state.solutionCritiques = this.state.solutionCritiques.filter(
+              c => c.mainStrategyId !== branch.id || (c.globalIteration ?? 0) <= cutoffIteration
+            );
+          }
+          const lastRetained = branch.iterationHistory?.iterations?.[branch.iterationHistory.iterations.length - 1];
+          branch.refinedSolution = lastRetained?.correctedSolution;
+          branch.refinedSolutionDisplay = lastRetained?.correctedSolutionDisplay ?? lastRetained?.correctedSolution;
+          branch.refinedSolutionExecutionTraceText = lastRetained?.correctedSolutionExecutionTraceText;
+          branch.solutionCritique = lastRetained?.critique;
+          branch.solutionCritiqueDisplay = lastRetained?.critiqueDisplay ?? lastRetained?.critique;
+          branch.solutionCritiqueExecutionTraceText = lastRetained?.critiqueExecutionTraceText;
+          if (cutoffIteration < 1) {
+            branch.solutionAttempt = undefined;
+            branch.solutionAttemptDisplay = undefined;
+            branch.solutionAttemptExecutionTraceText = undefined;
           }
         } else {
           // In place: keep standing ledger
           this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
         }
-        // Prediction is voided on EVOLVE (§6.4)
-        delete this.state.openPredictions[branch.id];
       } else if (dec.decision === 'PRUNE') {
         // Archive folder under ordinal name (§8.2)
         await this.gitHarness.pruneStrategy(slotIdx);
@@ -1974,12 +2087,6 @@ export class DeepthinkPipelineOrchestrator {
         });
         // PRUNE permanently closes ledger; new branch starts with empty ledger (§6.8)
         this.state.branchLedgers[branch.id] = [];
-        delete this.state.openPredictions[branch.id];
-        for (const rec of this.state.bsrRecords) {
-          if (rec.branch_id === branch.id) {
-            (rec as any).archivedOnPrune = true;
-          }
-        }
         branch.iterationHistory = { iterations: [], status: 'idle' };
         branch.memoryBank = undefined;
         newBranchSlotIds.push(branch.id);
@@ -2132,22 +2239,10 @@ export class DeepthinkPipelineOrchestrator {
     const nextWindowStart = iteration + 1;
     for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
       const strat = this.state.initialStrategies[slotIdx];
-      const latestStratEntry = [...this.strategiesUsedSoFar].reverse().find(s => s.slotId === strat.id);
-      const stratJsonl = latestStratEntry?.trajectoryJsonl || JSON.stringify({
-        role: 'assistant',
-        message_type: 'ai',
-        agent_kind: 'initialStrategy',
-        slot_id: strat.id,
-        content: strat.strategyText,
-      });
       const contextFiles: DeepthinkResultsContextFile[] = [
         {
           path: `Strategy-${slotIdx + 1}/strategy.md`,
           content: `# Strategy ${slotIdx + 1} (${strat.id})\n\n${strat.strategyText}\n`,
-        },
-        {
-          path: `Strategy-${slotIdx + 1}/strategy.jsonl`,
-          content: stratJsonl,
         },
       ];
       const commit = await this.gitHarness.commitWindowStart(slotIdx, nextWindowStart, contextFiles);
@@ -2156,7 +2251,7 @@ export class DeepthinkPipelineOrchestrator {
 
     // vi. Step-ii DOS on Post-Update State (§4.6 vi, §5.1)
     let stepIiDosOutput: DosOutput | undefined;
-    if (config.hypothesisCount > 0) {
+    if (config.modulesCount > 0) {
       const postUpdateState = this.state.initialStrategies.map(s => ({
         branchId: s.id,
         strategyText: s.strategyText,
@@ -2217,10 +2312,10 @@ export class DeepthinkPipelineOrchestrator {
         ]
       );
 
-      // Attach realized hypothesis feedback for the previous heartbeat (§5.1, §5.4)
+      // Attach realized module feedback for the previous heartbeat (§5.1, §5.4)
       const previousHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
-      if (stepIiDosOutput.hypothesis_feedback && previousHeartbeat) {
-        await this.attachRealizedDosFeedback(stepIiDosOutput.hypothesis_feedback, previousHeartbeat.heartbeat_no);
+      if (stepIiDosOutput.module_feedback && previousHeartbeat) {
+        await this.attachRealizedDosFeedback(stepIiDosOutput.module_feedback, previousHeartbeat.heartbeat_no);
       }
     }
 
@@ -2292,7 +2387,7 @@ export class DeepthinkPipelineOrchestrator {
   // ==========================================================================
 
   private async attachRealizedDosFeedback(
-    dosFeedback: DosHypothesisFeedbackItem[],
+    dosFeedback: DosModuleFeedbackItem[],
     targetHeartbeatNo: number
   ): Promise<void> {
     const heartbeatBlock = this.state.heartbeats.find(h => h.heartbeat_no === targetHeartbeatNo);
@@ -2301,21 +2396,14 @@ export class DeepthinkPipelineOrchestrator {
     const filesToWrite: DeepthinkResultsContextFile[] = [];
 
     for (const item of dosFeedback) {
-      const existing = heartbeatBlock.realized_feedback.find(rf => rf.hypothesis_id === item.hypothesis_id);
-      const targetHyp = heartbeatBlock.hypotheses.find(h => h.id === item.hypothesis_id);
-      const hypIdx = heartbeatBlock.hypotheses.findIndex(h => h.id === item.hypothesis_id);
-      const folderIndex = hypIdx >= 0 ? hypIdx + 1 : 1;
+      const existing = heartbeatBlock.realized_feedback.find(rf => rf.module_id === item.module_id);
+      const targetMod = heartbeatBlock.modules.find(m => m.id === item.module_id);
+      const modIdx = heartbeatBlock.modules.findIndex(m => m.id === item.module_id);
+      const folderIndex = modIdx >= 0 ? modIdx + 1 : 1;
 
       const utilization = item.branch_utilization ? calculateUtilizationVector(item.branch_utilization) : undefined;
 
       if (existing) {
-        if (!existing.surprise_note) {
-          existing.surprise_note = buildHypothesisSurpriseNote(
-            existing.surprise_bits,
-            existing.observed_test_outcome,
-            existing.your_predicted_test_outcome
-          );
-        }
         if (utilization) {
           existing.utilization = utilization;
           existing.utilization_note = "Calculated programmatically from the DOS agent's observations.";
@@ -2324,23 +2412,15 @@ export class DeepthinkPipelineOrchestrator {
           existing.critique_counterevidence = item.critique_counterevidence;
         }
         filesToWrite.push({
-          path: `Custom_Curated_Context/Heartbeat-${targetHeartbeatNo}/Hypotheses/Hypothesis-${folderIndex}/feedback.json`,
+          path: `Modules/Heartbeat-${targetHeartbeatNo}/Module-${folderIndex}/feedback.json`,
           content: JSON.stringify(existing, null, 2),
         });
-      } else if (targetHyp) {
-        const observedVerdict = targetHyp.testerVerdict || 'INCONCLUSIVE';
-        const predictedProbs = targetHyp.predicted_test_outcome?.probabilities || { VALIDATED: 0.33, REJECTED: 0.33, INCONCLUSIVE: 0.34 };
-        const surpriseBits = targetHyp.predicted_test_outcome
-          ? calculateSurpriseBits(predictedProbs, observedVerdict)
-          : 0;
+      } else if (targetMod) {
+        const observedVerdict = targetMod.testerVerdict || 'INCONCLUSIVE';
 
-        const newFeedback: RealizedHypothesisFeedback = {
-          hypothesis_id: item.hypothesis_id,
-          your_predicted_test_outcome: predictedProbs,
-          prediction_note: targetHyp.predicted_test_outcome?.reason || 'Hypothesis prediction.',
+        const newFeedback: RealizedModuleFeedback = {
+          module_id: item.module_id,
           observed_test_outcome: observedVerdict,
-          surprise_bits: surpriseBits,
-          surprise_note: buildHypothesisSurpriseNote(surpriseBits, observedVerdict, predictedProbs),
           utilization,
           utilization_note: utilization ? "Calculated programmatically from the DOS agent's observations." : undefined,
           critique_counterevidence: item.critique_counterevidence,
@@ -2348,7 +2428,7 @@ export class DeepthinkPipelineOrchestrator {
 
         heartbeatBlock.realized_feedback.push(newFeedback);
         filesToWrite.push({
-          path: `Custom_Curated_Context/Heartbeat-${targetHeartbeatNo}/Hypotheses/Hypothesis-${folderIndex}/feedback.json`,
+          path: `Modules/Heartbeat-${targetHeartbeatNo}/Module-${folderIndex}/feedback.json`,
           content: JSON.stringify(newFeedback, null, 2),
         });
       }
@@ -2356,7 +2436,7 @@ export class DeepthinkPipelineOrchestrator {
 
     if (filesToWrite.length > 0) {
       await this.gitHarness.writeFilesAndCommit(
-        `Realized hypothesis feedback for Heartbeat ${targetHeartbeatNo}`,
+        `Realized module feedback for Heartbeat ${targetHeartbeatNo}`,
         filesToWrite
       );
     }
@@ -2367,18 +2447,8 @@ export class DeepthinkPipelineOrchestrator {
       '# Strategies Finalized and Used So Far',
       ...this.strategiesUsedSoFar.map(s => `## Slot ${s.slotId} (Iteration ${s.iterationFinalized})\n${s.text}`),
     ].join('\n\n');
-    const jsonl = this.strategiesUsedSoFar
-      .map(s => s.trajectoryJsonl || JSON.stringify({
-        role: 'assistant',
-        message_type: 'ai',
-        slot_id: s.slotId,
-        iteration_finalized: s.iterationFinalized,
-        content: s.text,
-      }))
-      .filter(Boolean)
-      .join('\n');
 
-    await this.gitHarness.commitStrategyHistory('strategies_finalized_and_used_so_far.md', markdown, jsonl);
+    await this.gitHarness.commitStrategyHistory('strategies_finalized_and_used_so_far.md', markdown);
   }
 
   private recordWindowEventsToLedger(branchId: string, report?: BsrReport): void {
@@ -2476,6 +2546,7 @@ export class DeepthinkPipelineOrchestrator {
     executionId?: string;
     executionGroupId?: string;
     executionGroupName?: string;
+    conversation?: LoopAgentConversation;
     onTrajectoryJsonl?: (jsonl: string) => void;
   }): Promise<string> {
     const config = this.state.runConfig;
@@ -2483,8 +2554,8 @@ export class DeepthinkPipelineOrchestrator {
     const pairedAgentKind: DeepthinkAgentKind =
       args.kind === 'strategyProximity'
         ? 'initialStrategy'
-        : args.kind === 'hypothesisProximity'
-          ? 'hypothesisGeneration'
+        : args.kind === 'modulesImpactReview'
+          ? 'modulesGeneration'
           : args.kind;
     const model = deepthinkAgentModel(pairedAgentKind, prompts, config.model);
     const systemInstruction = deepthinkAgentSystemInstruction(pairedAgentKind, prompts);
@@ -2547,7 +2618,7 @@ export class DeepthinkPipelineOrchestrator {
 
         const executePromise = (async () => {
           if (config.deepthinkCodeExecutionEnabled) {
-            const sessionId = `dtsb-${this.state.id}-${args.kind}-${nanoid(6)}`;
+            const sessionId = args.conversation?.sessionId ?? `dtsb-${this.state.id}-${args.kind}-${nanoid(6)}`;
             const repositoryAccess: SandboxRepositoryAccess = {
               repositoryId: this.state.id,
               agentDirectory: args.workingDirectory,
@@ -2558,17 +2629,28 @@ export class DeepthinkPipelineOrchestrator {
             const sharedWorkspaceHandler = (input: SharedWorkspaceToolInput) =>
               this.sharedWorkspace.handleToolCall(input);
 
-            const runAgent = await getSandboxToolAgentRunner();
+            const runAgent = this.callbacks.runSandboxToolAgent ?? (await getSandboxToolAgentRunner());
             if (!runAgent) {
               throw new Error('Sandbox tool agent runtime is not available in this environment');
             }
+            const inputMessages =
+              args.conversation && args.conversation.messages.length > 0
+                ? args.conversation.messages
+                : [new HumanMessage({ content: parsePromptToGeminiParts(args.promptText) })];
             const result = await runAgent({
               agentName: args.kind,
               sessionId,
-              messages: [new HumanMessage({ content: parsePromptToGeminiParts(args.promptText) })],
+              messages: inputMessages,
               systemPrompt: systemInstruction,
               modelName: model,
               maxOutputTokens,
+              finalOutputContract: args.contract
+                ? {
+                    name: args.contract.name,
+                    validate: (payload: unknown) => args.contract!.validate(payload as T),
+                  }
+                : undefined,
+              omitUploadedFileMessage: true,
               repositoryAccess,
               sharedWorkspaceHandler,
               abortSignal: this.abortController.signal,
@@ -2587,6 +2669,7 @@ export class DeepthinkPipelineOrchestrator {
               text: result.text || result.finalText,
               trace: result.executionTraceText,
               jsonl: result.rawTrajectoryJsonl || fallbackJsonl,
+              messages: result.messages,
             };
           } else {
             const invokeDirectCall = async (signal?: AbortSignal, touch?: () => void) => {
@@ -2626,6 +2709,7 @@ export class DeepthinkPipelineOrchestrator {
               text,
               trace: undefined,
               jsonl,
+              messages: undefined,
             };
           }
         })();
@@ -2648,6 +2732,10 @@ export class DeepthinkPipelineOrchestrator {
         if (args.contract) {
           const parsed = this.parseJsonStrict<T>(outputText, args.contract.name);
           args.contract.validate(parsed);
+        }
+
+        if (args.conversation && executionResult.messages) {
+          args.conversation.messages = executionResult.messages;
         }
 
         args.onTrajectoryJsonl?.(rawTrajectoryJsonl);

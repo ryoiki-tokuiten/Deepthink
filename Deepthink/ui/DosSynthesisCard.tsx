@@ -38,7 +38,7 @@ export const DosSynthesisCard: React.FC<DosSynthesisCardProps> = ({ process, hea
   }
 
   const dos: DosOutput = activeEntry.output;
-  const feedbackList = dos.hypothesis_feedback || [];
+  const feedbackList = dos.module_feedback || [];
 
   // Collect branch utilization mappings
   const branchIds = new Set<string>();

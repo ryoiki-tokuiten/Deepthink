@@ -227,31 +227,6 @@ const IMAGE_SCAN_IGNORED_DIRECTORIES = new Set([
     '__pycache__',
 ]);
 
-const RESULTS_EXCLUDED_DIRECTORIES = new Set([
-    '.git',
-    '.tmp',
-    'tmp',
-    '.cache',
-    'cache',
-    '.local',
-    '.matplotlib',
-    '.python_user_base',
-    '.venv',
-    'venv',
-    'env',
-    'node_modules',
-    'target',
-    '__pycache__',
-    '.ipynb_checkpoints',
-]);
-
-const RESULTS_EXCLUDED_FILES = new Set([
-    SESSION_METADATA_FILE,
-    '.last_stdout',
-    '.last_stderr',
-    'shared_workspace.md',
-]);
-
 let cachedHostRustSysroot: string | null | undefined;
 let sandboxEnvironmentPromise: Promise<SandboxEnvironmentProfile> | null = null;
 const sessionWorkspacePrepLocks = new Map<string, Promise<void>>();
@@ -463,9 +438,13 @@ function getWorkspacePath(sessionId: string): string {
     return path.join(VFS_ROOT, sessionId);
 }
 
-function getRepositoryPath(repositoryId: string): string {
+async function resolveRepositoryPath(repositoryId: string): Promise<string> {
     if (!isSafeRepositoryId(repositoryId)) {
         throw new Error('Invalid sandbox repository id.');
+    }
+    if (isDeepthinkRepository(repositoryId)) {
+        const resultsPath = await ensureDeepthinkResultsRepository(repositoryId);
+        if (resultsPath) return resultsPath;
     }
     return path.join(REPOSITORY_ROOT, repositoryId);
 }
@@ -657,7 +636,7 @@ async function archiveStrategyRepositoryDirectory(repositoryId: string, strategy
         throw new Error('Only an active top-level Strategy-N directory can be archived.');
     }
 
-    const repoRoot = getRepositoryPath(repositoryId);
+    const repoRoot = await resolveRepositoryPath(repositoryId);
     const activeDirectory = safeJoin(repoRoot, strategyDirectory);
     const prunedRoot = safeJoin(repoRoot, 'Pruned_Strategies');
     await mkdir(repoRoot, { recursive: true });
@@ -1640,7 +1619,7 @@ async function prepareSandboxWorkspace(
         };
     }
 
-    const repoRoot = getRepositoryPath(repositoryAccess.repositoryId);
+    const repoRoot = await resolveRepositoryPath(repositoryAccess.repositoryId);
     const sharedTmpDir = path.join(repoRoot, 'tmp');
     const ownDirectory = repositoryAccess.agentDirectory
         ? safeJoin(repoRoot, repositoryAccess.agentDirectory)
@@ -1650,10 +1629,6 @@ async function prepareSandboxWorkspace(
 
     await mkdir(repoRoot, { recursive: true });
     await mkdir(sharedTmpDir, { recursive: true });
-    // Creating this mirror is deliberately decoupled from the agent workspace:
-    // agents continue to operate only in the cache repository and never see
-    // Result-only context exports.
-    await ensureDeepthinkResultsRepository(repositoryAccess.repositoryId);
     if (ownDirectory) {
         const strategyMatch = repositoryAccess.agentDirectory?.match(/^(Strategy-\d+)(?:\/(Critique))?$/);
         if (strategyMatch) {
@@ -1832,7 +1807,7 @@ async function getWorkspaceContextForSession(sessionId: string): Promise<Sandbox
         };
     }
 
-    const repoRoot = getRepositoryPath(repositoryAccess.repositoryId);
+    const repoRoot = await resolveRepositoryPath(repositoryAccess.repositoryId);
     const sharedTmpDir = path.join(repoRoot, 'tmp');
     const readRoot = repositoryAccess.revision
         ? path.join(getWorkspacePath(sessionId), 'repository-revision')
@@ -2553,7 +2528,20 @@ async function ensureUntrackedGitExcludes(workspace: string) {
         await mkdir(infoDir, { recursive: true });
         const excludePath = path.join(infoDir, 'exclude');
         const existing = await readFile(excludePath, 'utf8').catch(() => '');
-        const requiredPatterns = ['/tmp', '/tmp/', '/.tmp', '/.tmp/', '**/.tmp/', '/shared_workspace.md'];
+        const requiredPatterns = [
+            '/tmp', '/tmp/', '/.tmp', '/.tmp/', '**/.tmp/',
+            '/.cache', '/.cache/', '**/.cache/',
+            '/.local', '/.local/', '**/.local/',
+            '/.matplotlib', '/.matplotlib/', '**/.matplotlib/',
+            '/.python_user_base', '/.python_user_base/', '**/.python_user_base/',
+            '/.venv', '/.venv/', '/venv', '/venv/',
+            '/node_modules', '/node_modules/', '**/node_modules/',
+            '/__pycache__', '/__pycache__/', '**/__pycache__/',
+            '/.ipynb_checkpoints', '**/.ipynb_checkpoints/',
+            '/shared_workspace.md',
+            '/.deepthink-meta.json',
+            '/latest.gz',
+        ];
         const missing = requiredPatterns.filter(pattern => !existing.split(/\r?\n/).includes(pattern));
         if (missing.length > 0) {
             const nextContent = `${existing.trimEnd()}\n${missing.join('\n')}\n`.replace(/^\n+/, '');
@@ -2580,35 +2568,6 @@ async function initAndCommitWorkspace(workspace: string, commitMessage: string) 
     }
 }
 
-function shouldExcludeFromResults(entryName: string, isDirectory: boolean): boolean {
-    return isDirectory
-        ? RESULTS_EXCLUDED_DIRECTORIES.has(entryName)
-        : RESULTS_EXCLUDED_FILES.has(entryName);
-}
-
-async function clearResultsWorkingTree(resultsRoot: string): Promise<void> {
-    const entries = await readdir(resultsRoot, { withFileTypes: true }).catch(() => []);
-    await Promise.all(entries
-        .filter(entry => entry.name !== '.git')
-        .map(entry => rm(path.join(resultsRoot, entry.name), { recursive: true, force: true })));
-}
-
-async function copyPrunedRepositoryTree(source: string, destination: string): Promise<void> {
-    const entries = await readdir(source, { withFileTypes: true }).catch(() => []);
-    await mkdir(destination, { recursive: true });
-
-    for (const entry of entries) {
-        if (shouldExcludeFromResults(entry.name, entry.isDirectory())) continue;
-        const from = path.join(source, entry.name);
-        const to = path.join(destination, entry.name);
-        if (entry.isDirectory()) {
-            await copyPrunedRepositoryTree(from, to);
-        } else if (entry.isFile()) {
-            await copyFile(from, to);
-        }
-    }
-}
-
 function isSafeResultsContextPath(relativePath: string): boolean {
     if (!relativePath || relativePath.includes('\\') || relativePath.startsWith('/') || relativePath.endsWith('/')) return false;
     const segments = relativePath.split('/');
@@ -2621,44 +2580,25 @@ async function syncDeepthinkResultsSnapshot(payload: DeepthinkResultsSnapshotReq
         throw new Error('A Deepthink repository id is required for a Results snapshot.');
     }
 
-    const sourceRepository = getRepositoryPath(payload.repositoryId);
-    if (!(await fileExists(sourceRepository))) {
-        await mkdir(sourceRepository, { recursive: true });
-    }
+    const repository = await resolveRepositoryPath(payload.repositoryId);
+    await mkdir(repository, { recursive: true });
 
     const contextFiles = payload.contextFiles || [];
     for (const file of contextFiles) {
         if (!file || !isSafeResultsContextPath(file.path)) {
             throw new Error('Invalid Results context file.');
         }
-        const sourceDestination = safeJoin(sourceRepository, file.path);
-        await mkdir(path.dirname(sourceDestination), { recursive: true });
+        const destination = safeJoin(repository, file.path);
+        await mkdir(path.dirname(destination), { recursive: true });
         if ((file as any).base64) {
-            await writeFile(sourceDestination, Buffer.from((file as any).base64, 'base64'));
+            await writeFile(destination, Buffer.from((file as any).base64, 'base64'));
         } else if (typeof file.content === 'string') {
-            await writeFile(sourceDestination, file.content, 'utf8');
+            await writeFile(destination, file.content, 'utf8');
         }
     }
 
-    await initAndCommitWorkspace(sourceRepository, payload.commitMessage || 'Deepthink Results snapshot');
-
-    const resultsRepository = await ensureDeepthinkResultsRepository(payload.repositoryId);
-    if (resultsRepository) {
-        await clearResultsWorkingTree(resultsRepository);
-        await copyPrunedRepositoryTree(sourceRepository, resultsRepository);
-        for (const file of contextFiles) {
-            const destination = safeJoin(resultsRepository, file.path);
-            await mkdir(path.dirname(destination), { recursive: true });
-            if ((file as any).base64) {
-                await writeFile(destination, Buffer.from((file as any).base64, 'base64'));
-            } else if (typeof file.content === 'string') {
-                await writeFile(destination, file.content, 'utf8');
-            }
-        }
-        await initAndCommitWorkspace(resultsRepository, payload.commitMessage || 'Deepthink Results snapshot');
-    }
-
-    return sourceRepository;
+    await initAndCommitWorkspace(repository, payload.commitMessage || 'Deepthink Results snapshot');
+    return repository;
 }
 
 async function withSessionPrepLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
@@ -2798,7 +2738,7 @@ async function handleSnapshot(req: IncomingMessage, res: ServerResponse) {
         const payload = JSON.parse(await readRequestBody(req)) as { sessionId?: string; repositoryId?: string; commitMessage?: string };
         let workspace: string | null = null;
         if (payload.repositoryId && isSafeRepositoryId(payload.repositoryId)) {
-            workspace = getRepositoryPath(payload.repositoryId);
+            workspace = await resolveRepositoryPath(payload.repositoryId);
         } else if (payload.sessionId && isSafeSessionId(payload.sessionId)) {
             const context = await getWorkspaceContextForSession(payload.sessionId);
             workspace = context ? gitWorkspaceFor(context) : null;
@@ -2837,7 +2777,7 @@ async function handleRestoreStrategy(req: IncomingMessage, res: ServerResponse) 
             throw new Error('A valid Git checkpoint is required.');
         }
 
-        const repository = getRepositoryPath(payload.repositoryId);
+        const repository = await resolveRepositoryPath(payload.repositoryId);
         if (!(await fileExists(path.join(repository, '.git')))) {
             throw new Error('Sandbox repository was not found.');
         }
@@ -2877,9 +2817,6 @@ async function handleEnsureDeepthinkRepository(req: IncomingMessage, res: Server
             sendJson(res, 400, { ok: false, error: 'A valid Deepthink repository id is required.' });
             return;
         }
-        const repoPath = getRepositoryPath(payload.repositoryId);
-        await mkdir(repoPath, { recursive: true });
-        await initAndCommitWorkspace(repoPath, 'Deepthink repository initialized');
         const resultPath = await ensureDeepthinkResultsRepository(payload.repositoryId);
         sendJson(res, 200, { ok: true, resultPath });
     } catch (err: any) {
@@ -2977,7 +2914,7 @@ async function handleOpenDirectory(req: IncomingMessage, res: ServerResponse) {
             console.warn('Notice: failed to open directory in system file manager:', err);
         });
 
-        sendJson(res, 200, { ok: true, path: repoPath });
+        sendJson(res, 200, { ok: true, path: targetPath });
     } catch (err: any) {
         sendJson(res, 500, { ok: false, error: err.message || String(err) });
     }
@@ -3134,7 +3071,7 @@ function getFriendlyAgentName(sessionId: string, repositoryAccess?: SandboxRepos
                 version = part;
             }
         }
-        if (sessionId.includes('hypothesis-testing')) kind = 'Hypothesis Testing';
+        if (sessionId.includes('modules-testing')) kind = 'Modules Testing';
         else if (sessionId.includes('solution-attempt')) kind = 'Solution Attempt';
         else if (sessionId.includes('solution-critique')) kind = 'Solution Critique';
         else if (sessionId.includes('solution-correction')) kind = 'Solution Correction';
@@ -3207,14 +3144,15 @@ async function resolveExplorerRepositoryTarget(args: {
 }): Promise<ExplorerRepositoryTarget | null> {
     if (args.repositoryId) {
         if (!isSafeRepositoryId(args.repositoryId)) return null;
-        const repository = getRepositoryPath(args.repositoryId);
-        if (await fileExists(repository)) return { root: repository, isRepositoryView: true };
         if (isDeepthinkRepository(args.repositoryId)) {
             const resultsRepository = await getDeepthinkResultsRepositoryPath(args.repositoryId);
             if (resultsRepository && (await fileExists(resultsRepository))) {
                 return { root: resultsRepository, isRepositoryView: true };
             }
+            return null;
         }
+        const repository = await resolveRepositoryPath(args.repositoryId);
+        if (await fileExists(repository)) return { root: repository, isRepositoryView: true };
         return null;
     }
 

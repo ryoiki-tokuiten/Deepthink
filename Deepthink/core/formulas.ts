@@ -35,12 +35,6 @@ export const TAU = 2;
 /** Pressure floor theta: least pressure that can trigger EVOLVE or PRUNE (§6.3, §6.5) */
 export const THETA = 0.3;
 
-/** Probability floor for information-theoretic surprisal (§6.3, §6.4) */
-export const PROBABILITY_FLOOR = 0.01;
-
-/** log2(3) baseline bits for uniform guess over 3 outcomes (§6.4) */
-export const LOG2_3 = Math.log2(3); // ≈ 1.584962500721156
-
 export interface BsrConfigOptions {
   tau?: number;
   theta?: number;
@@ -161,72 +155,27 @@ export function scoreWindow(
 }
 
 /**
- * Grades the previous prediction against the actual window outcome (§6.4).
+ * Computes drift and stall evidence from the observed window (§6.5).
  */
-export function gradePrediction(
-  previousPrediction: { PROGRESS: number; STALL: number; REGRESS: number } | null | undefined,
-  windowOutcome: BsrWindowOutcome,
-  newRawPrediction: { PROGRESS: number; STALL: number; REGRESS: number }
+export function computeWindowEvidence(
+  net: number,
+  movement: number,
+  critiqueAlignmentValue: number,
+  options?: { tau?: number }
 ): {
-  surprisalBits: number | null;
-  credibility: number;
-  effectivePrediction: { PROGRESS: number; STALL: number; REGRESS: number };
-} {
-  if (!previousPrediction) {
-    // With no graded prediction, credibility is 1.0 (§6.4)
-    return {
-      surprisalBits: null,
-      credibility: 1.0,
-      effectivePrediction: { ...newRawPrediction },
-    };
-  }
-
-  const pObserved = Math.max(previousPrediction[windowOutcome] ?? 0.333, PROBABILITY_FLOOR);
-  const surprisalBits = -Math.log2(pObserved);
-
-  // credibility = clip(2 - surprisal / log2(3), 0, 1)
-  const credibility = clip(2 - surprisalBits / LOG2_3, 0, 1);
-
-  // effective_prediction = credibility * P + (1 - credibility) * (1/3, 1/3, 1/3)
-  const uniform = 1 / 3;
-  const effectivePrediction = {
-    PROGRESS: credibility * newRawPrediction.PROGRESS + (1 - credibility) * uniform,
-    STALL: credibility * newRawPrediction.STALL + (1 - credibility) * uniform,
-    REGRESS: credibility * newRawPrediction.REGRESS + (1 - credibility) * uniform,
-  };
-
-  return {
-    surprisalBits,
-    credibility,
-    effectivePrediction,
-  };
-}
-
-/**
- * Computes expected drift, entropy, certainty, and stall evidence from effective prediction (§6.5).
- */
-export function computeForecastQuantities(
-  effectivePrediction: { PROGRESS: number; STALL: number; REGRESS: number },
-  critiqueAlignmentValue: number
-): {
-  expectedDrift: number;
-  certainty: number;
+  drift: number;
   stallEvidence: number;
 } {
-  const expectedDrift = effectivePrediction.PROGRESS - effectivePrediction.REGRESS;
+  const tau = options?.tau ?? TAU;
 
-  // Shannon entropy with base 2 (0 * log(0) = 0)
-  const entropy = [effectivePrediction.PROGRESS, effectivePrediction.STALL, effectivePrediction.REGRESS]
-    .reduce((acc, p) => (p > 0 ? acc - p * Math.log2(p) : acc), 0);
+  // drift = net / (movement + tau)
+  const drift = net / (movement + tau);
 
-  const certainty = Math.max(0, 1 - entropy / LOG2_3);
-
-  // stall_evidence = certainty * (1 - effective[PROGRESS]) * max(0, critique_alignment)
-  const stallEvidence = certainty * (1 - effectivePrediction.PROGRESS) * Math.max(0, critiqueAlignmentValue);
+  // stall_evidence = (1 - max(0, drift)) * max(0, critique_alignment)
+  const stallEvidence = (1 - Math.max(0, drift)) * Math.max(0, critiqueAlignmentValue);
 
   return {
-    expectedDrift,
-    certainty,
+    drift,
     stallEvidence,
   };
 }
@@ -235,7 +184,7 @@ export function computeForecastQuantities(
  * Computes action pressures for CONTINUE, EVOLVE, PRUNE (§6.5).
  */
 export function computePressures(
-  expectedDrift: number,
+  drift: number,
   lostGround: number,
   progressKept: number,
   stallEvidence: number
@@ -244,7 +193,7 @@ export function computePressures(
   EVOLVE: number;
   PRUNE: number;
 } {
-  const pContinue = Math.max(0, expectedDrift);
+  const pContinue = Math.max(0, drift);
   const pEvolve = Math.max(lostGround, stallEvidence * progressKept);
   const pPrune = stallEvidence * (1 - progressKept) * (1 - lostGround);
 
@@ -303,58 +252,6 @@ export function decideAction(
 }
 
 /**
- * Computes calibration metrics (log loss) for all graded predictions in the run (§6.4).
- * Baseline is uniform guess (log2(3) ≈ 1.585 bits).
- */
-export function computeCalibrationMetrics(
-  bsrRecords: Array<{ branch_id: string; computed: BsrComputedScores }>
-): {
-  meanSurprisal: number;
-  baselineBits: number;
-  isInformative: boolean;
-  branchMetrics: Record<string, { count: number; meanSurprisal: number; isInformative: boolean }>;
-} {
-  const graded = bsrRecords.filter(r => r.computed.surprisal_bits !== null);
-  const totalCount = graded.length;
-  const baselineBits = LOG2_3;
-
-  if (totalCount === 0) {
-    return {
-      meanSurprisal: baselineBits,
-      baselineBits,
-      isInformative: false,
-      branchMetrics: {},
-    };
-  }
-
-  const sumSurprisal = graded.reduce((acc, r) => acc + (r.computed.surprisal_bits ?? 0), 0);
-  const meanSurprisal = sumSurprisal / totalCount;
-  const isInformative = meanSurprisal < baselineBits;
-
-  const branchMetrics: Record<string, { count: number; meanSurprisal: number; isInformative: boolean }> = {};
-  for (const r of graded) {
-    if (!branchMetrics[r.branch_id]) {
-      branchMetrics[r.branch_id] = { count: 0, meanSurprisal: 0, isInformative: false };
-    }
-    branchMetrics[r.branch_id].count++;
-    branchMetrics[r.branch_id].meanSurprisal += r.computed.surprisal_bits ?? 0;
-  }
-
-  for (const bId of Object.keys(branchMetrics)) {
-    const b = branchMetrics[bId];
-    b.meanSurprisal = b.meanSurprisal / b.count;
-    b.isInformative = b.meanSurprisal < baselineBits;
-  }
-
-  return {
-    meanSurprisal,
-    baselineBits,
-    isInformative,
-    branchMetrics,
-  };
-}
-
-/**
  * Master function computing full BSR analysis for one branch at a global update.
  */
 export function evaluateBranchState(
@@ -362,7 +259,6 @@ export function evaluateBranchState(
   windowStartIteration: number,
   windowEndIteration: number,
   ledgerBeforeWindow: BsrLedgerEntry[],
-  previousPrediction: { PROGRESS: number; STALL: number; REGRESS: number } | null | undefined,
   options?: BsrConfigOptions
 ): BsrComputedScores {
   const scoring = scoreWindow(
@@ -374,28 +270,24 @@ export function evaluateBranchState(
     { tau: options?.tau, weights: options?.weights }
   );
 
-  const graded = gradePrediction(
-    previousPrediction,
-    scoring.windowOutcome,
-    report.next_window_prediction.probabilities
-  );
-
-  const forecast = computeForecastQuantities(
-    graded.effectivePrediction,
-    report.critique_alignment.value
+  const evidence = computeWindowEvidence(
+    scoring.net,
+    scoring.movement,
+    report.critique_alignment.value,
+    { tau: options?.tau }
   );
 
   const pressures = computePressures(
-    forecast.expectedDrift,
+    evidence.drift,
     scoring.lostGround,
     scoring.progressKept,
-    forecast.stallEvidence
+    evidence.stallEvidence
   );
 
   const actionDecision = decideAction(
     pressures,
     scoring.lostGround,
-    forecast.stallEvidence,
+    evidence.stallEvidence,
     scoring.progressKept,
     scoring.lastGoodIteration,
     { theta: options?.theta }
@@ -408,12 +300,8 @@ export function evaluateBranchState(
     last_good_iteration: scoring.lastGoodIteration,
     lost_ground: scoring.lostGround,
     progress_kept: scoring.progressKept,
-    surprisal_bits: graded.surprisalBits,
-    credibility: graded.credibility,
-    effective_prediction: graded.effectivePrediction,
-    expected_drift: forecast.expectedDrift,
-    certainty: forecast.certainty,
-    stall_evidence: forecast.stallEvidence,
+    drift: evidence.drift,
+    stall_evidence: evidence.stallEvidence,
     pressure: pressures,
     decision: actionDecision.decision,
     form: actionDecision.form,
@@ -422,17 +310,8 @@ export function evaluateBranchState(
 }
 
 // ============================================================================
-// DOS Hypothesis Feedback Calculations (§5.2)
+// DOS Module Feedback Calculations (§5.2)
 // ============================================================================
-
-export function calculateSurpriseBits(
-  predictedProbabilities: { VALIDATED: number; REJECTED: number; INCONCLUSIVE: number },
-  observedVerdict: 'VALIDATED' | 'REJECTED' | 'INCONCLUSIVE'
-): number {
-  const p = Math.max(predictedProbabilities[observedVerdict] ?? 0.333, PROBABILITY_FLOOR);
-  const bits = -Math.log2(p);
-  return bits === 0 ? 0 : bits;
-}
 
 export function calculateUtilizationVector(
   branchUtilizations: DosBranchUtilization[]

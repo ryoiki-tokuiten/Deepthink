@@ -32,25 +32,25 @@ export const DEEPTHINK_AGENT_REGISTRY = {
     modelKey: 'model_initialStrategy',
     maxOutputTokens: 5000,
   },
-  hypothesisGeneration: {
-    label: 'Hypothesis Generation',
-    sandboxRole: 'Hypothesis Generation',
-    systemPromptKey: 'sys_deepthink_hypothesisGeneration',
-    modelKey: 'model_hypothesisGeneration',
+  modulesGeneration: {
+    label: 'Modules Generator',
+    sandboxRole: 'Modules Generator',
+    systemPromptKey: 'sys_deepthink_modulesGeneration',
+    modelKey: 'model_modulesGeneration',
     maxOutputTokens: 5000,
   },
-  hypothesisProximity: {
-    label: 'Hypothesis Proximity',
-    sandboxRole: 'Hypothesis Generation',
-    systemPromptKey: 'sys_deepthink_hypothesisGeneration',
-    modelKey: 'model_hypothesisGeneration',
+  modulesImpactReview: {
+    label: 'Modules Impact Reviewer',
+    sandboxRole: 'Modules Generator',
+    systemPromptKey: 'sys_deepthink_modulesGeneration',
+    modelKey: 'model_modulesGeneration',
     maxOutputTokens: 5000,
   },
-  hypothesisTester: {
-    label: 'Hypothesis Testing',
-    sandboxRole: 'Hypothesis Testing',
-    systemPromptKey: 'sys_deepthink_hypothesisTester',
-    modelKey: 'model_hypothesisTester',
+  modulesTester: {
+    label: 'Modules Tester',
+    sandboxRole: 'Modules Testing',
+    systemPromptKey: 'sys_deepthink_modulesTester',
+    modelKey: 'model_modulesTester',
     maxOutputTokens: 5000,
   },
   solutionAttempt: {

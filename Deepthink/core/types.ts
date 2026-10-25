@@ -22,10 +22,10 @@ export interface DeepthinkRunConfig {
   strategiesCount: number;
   /** Strategy generator/proximity turns */
   strategyProximityLoops: number;
-  /** Hypotheses per heartbeat (0 disables hypotheses) */
-  hypothesisCount: number;
-  /** Hypothesis generator/proximity turns */
-  hypothesisProximityLoops: number;
+  /** Modules per heartbeat (0 disables modules) */
+  modulesCount: number;
+  /** Modules Generator / Modules Impact Reviewer turns */
+  modulesImpactReviewLoops: number;
   /** Correction agents receive no peer-branch context (enforced by prompt) */
   isolateBranches: boolean;
   /** Enables role-scoped sandbox tools */
@@ -83,20 +83,10 @@ export interface DeepthinkMainStrategyData {
   memoryBank?: string;
 }
 
-export interface DeepthinkHypothesisPrediction {
-  reason: string;
-  probabilities: {
-    VALIDATED: number;
-    REJECTED: number;
-    INCONCLUSIVE: number;
-  };
-}
-
-export interface DeepthinkHypothesisData {
+export interface DeepthinkModuleData {
   id: string;
-  hypothesisText: string;
+  moduleText: string;
   targetBranchIds?: string[];
-  predicted_test_outcome?: DeepthinkHypothesisPrediction;
   testerAttempt?: string;
   testerAttemptDisplay?: string;
   testerAttemptExecutionTraceText?: string;
@@ -134,14 +124,6 @@ export interface BsrReport {
     value: number;
     reason: string;
   };
-  next_window_prediction: {
-    reason: string;
-    probabilities: {
-      PROGRESS: number;
-      STALL: number;
-      REGRESS: number;
-    };
-  };
 }
 
 export type BsrWindowOutcome = 'PROGRESS' | 'STALL' | 'REGRESS';
@@ -155,15 +137,7 @@ export interface BsrComputedScores {
   last_good_iteration: number | 'window_start';
   lost_ground: number;
   progress_kept: number;
-  surprisal_bits: number | null;
-  credibility: number | null;
-  effective_prediction: {
-    PROGRESS: number;
-    STALL: number;
-    REGRESS: number;
-  };
-  expected_drift: number;
-  certainty: number;
+  drift: number;
   stall_evidence: number;
   pressure: {
     CONTINUE: number;
@@ -175,34 +149,19 @@ export interface BsrComputedScores {
   rollback_to?: number | 'window_start';
 }
 
-export interface BsrCalibrationMetrics {
-  meanSurprisal: number;
-  baselineBits: number;
-  isInformative: boolean;
-  branchMetrics: Record<string, { count: number; meanSurprisal: number; isInformative: boolean }>;
-}
-
 export interface BsrGlobalUpdateRecord {
   updateNumber: number;
   iteration: number;
   branch_id: string;
   report: BsrReport;
   computed: BsrComputedScores;
-  graded_prediction?: {
-    issuedAtUpdate: number;
-    probabilities: {
-      PROGRESS: number;
-      STALL: number;
-      REGRESS: number;
-    };
-  };
 }
 
 // ============================================================================
 // DOS (Dissected Observations Synthesis) Data Structures (§5)
 // ============================================================================
 
-export type HypothesisUtilizationClassification =
+export type ModuleUtilizationClassification =
   | 'USED_CORRECTLY'
   | 'USED_PARTIALLY'
   | 'NOT_USED'
@@ -212,7 +171,7 @@ export interface DosBranchUtilization {
   branch_id: string;
   utilization: {
     reason: string;
-    classification: HypothesisUtilizationClassification;
+    classification: ModuleUtilizationClassification;
   };
 }
 
@@ -222,28 +181,20 @@ export interface DosCritiqueCounterevidence {
   classification: 'STRONG';
 }
 
-export interface DosHypothesisFeedbackItem {
-  hypothesis_id: string;
+export interface DosModuleFeedbackItem {
+  module_id: string;
   branch_utilization: DosBranchUtilization[];
   critique_counterevidence?: DosCritiqueCounterevidence[];
 }
 
 export interface DosOutput {
   core_synthesis: Record<string, unknown>;
-  hypothesis_feedback?: DosHypothesisFeedbackItem[];
+  module_feedback?: DosModuleFeedbackItem[];
 }
 
-export interface RealizedHypothesisFeedback {
-  hypothesis_id: string;
-  your_predicted_test_outcome: {
-    VALIDATED: number;
-    REJECTED: number;
-    INCONCLUSIVE: number;
-  };
-  prediction_note: string;
+export interface RealizedModuleFeedback {
+  module_id: string;
   observed_test_outcome: 'VALIDATED' | 'REJECTED' | 'INCONCLUSIVE';
-  surprise_bits: number;
-  surprise_note?: string;
   utilization?: {
     correct_use: number;
     partial_use: number;
@@ -262,8 +213,8 @@ export interface HeartbeatBlock {
   heartbeat_no: number;
   iteration: number;
   dosFilePath?: string;
-  hypotheses: DeepthinkHypothesisData[];
-  realized_feedback: RealizedHypothesisFeedback[];
+  modules: DeepthinkModuleData[];
+  realized_feedback: RealizedModuleFeedback[];
 }
 
 // ============================================================================
@@ -317,16 +268,12 @@ export interface DeepthinkPipelineState {
 
   // Curated Context & Heartbeats
   heartbeats: HeartbeatBlock[];
-  hypotheses: DeepthinkHypothesisData[];
-  hypothesisProximityHistory: ProximityTurn[];
+  modules: DeepthinkModuleData[];
+  modulesImpactReviewHistory: ProximityTurn[];
 
   // BSR & Global Updates
   bsrRecords: BsrGlobalUpdateRecord[];
   branchLedgers: Record<string, BsrLedgerEntry[]>;
-  openPredictions: Record<string, {
-    issuedAtUpdate: number;
-    probabilities: { PROGRESS: number; STALL: number; REGRESS: number };
-  }>;
 
   // DOS
   dosOutputs: Array<{
@@ -352,14 +299,14 @@ export interface DeepthinkPipelineState {
   // State tracking fields for UI panels
   solutionCritiques?: any[];
   solutionCritiquesStatus?: any;
-  hypothesisExplorerComplete?: boolean;
+  modulesExplorerComplete?: boolean;
 }
 
-/** A hypothesis packet captured for one heartbeat round. */
-export interface HypothesisRoundSnapshot {
+/** A module packet captured for one heartbeat round. */
+export interface ModuleRoundSnapshot {
     roundNumber: number;
     packet: string;
-    hypotheses?: DeepthinkHypothesisData[];
+    modules?: DeepthinkModuleData[];
 }
 
 export interface DeepthinkResultsContextFile {

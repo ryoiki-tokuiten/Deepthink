@@ -103,7 +103,7 @@
     --deepthink-tab-color: var(--accent-purple);
 }
 
-#deepthink-tab-hypothesis-explorer {
+#deepthink-tab-modules-explorer {
     --deepthink-tab-rgb: var(--accent-blue-rgb);
     --deepthink-tab-color: var(--accent-blue);
 }
@@ -124,7 +124,7 @@
 }
 
 #deepthink-tab-strategic-solver,
-#deepthink-tab-hypothesis-explorer,
+#deepthink-tab-modules-explorer,
 #deepthink-tab-branch-state,
 #deepthink-tab-evolution-filter,
 #deepthink-tab-final-result {
@@ -134,7 +134,7 @@
 }
 
 #deepthink-tab-strategic-solver.active,
-#deepthink-tab-hypothesis-explorer.active,
+#deepthink-tab-modules-explorer.active,
 #deepthink-tab-branch-state.active,
 #deepthink-tab-evolution-filter.active,
 #deepthink-tab-final-result.active {
@@ -612,21 +612,21 @@ body.light-mode .strategy-branch-version-switcher {
 
 
 /* --------------------------------------------------------------------------
-   9. HYPOTHESIS EXPLORER
+   9. MODULES EXPLORER
    -------------------------------------------------------------------------- */
 
-.deepthink-hypothesis-explorer {
+.deepthink-modules-explorer {
     padding: 0 var(--spacing-section-sm) var(--spacing-section-sm);
 }
 
-.hypothesis-round-layout {
+.modules-round-layout {
     display: grid;
     grid-template-columns: minmax(92px, max-content) minmax(0, 1fr);
     gap: 1rem;
     align-items: start;
 }
 
-.hypothesis-round-pills {
+.modules-round-pills {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -640,7 +640,7 @@ body.light-mode .strategy-branch-version-switcher {
     top: 0.75rem;
 }
 
-.hypothesis-round-pill {
+.modules-round-pill {
     width: 100%;
     min-height: 34px;
     padding: 0.45rem 0.7rem;
@@ -655,19 +655,19 @@ body.light-mode .strategy-branch-version-switcher {
     transition: all 0.25s ease;
 }
 
-.hypothesis-round-pill:hover {
+.modules-round-pill:hover {
     border-color: rgba(var(--accent-blue-rgb), 0.35);
     color: var(--accent-blue);
 }
 
-.hypothesis-round-pill.active {
+.modules-round-pill.active {
     background: rgba(var(--accent-blue-rgb), 0.16);
     border-color: rgba(var(--accent-blue-rgb), 0.45);
     color: var(--accent-blue);
     box-shadow: 0 0 0 3px rgba(var(--accent-blue-rgb), 0.08);
 }
 
-.hypothesis-round-content {
+.modules-round-content {
     min-width: 0;
 }
 
@@ -680,7 +680,7 @@ body.light-mode .strategy-branch-version-switcher {
     margin-top: 1.5rem;
 }
 
-.curated-context-hypotheses {
+.curated-context-modules {
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -688,14 +688,14 @@ body.light-mode .strategy-branch-version-switcher {
     padding: 0;
 }
 
-.curated-hypotheses-header {
+.curated-modules-header {
     display: flex;
     align-items: center;
     min-height: 1.25rem;
     margin: 0 0 1.25rem;
 }
 
-.curated-hypotheses-header h3 {
+.curated-modules-header h3 {
     margin: 0;
     color: var(--text-color);
     font-size: 1rem;
@@ -703,14 +703,14 @@ body.light-mode .strategy-branch-version-switcher {
     line-height: 1.25rem;
 }
 
-.hypothesis-agent-grid {
+.modules-agent-grid {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
     gap: 1rem;
     margin-top: 0 !important;
     padding: 0 !important;
 }
 
-.hypothesis-agent-grid .agent-card {
+.modules-agent-grid .agent-card {
     display: flex;
     flex-direction: column;
     height: 390px;
@@ -719,7 +719,7 @@ body.light-mode .strategy-branch-version-switcher {
     padding: 0 1rem 0.85rem;
 }
 
-.hypothesis-agent-grid .agent-results {
+.modules-agent-grid .agent-results {
     display: flex;
     flex: 1;
     flex-direction: column;
@@ -729,7 +729,7 @@ body.light-mode .strategy-branch-version-switcher {
     margin: 0.5rem 0 0;
 }
 
-.hypothesis-agent-grid .hypothesis-text-container {
+.modules-agent-grid .modules-text-container {
     display: flex;
     flex: 1;
     flex-direction: column;
@@ -737,14 +737,14 @@ body.light-mode .strategy-branch-version-switcher {
     overflow: hidden;
 }
 
-.hypothesis-agent-grid .hypothesis-text {
+.modules-agent-grid .modules-text {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     margin: 0;
 }
 
-.hypothesis-agent-grid .view-argument-button {
+.modules-agent-grid .view-argument-button {
     align-self: center;
     margin: 0 auto;
 }
@@ -754,7 +754,7 @@ body.light-mode .strategy-branch-version-switcher {
     padding-top: 0 !important;
 }
 
-.hypothesis-agent-grid .hypothesis-card-header {
+.modules-agent-grid .modules-card-header {
     min-height: 2.5rem;
     margin-bottom: 0;
     margin-inline: -1rem;
@@ -763,18 +763,18 @@ body.light-mode .strategy-branch-version-switcher {
     background-color: var(--sub-panel-bg-color);
 }
 
-body.light-mode .hypothesis-agent-grid .hypothesis-card-header {
+body.light-mode .modules-agent-grid .modules-card-header {
     background-color: var(--background-secondary);
 }
 
-.hypothesis-target-circles {
+.modules-target-circles {
     display: flex;
     align-items: center;
     flex: 0 0 auto;
     gap: 0.3rem;
 }
 
-.hypothesis-target-circle {
+.modules-target-circle {
     display: inline-flex;
     flex: 0 0 32px;
     align-items: center;
@@ -790,7 +790,7 @@ body.light-mode .hypothesis-agent-grid .hypothesis-card-header {
     line-height: 1;
 }
 
-.hypothesis-text {
+.modules-text {
     display: block;
     margin: 0;
     padding: 0;
@@ -809,12 +809,12 @@ body.light-mode .hypothesis-agent-grid .hypothesis-card-header {
     -webkit-backdrop-filter: none;
 }
 
-.hypothesis-agent-grid .hypothesis-text .latex-content-wrapper p {
+.modules-agent-grid .modules-text .latex-content-wrapper p {
     margin: 0 0 0.65rem;
     line-height: 1.5;
 }
 
-.hypothesis-agent-grid .hypothesis-text .latex-content-wrapper > :first-child {
+.modules-agent-grid .modules-text .latex-content-wrapper > :first-child {
     margin-top: 0 !important;
 }
 
@@ -950,8 +950,8 @@ body.light-mode .hypothesis-agent-grid .hypothesis-card-header {
    -------------------------------------------------------------------------- */
 
 /* Shared Deepthink content theme variables and layout tweaks */
-:is(.hypothesis-text,
-    .deepthink-hypothesis-explorer,
+:is(.modules-text,
+    .deepthink-modules-explorer,
     .deepthink-evolution-filter,
     .deepthink-final-result,
     .rich-content-display) {
@@ -1060,11 +1060,11 @@ body.light-mode .hypothesis-agent-grid .hypothesis-card-header {
         grid-template-columns: repeat(3, var(--button-height-md));
     }
 
-    .hypothesis-round-layout {
+    .modules-round-layout {
         grid-template-columns: 1fr;
     }
 
-    .hypothesis-round-pills {
+    .modules-round-pills {
         position: static;
         width: 100%;
         max-width: none;
@@ -1098,6 +1098,6 @@ body.light-mode .hypothesis-agent-grid .hypothesis-card-header {
     display: none;
 }
 
-.hypothesis-round-content > .proximity-history-pill {
+.modules-round-content > .proximity-history-pill {
     margin-bottom: 1rem;
 }

@@ -16,7 +16,7 @@ import {
     BaseModal,
     EmbeddedModalContent,
     StrategicSolverTab,
-    HypothesisExplorerTab,
+    ModulesExplorerTab,
     FinalResultTab,
 } from './Deepthink.tsx';
 
@@ -25,7 +25,7 @@ import { DeepthinkFilesystemTab } from './DeepthinkFilesystemTab.tsx';
 
 import {
     DeepthinkSolutionCritiqueData,
-    DeepthinkHypothesisData,
+    DeepthinkModuleData,
     DeepthinkMainStrategyData,
     DeepthinkPipelineState,
     type DeepthinkCoreDeps,
@@ -46,7 +46,7 @@ export { resumeDeepthinkAnalysisProcess, stopDeepthinkAnalysisProcess, saveLates
 
 export type {
     DeepthinkSolutionCritiqueData,
-    DeepthinkHypothesisData,
+    DeepthinkModuleData,
     DeepthinkMainStrategyData,
     DeepthinkPipelineState
 };
@@ -259,24 +259,24 @@ async function openDeepthinkSolutionModal(strategyId: string) {
     await updateSolutionModalContent(body, strategyId);
 }
 
-function openHypothesisArgumentModal(hypothesisId: string) {
+function openModuleArgumentModal(moduleId: string) {
     const pipeline = getActiveDeepthinkPipeline();
-    const allHypotheses = [
-        ...((pipeline?.hypothesisHistory || []).flat()),
-        ...(pipeline?.hypotheses || []),
+    const allModules = [
+        ...((pipeline?.modulesHistory || []).flat()),
+        ...(pipeline?.modules || []),
     ];
-    const hypothesis = allHypotheses.find(h => h.id === hypothesisId);
-    if (!hypothesis || document.querySelector('.embedded-modal-overlay')) return;
+    const mod = allModules.find(m => m.id === moduleId);
+    if (!mod || document.querySelector('.embedded-modal-overlay')) return;
 
     const close = () => unmountModal();
     mountModal(
         React.createElement(BaseModal, {
-            title: 'Hypothesis Argument',
+            title: 'Module Argument',
             isEmbedded: true,
             onClose: close,
             children: React.createElement(EmbeddedModalContent, {
-                content: hypothesis.testerAttemptDisplay || hypothesis.testerAttempt || 'No argument available',
-                contentClass: 'hypothesis-argument-content',
+                content: mod.testerAttemptDisplay || mod.testerAttempt || 'No argument available',
+                contentClass: 'module-argument-content',
             })
         })
     );
@@ -394,7 +394,7 @@ export function renderActiveDeepthinkPipeline() {
 
     if (!tabs.some(t => t.id === deepthinkProcess.activeTabId) && tabs.length > 0) {
         const wasRemovedCritiqueTab = deepthinkProcess.activeTabId === 'critique-history';
-        const contextTab = tabs.find(tab => tab.id === 'hypothesis-explorer');
+        const contextTab = tabs.find(tab => tab.id === 'modules-explorer');
         deepthinkProcess.activeTabId = wasRemovedCritiqueTab && contextTab
             ? contextTab.id
             : tabs[0].id;
@@ -458,7 +458,7 @@ function getDeepthinkTabVisibility(process: DeepthinkPipelineState): {
     const config = process.runConfig;
     return {
         showFilesystem: true,
-        showCuratedContext: config ? config.hypothesisCount > 0 : true,
+        showCuratedContext: config ? config.modulesCount > 0 : true,
     };
 }
 
@@ -468,7 +468,7 @@ export function getVisibleDeepthinkTabs(process: DeepthinkPipelineState): Deepth
         { id: 'live', label: 'Live', icon: 'terminal', visible: true },
         { id: 'filesystem', label: 'Filesystem', icon: 'folder', visible: showFilesystem },
         { id: 'strategic-solver', label: 'Branches', icon: 'psychology', visible: true },
-        { id: 'hypothesis-explorer', label: 'Curated Context', icon: 'science', visible: showCuratedContext },
+        { id: 'modules-explorer', label: 'Curated Context', icon: 'science', visible: showCuratedContext },
         { id: 'final-result', label: 'Final Result', icon: 'flag', visible: true, alignRight: true }
     ]
         .filter(tab => tab.visible)
@@ -487,7 +487,7 @@ export function createDeepthinkTabContent(
         renderActiveDeepthinkPipeline();
     });
     const onViewSolution = callbacks.onViewSolution ?? ((id: string) => openDeepthinkSolutionModal(id));
-    const onViewArgument = callbacks.onViewArgument ?? ((id: string) => openHypothesisArgumentModal(id));
+    const onViewArgument = callbacks.onViewArgument ?? ((id: string) => openModuleArgumentModal(id));
 
     switch (process.activeTabId) {
         case 'live':
@@ -504,8 +504,8 @@ export function createDeepthinkTabContent(
                 onStrategyTabClick,
                 onViewSolution,
             });
-        case 'hypothesis-explorer':
-            return React.createElement(HypothesisExplorerTab, {
+        case 'modules-explorer':
+            return React.createElement(ModulesExplorerTab, {
                 process,
                 onViewArgument,
             });
@@ -535,11 +535,11 @@ function getTabStatusClass(tabId: string, process: DeepthinkPipelineState): stri
             if (process.initialStrategies?.some(s => s.status === 'completed')) return 'status-deepthink-completed';
             if (process.initialStrategies?.some(s => s.status === 'processing')) return 'status-deepthink-processing';
             return '';
-        case 'hypothesis-explorer':
-            if (process.hypotheses?.some(h => h.testerStatus === 'error')) return 'status-deepthink-error';
-            if (process.hypotheses?.some(h => h.testerStatus === 'processing')) return 'status-deepthink-processing';
-            if (process.hypotheses?.some(h => h.testerStatus === 'completed')) return 'status-deepthink-completed';
-            return process.hypothesisExplorerComplete ? 'status-deepthink-completed' : '';
+        case 'modules-explorer':
+            if (process.modules?.some(m => m.testerStatus === 'error')) return 'status-deepthink-error';
+            if (process.modules?.some(m => m.testerStatus === 'processing')) return 'status-deepthink-processing';
+            if (process.modules?.some(m => m.testerStatus === 'completed')) return 'status-deepthink-completed';
+            return process.modulesExplorerComplete ? 'status-deepthink-completed' : '';
         case 'final-result':
             if (process.finalJudgingStatus === 'completed') return 'status-deepthink-completed';
             if (process.finalJudgingStatus === 'error') return 'status-deepthink-error';

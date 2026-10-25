@@ -3,15 +3,15 @@
 export interface CustomizablePromptsAdaptiveDeepthink {
   sys_adaptiveDeepthink_main: string;
   sys_adaptiveDeepthink_strategyGeneration: string;
-  sys_adaptiveDeepthink_hypothesisGeneration: string;
-  sys_adaptiveDeepthink_hypothesisTesting: string;
+  sys_adaptiveDeepthink_modulesGeneration: string;
+  sys_adaptiveDeepthink_modulesTesting: string;
   sys_adaptiveDeepthink_execution: string;
   sys_adaptiveDeepthink_solutionCritique: string;
   sys_adaptiveDeepthink_corrector: string;
   model_main?: string | null;
   model_strategyGeneration?: string | null;
-  model_hypothesisGeneration?: string | null;
-  model_hypothesisTesting?: string | null;
+  model_modulesGeneration?: string | null;
+  model_modulesTesting?: string | null;
   model_execution?: string | null;
   model_solutionCritique?: string | null;
   model_corrector?: string | null;
@@ -40,28 +40,28 @@ You direct execution by calling exactly one of the following tools per graph tur
    - **Returns**: A <Strategies> XML-like block containing the generated strategies with their IDs.
    - **Notes**: Saved slots are permanent and cannot be replaced or updated.
 
-2. generate_hypothesis(count, proximityLoops?, specialContext?)
-   - **Description**: Provides the latest execution and the corresponding critique to generate critique-driven hypotheses by running a hypotheiss generator and hypothesis proximity revision loop. Use proximityLoops to steer how diverse the hypotheses should be. The deepthink system automatically provides the execution+critique of all current unsaved strategies to these agents, so you must not call this tool before executing anything in the current pass.
+2. generate_modules(count, impactReviewLoops?, specialContext?)
+   - **Description**: Provides the latest execution and the corresponding critique to generate critique-driven modules by running a Modules Generator and Modules Impact Reviewer revision loop. Use impactReviewLoops to steer how diverse and high-impact the modules should be. The deepthink system automatically provides the execution+critique of all current unsaved strategies to these agents, so you must not call this tool before executing anything in the current pass.
    - **Arguments**:
-     - count (integer [1-5]): Number of hypothesis candidates to generate.
-     - proximityLoops (integer [1-5], optional, default 2): Controls how many proximity revision rounds are used to steer hypothesis diversity. Higher values request more diversity.
-     - specialContext (string, optional): You can guide the hypothesis generation process by providing insights based on the latest execution and critique evidence. Use this parameter to specify what the latest execution/critique evidence still fails to explain, or suggest alternative lines of reasoning the hypothesis generator should explore.
-   - **Returns**: A <Hypotheses> XML-like block containing the hypotheses (H1-H5).
-   - **Notes**: Calling this deletes all previous hypotheses and test records, starting a clean testing iteration. Hypotheisis generation / proximity agent doesn't receive the previous / latest correction outputs and that is a design choice. Don't include anything about that in the special context. They only receive the latest execution + critique.
+     - count (integer [1-5]): Number of module candidates to generate.
+     - impactReviewLoops (integer [1-5], optional, default 2): Controls how many impact review rounds are used to steer module diversity and impact. Higher values request more revision rounds.
+     - specialContext (string, optional): You can guide the modules generation process by providing insights based on the latest execution and critique evidence. Use this parameter to specify what the latest execution/critique evidence still fails to explain, or suggest alternative lines of reasoning the Modules Generator should explore.
+   - **Returns**: A <Modules> XML-like block containing the modules (M1-M5).
+   - **Notes**: Calling this deletes all previous modules and test records, starting a clean testing iteration. The Modules Generator / Modules Impact Reviewer doesn't receive the previous / latest correction outputs and that is a design choice. Don't include anything about that in the special context. They only receive the latest execution + critique.
 
-3. test_hypothesis(hypothesisIds)
-   - **Description**: Evaluates selected hypotheses in parallel using isolated Hypothesis Testers.
+3. test_modules(moduleIds)
+   - **Description**: Evaluates selected modules in parallel using isolated Modules Testers.
    - **Arguments**:
-     - hypothesisIds (array of strings H1-H5, min 1, max 5): The IDs of the hypotheses to test.
-   - **Returns**: A <HypothesisTests> XML-like block detailing the results.
-   - **Notes**: Test agents see only the individual hypothesis and the core challenge.
+     - moduleIds (array of strings M1-M5, min 1, max 5): The IDs of the modules to test.
+   - **Returns**: A <ModuleTests> XML-like block detailing the results.
+   - **Notes**: Test agents see only the individual module and the core challenge.
 
 4. execute(executions, specialContext?)
    - **Description**: Runs each selected strategy in parallel through the Execution -> Critique -> Correction chain.
    - **Arguments**:
      - executions (array of objects, min 1, max 5): A list of execution requests. Each request object requires:
        - strategyId (string S1-S5)
-       - hypothesisIds (array of strings H1-H5, max 5): Mapped tested hypotheses for this branch. This is where you map hypothesis testing results / extremely information to the strategy branches. You must understand what's going on with the current execution-critique and correction and exactly what hypothesis testing results they might find useful. This is absolutely must.
+       - moduleIds (array of strings M1-M5, max 5): Mapped tested modules for this branch. This is where you map modules testing results / extremely useful information to the strategy branches. You must understand what's going on with the current execution-critique and correction and exactly what module testing results they might find useful. This is an absolute must.
        - specialContext (string, optional): Branch-local instructions.
      - specialContext (string, optional): Shared execution-only guidance for this tool call.
    - **Returns**: A <StrategyPass> XML-like block containing execution, critique, and correction results for each strategy.
@@ -74,7 +74,7 @@ You direct execution by calling exactly one of the following tools per graph tur
    - **Notes**: Saved slots are marked as permanent/immutable. They cannot be executed, updated, or replaced again. These are saved permanently, the deepthink system then never considers that strategy, or it's executions or critique ever again in the system. We proceed with iterating the remaining unsaved strategies.
 
 6. finalize_pass_and_execute(executions, specialContext?)
-   - **Description**: Finalizes the active pass, compacts the current long outputs from execution, critique, correction and hypothesis testing agents to files that you can later read using read_files tool if needed in the next pass. It truncates history, and immediately executes new branches under the next pass.
+   - **Description**: Finalizes the active pass, compacts the current long outputs from execution, critique, correction and modules testing agents to files that you can later read using read_files tool if needed in the next pass. It truncates history, and immediately executes new branches under the next pass.
    - **Arguments**: Same as execute tool.
    - **Returns**: A message detailing finalized pass and the <StrategyPass> block from the new executions.
 
@@ -104,13 +104,13 @@ You direct execution by calling exactly one of the following tools per graph tur
 
 STRATEGY GENERATION PROXIMITY: During generate_strategies, the generator and proximity agents share their complete submitted-output conversation, ensuring the generator cannot ignore the proximity agent's critiques. Subsequent calls continue that same conversation. This autonomously refines the initial seed of strategies. However, sometimes even that's not enough and you might be dissatisfied with the final strategies produced and so there you can ask for replacements.
 
-HYPOTHESIS GENERATION PROXIMITY: During generate_hypothesis, the generator and proximity agents share their complete submitted-output conversation just like the strategy generator and strategies proximity pair. Subsequent calls continue that same conversation.
+MODULES GENERATION & IMPACT REVIEW: During generate_modules, the Modules Generator and Modules Impact Reviewer share their complete submitted-output conversation just like the Strategy Generator and Strategies Proximity pair. Subsequent calls continue that same conversation.
 
 
-EXECUTE: Receives strategy text, challenge, selected tested hypotheses, previous pass execution-critique, and special instructions (which merges tool-level specialContext, branch-level specialContext, and previous execution-critique). This produces it's own execute-critique-corrector chain. Yes, these are 3 separate agent calls one after another automatically processed.
+EXECUTE: Receives strategy text, challenge, selected tested modules, previous pass execution-critique, and special instructions (which merges tool-level specialContext, branch-level specialContext, and previous execution-critique). This produces it's own execute-critique-corrector chain. Yes, these are 3 separate agent calls one after another automatically processed.
 
-MOST CRITICAL DESIGN CHOICE: when you call finalize pass and execute, then the strategies that gets executed here receives the previous execution + critique + latest hypothesis testing results (resolved to that strategy by you). Notice how they don't receive the correction from the previous pass?, that's the explicit design choice. Instead of buillding the huge execution-critique-correction-critique-correction-critique... chain, we refresh the context by keeping the latest execution-critique only + refresh the hypothesis based on the latest critique only. This is so that when the correction agent sees the previous execution + critique + the fresh hypothesis curated specially based off the corresponding critique it has to battle, it can get some genuinely useful information to proceed further and produce a corrected output. That's why hypothesis generation is critique driven always... the corrector agent in the next pass literally use that to produce it's output.
-The output of EXECUTE is another execute-critique-correction. So if this strategy goes unsaved, then we omit the correction from this chain and only send the fresh execute-critique to the next pass + along with the new hypothesis tested set BASED ON THESE LATEST FRESH CRITIQUE.
+MOST CRITICAL DESIGN CHOICE: when you call finalize pass and execute, then the strategies that gets executed here receives the previous execution + critique + latest modules testing results (resolved to that strategy by you). Notice how they don't receive the correction from the previous pass?, that's the explicit design choice. Instead of buillding the huge execution-critique-correction-critique-correction-critique... chain, we refresh the context by keeping the latest execution-critique only + refresh the modules based on the latest critique only. This is so that when the correction agent sees the previous execution + critique + the fresh modules curated specially based off the corresponding critique it has to battle, it can get some genuinely useful information to proceed further and produce a corrected output. That's why modules generation is critique driven always... the corrector agent in the next pass literally use that to produce it's output.
+The output of EXECUTE is another execute-critique-correction. So if this strategy goes unsaved, then we omit the correction from this chain and only send the fresh execute-critique to the next pass + along with the new modules tested set BASED ON THESE LATEST FRESH CRITIQUE.
 
 </Context Routing and Agent Isolation>
 
@@ -118,13 +118,13 @@ The output of EXECUTE is another execute-critique-correction. So if this strateg
 Every run follows a pass-based search and refinement loop:
 
 1. **Initial Step**: You must start by calling generate_strategies to establish diverse slots (S1-S5).
-2. **Initial Execution (MUST DO FIRST)**: You MUST call execute on the strategies first. You cannot call generate_hypothesis immediately after generating strategies, because hypotheses are critique-driven and require execution-critique blocks from the current pass to exist.
+2. **Initial Execution (MUST DO FIRST)**: You MUST call execute on the strategies first. You cannot call generate_modules immediately after generating strategies, because modules are critique-driven and require execution-critique blocks from the current pass to exist.
 3. **Analyze and Test**:
    - Inspect the returned execute output (Execution, Critique, Correction).
-   - Formulate critique-driven hypotheses using generate_hypothesis.
-   - Run test_hypothesis to evaluate them.
+   - Formulate critique-driven modules using generate_modules.
+   - Run test_modules to evaluate them.
 4. **Iterate**:
-   - Call execute or finalize_pass_and_execute to run subsequent rounds of execution, routing the tested hypotheses into the respective strategy branches.
+   - Call execute or finalize_pass_and_execute to run subsequent rounds of execution, routing the tested modules into the respective strategy branches.
 5. **Finalize Pass**:
    - A pass is NOT complete when execution returns. It only completes when you call finalize_pass_and_execute.
    - The tool commits pass outputs into files named Pass-{N}-{StrategyId}-{Role}.md under /workspace/Results, truncates history, and updates the compactionBoundary to discard heavy prior pass conversations from your active context.
@@ -144,15 +144,15 @@ Standard pass-based iteration:
 1. Generate strategies (S1-S5).
 2. Execute strategies.
 3. Analyze execution-critique blocks.
-4. Generate hypotheses to address critique gaps.
-5. Test hypotheses.
-6. Finalize pass and execute strategies with tested hypotheses.
-7. Repeat critique, hypothesis generation, and execution.
+4. Generate modules to address critique gaps.
+5. Test modules.
+6. Finalize pass and execute strategies with tested modules.
+7. Repeat critique, modules generation, and execution.
 8. Save successful branches, pivot failing ones.
 9. Synthesize and submit final response.
 
-Hypothesis-driven refinement:
-- Generate multiple hypotheses, test them, and selectively route them to different strategies to test multiple assumptions in parallel.
+Module-driven refinement:
+- Generate multiple modules, test them, and selectively route them to different strategies to test multiple subcomponents in parallel.
 
 Selective saving & pivoting:
 - Save S1 and S2 because they resolved critiques. Replace S3 and S4 using generate_strategies with replaceStrategyIds: ["S3", "S4"] to explore new orthogonal paths while retaining the saved ones.
@@ -161,8 +161,8 @@ Selective saving & pivoting:
 <Critical Rules>
 1. Call exactly one tool per turn. Call only one tool in each assistant response.
 2. Wait for actual tool results before deciding what to do next.
-3. Never call generate_hypothesis without having execution-critique blocks first.
-4. Always test hypotheses using test_hypothesis before passing them to execution.
+3. Never call generate_modules without having execution-critique blocks first.
+4. Always test modules using test_modules before passing them to execution.
 5. Do not simulate worker roles or tool outputs in prose.
 6. Corrector output is temporary unless the strategy is saved using save. If you iterate an unsaved strategy, its directory is rolled back, and all corrector files/edits are discarded.
 7. Use virtual_environment to interact with files in the workspace (read, write, test). Do not assume read_files works for general workspace files; it only works for compacted pass files.
@@ -183,10 +183,10 @@ Every turn must contain:
 <Deepthink System Context>
 You are leveraging the Deepthink reasoning system, designed for difficult problem-solving. Remember:
 - Strategies are high-level interpretations, not final solutions.
-- Hypotheses are critique-driven assumptions to narrow down bugs/logic gaps, not final answers.
+- Modules are critique-driven investigative tasks or subcomponents to narrow down bugs/logic gaps, not final answers.
 - Execution agents produce concrete solution attempts.
-- Critique agents identify weaknesses ruthlessly, isolated from hypotheses and corrections.
-- Corrector agents repair solution attempts, isolated from hypotheses.
+- Critique agents identify weaknesses ruthlessly, isolated from modules and corrections.
+- Corrector agents repair solution attempts, using routed tested modules.
 - The final judge is you.
 </Deepthink System Context>
 
@@ -207,8 +207,8 @@ export function createDefaultCustomPromptsAdaptiveDeepthink(): CustomizablePromp
   return {
     sys_adaptiveDeepthink_main: ADAPTIVE_DEEPTHINK_SYSTEM_PROMPT,
     sys_adaptiveDeepthink_strategyGeneration: deepthinkPrompts.sys_deepthink_initialStrategy,
-    sys_adaptiveDeepthink_hypothesisGeneration: deepthinkPrompts.sys_deepthink_hypothesisGeneration,
-    sys_adaptiveDeepthink_hypothesisTesting: deepthinkPrompts.sys_deepthink_hypothesisTester,
+    sys_adaptiveDeepthink_modulesGeneration: deepthinkPrompts.sys_deepthink_modulesGeneration,
+    sys_adaptiveDeepthink_modulesTesting: deepthinkPrompts.sys_deepthink_modulesTester,
     sys_adaptiveDeepthink_execution: deepthinkPrompts.sys_deepthink_solutionAttempt,
     sys_adaptiveDeepthink_solutionCritique: deepthinkPrompts.sys_deepthink_solutionCritique,
     sys_adaptiveDeepthink_corrector: deepthinkPrompts.sys_deepthink_solutionCorrection,

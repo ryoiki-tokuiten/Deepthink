@@ -4,9 +4,9 @@
  */
 
 import {
-    MAX_HYPOTHESIS_COUNT,
+    MAX_MODULES_COUNT,
     MAX_STRATEGY_PROXIMITY_LOOPS,
-    MAX_HYPOTHESIS_PROXIMITY_LOOPS,
+    MAX_MODULES_IMPACT_REVIEW_LOOPS,
     MAX_DEEPTHINK_DEPTH,
     ModelConfigManager,
     type ModelParameters,
@@ -25,9 +25,9 @@ export interface DeepthinkApiCallBreakdown {
     solutionCritique: { min: number; max: number };
     solutionCorrection: number;
     dos: number;
-    hypothesisGeneration: number;
-    hypothesisProximity: number;
-    hypothesisTester: number;
+    modulesGeneration: number;
+    modulesImpactReview: number;
+    modulesTester: number;
     bsr: number;
     memoryBank: { min: number; max: number };
     finalJudge: number;
@@ -64,10 +64,10 @@ export function calculateDeepthinkApiCallsFromParams(params: ModelParameters): D
     const j = Math.max(3, Math.min(params.j ?? 4, 8));
     const k = Math.max(2, Math.min(params.k ?? 4, j));
     const strategyProximityLoops = Math.max(0, Math.min(MAX_STRATEGY_PROXIMITY_LOOPS, params.strategyProximityLoops ?? 1));
-    const hypothesisCount = Math.max(0, Math.min(MAX_HYPOTHESIS_COUNT, params.hypothesisCount ?? 0));
-    const hypothesisProximityLoops = Math.max(0, Math.min(MAX_HYPOTHESIS_PROXIMITY_LOOPS, params.hypothesisProximityLoops ?? 1));
+    const modulesCount = Math.max(0, Math.min(MAX_MODULES_COUNT, params.modulesCount ?? 0));
+    const modulesImpactReviewLoops = Math.max(0, Math.min(MAX_MODULES_IMPACT_REVIEW_LOOPS, params.modulesImpactReviewLoops ?? 1));
 
-    const curatedContextEnabled = hypothesisCount > 0;
+    const curatedContextEnabled = modulesCount > 0;
     const schedule = calculateLoopSchedule(i, j, k, curatedContextEnabled);
     const { standaloneHeartbeats, globalUpdates, totalHeartbeats } = schedule;
 
@@ -82,28 +82,28 @@ export function calculateDeepthinkApiCallsFromParams(params: ModelParameters): D
     const branchIterationCalls = 2 * i * strategiesCount;
 
     // 3. Heartbeats (§4.5):
-    // Per heartbeat with hypotheses: (1 + 2 * hypothesisProximityLoops) + hypothesisCount testers
-    const hypCallsPerHeartbeat = hypothesisCount > 0
-        ? (1 + (2 * hypothesisProximityLoops)) + hypothesisCount
+    // Per heartbeat with modules: (1 + 2 * modulesImpactReviewLoops) + modulesCount testers
+    const modCallsPerHeartbeat = modulesCount > 0
+        ? (1 + (2 * modulesImpactReviewLoops)) + modulesCount
         : 0;
 
-    // Standalone heartbeats run their own Heartbeat DOS call when hypotheses enabled (§5.1)
+    // Standalone heartbeats run their own Heartbeat DOS call when modules enabled (§5.1)
     const standaloneHeartbeatCalls = standaloneHeartbeats * (
-        (hypothesisCount > 0 ? 1 : 0) +
-        hypCallsPerHeartbeat
+        (modulesCount > 0 ? 1 : 0) +
+        modCallsPerHeartbeat
     );
 
     // Heartbeat ending Global Update reuses Step-ii DOS (0 extra DOS calls per §4.5, §4.6 vii)
     const guHeartbeatCalls = curatedContextEnabled
-        ? globalUpdates * hypCallsPerHeartbeat
+        ? globalUpdates * modCallsPerHeartbeat
         : 0;
 
     // 4. Global Updates (§4.6):
     // Step i: 1 Step-i DOS + S BSR agents
     const guStepICalls = globalUpdates * (1 + strategiesCount);
 
-    // Step vi: 1 Step-ii DOS (only when hypotheses enabled)
-    const guStepViCalls = globalUpdates * (hypothesisCount > 0 ? 1 : 0);
+    // Step vi: 1 Step-ii DOS (only when modules enabled)
+    const guStepViCalls = globalUpdates * (modulesCount > 0 ? 1 : 0);
 
     // Step iii & Step v maintenance:
     // Min case: 0 strategy updates (all CONTINUE), S memory bank distillations
@@ -144,7 +144,7 @@ export function calculateDeepthinkApiCallsFromParams(params: ModelParameters): D
     const min = baseMin * minMultiplier;
     const max = baseMax * maxMultiplier;
 
-    const totalHeartbeatsWithHyp = hypothesisCount > 0 ? totalHeartbeats : 0;
+    const totalHeartbeatsWithMod = modulesCount > 0 ? totalHeartbeats : 0;
 
     const breakdown: DeepthinkApiCallBreakdown = {
         initialStrategy: {
@@ -164,12 +164,12 @@ export function calculateDeepthinkApiCallsFromParams(params: ModelParameters): D
             max: (i * strategiesCount) + (globalUpdates * strategiesCount),
         },
         solutionCorrection: Math.max(0, i - 1) * strategiesCount,
-        dos: (standaloneHeartbeats * (hypothesisCount > 0 ? 1 : 0)) +
+        dos: (standaloneHeartbeats * (modulesCount > 0 ? 1 : 0)) +
             (globalUpdates * 1) +
-            (globalUpdates * (hypothesisCount > 0 ? 1 : 0)),
-        hypothesisGeneration: totalHeartbeatsWithHyp * (1 + hypothesisProximityLoops),
-        hypothesisProximity: totalHeartbeatsWithHyp * hypothesisProximityLoops,
-        hypothesisTester: totalHeartbeatsWithHyp * hypothesisCount,
+            (globalUpdates * (modulesCount > 0 ? 1 : 0)),
+        modulesGeneration: totalHeartbeatsWithMod * (1 + modulesImpactReviewLoops),
+        modulesImpactReview: totalHeartbeatsWithMod * modulesImpactReviewLoops,
+        modulesTester: totalHeartbeatsWithMod * modulesCount,
         bsr: globalUpdates * strategiesCount,
         memoryBank: {
             min: globalUpdates * strategiesCount,

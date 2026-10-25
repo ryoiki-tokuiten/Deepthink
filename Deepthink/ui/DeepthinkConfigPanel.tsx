@@ -14,9 +14,9 @@ import { getDeepthinkConfigController } from '../../Routing';
 import { calculateDeepthinkTokenEstimate } from '../../Routing/DeepthinkTokenEstimator';
 import { TotalLLMCallsTokenEstimationModal } from './TotalLLMCallsTokenEstimationModal';
 import {
-    MAX_HYPOTHESIS_COUNT,
+    MAX_MODULES_COUNT,
     MAX_STRATEGY_PROXIMITY_LOOPS,
-    MAX_HYPOTHESIS_PROXIMITY_LOOPS,
+    MAX_MODULES_IMPACT_REVIEW_LOOPS,
     BSR_WEIGHT_PRESETS,
     type BsrWeightPresetId,
 } from '../../Routing/ModelConfig';
@@ -29,9 +29,9 @@ type DeepthinkController = ReturnType<typeof getDeepthinkConfigController>;
 interface DeepthinkConfigPanelProps {
     strategiesCount: number;
     strategyProximityLoops: number;
-    hypothesisCount: number;
-    hypothesisProximityLoops: number;
-    hypothesisEnabled: boolean;
+    modulesCount: number;
+    modulesImpactReviewLoops: number;
+    modulesEnabled: boolean;
     i: number;
     j: number;
     k: number;
@@ -45,9 +45,9 @@ interface DeepthinkConfigPanelProps {
     bsrWeightPreset: BsrWeightPresetId;
     onStrategiesChange: (count: number) => void;
     onStrategyProximityLoopsChange: (count: number) => void;
-    onHypothesisChange: (count: number) => void;
-    onHypothesisProximityLoopsChange: (count: number) => void;
-    onHypothesisToggle: (enabled: boolean) => void;
+    onModulesChange: (count: number) => void;
+    onModulesImpactReviewLoopsChange: (count: number) => void;
+    onModulesToggle: (enabled: boolean) => void;
     onIChange: (i: number) => void;
     onJChange: (j: number) => void;
     onKChange: (k: number) => void;
@@ -458,7 +458,7 @@ const TotalLLMCallsButton: React.FC<{
     </button>
 );
 
-const Figure4Visualization: React.FC<{ hypothesisEnabled: boolean }> = ({ hypothesisEnabled }) => {
+const Figure4Visualization: React.FC<{ modulesEnabled: boolean }> = ({ modulesEnabled }) => {
     const B = (k: 'g' | 't' | 'c' | 'p', x: number, y: number, w: number, h: number, a: string, b?: string, m?: boolean) => {
         const cx = x + w / 2;
         const cy = y + h / 2;
@@ -482,7 +482,7 @@ const Figure4Visualization: React.FC<{ hypothesisEnabled: boolean }> = ({ hypoth
         />
     );
 
-    const dimHyp = !hypothesisEnabled ? 'vis-dimmed' : '';
+    const dimMod = !modulesEnabled ? 'vis-dimmed' : '';
 
     return (
         <div className="figure4-container">
@@ -491,24 +491,24 @@ const Figure4Visualization: React.FC<{ hypothesisEnabled: boolean }> = ({ hypoth
                 preserveAspectRatio="xMidYMid meet"
                 className="figure4-visualization"
                 role="img"
-                aria-label="Hypothesis generator architecture"
+                aria-label="Modules generator architecture"
             >
                 <defs>
                     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                         <path d="M2 1L8 5L2 9" className="vis-arrow-path" />
                     </marker>
                 </defs>
-                <g className={dimHyp}>
+                <g className={dimMod}>
                     {B('t', 28, 46, 136, 84, 'Critique Synthesis')}
-                    {B('t', 188, 46, 164, 84, 'Hypothesis generation', 'with proximity correction')}
-                    {B('t', 376, 46, 132, 84, 'Independent', 'Hypotheses testing')}
+                    {B('t', 188, 46, 164, 84, 'Modules Generator', 'with impact review')}
+                    {B('t', 376, 46, 132, 84, 'Independent', 'Modules testing')}
                     {B('g', 532, 46, 110, 84, 'Map', 'to branches')}
                     {P('M164 88H186')}
                     {P('M352 88H374')}
                     {P('M508 88H530')}
                     {P('M260 130V384', 1)}
                     {P('M280 384V132', 1)}
-                    {B('p', 120, 386, 440, 82, 'Back & forth proximity history saved', 'and added back to the next hypothesis generation')}
+                    {B('p', 120, 386, 440, 82, 'Back & forth impact review history saved', 'and added back to the next modules generation')}
                     {P('M587 130V258H484')}
                     {B('g', 298, 216, 184, 84, 'Branch context', 'mapped packet')}
                     {B('g', 36, 216, 206, 84, 'Next correction agents', 'read the branch context')}
@@ -520,23 +520,23 @@ const Figure4Visualization: React.FC<{ hypothesisEnabled: boolean }> = ({ hypoth
 };
 
 const CuratedContextSection: React.FC<{
-    hypothesisEnabled: boolean;
-    hypothesisCount: number;
-    hypothesisProximityLoops: number;
-    onHypothesisToggle: (enabled: boolean) => void;
-    onHypothesisChange: (count: number) => void;
-    onHypothesisProximityLoopsChange: (count: number) => void;
+    modulesEnabled: boolean;
+    modulesCount: number;
+    modulesImpactReviewLoops: number;
+    onModulesToggle: (enabled: boolean) => void;
+    onModulesChange: (count: number) => void;
+    onModulesImpactReviewLoopsChange: (count: number) => void;
 }> = ({
-    hypothesisEnabled,
-    hypothesisCount,
-    hypothesisProximityLoops,
-    onHypothesisToggle,
-    onHypothesisChange,
-    onHypothesisProximityLoopsChange,
+    modulesEnabled,
+    modulesCount,
+    modulesImpactReviewLoops,
+    onModulesToggle,
+    onModulesChange,
+    onModulesImpactReviewLoopsChange,
 }) => {
-        const toggleHypotheses = (enabled: boolean) => {
-            onHypothesisToggle(enabled);
-            if (!enabled) onHypothesisChange(0);
+        const toggleModules = (enabled: boolean) => {
+            onModulesToggle(enabled);
+            if (!enabled) onModulesChange(0);
         };
 
         return (
@@ -549,47 +549,47 @@ const CuratedContextSection: React.FC<{
                 </div>
 
                 <div className="window-content" id="dt-information-packet-content">
-                    {/* 2. Hypothesis Generation sub-section (Toggle + in-sync Visual + in-sync Sliders) */}
-                    <div className={classNames('curated-subfeature-card', !hypothesisEnabled && 'collapsed')}>
+                    {/* 2. Modules Generation sub-section (Toggle + in-sync Visual + in-sync Sliders) */}
+                    <div className={classNames('curated-subfeature-card', !modulesEnabled && 'collapsed')}>
                         <div className="curated-subfeature-header">
-                            <label htmlFor="dt-hypothesis-toggle" className="curated-toggle-label">
-                                Hypothesis Generation & Independent Testing
+                            <label htmlFor="dt-modules-toggle" className="curated-toggle-label">
+                                Modules Generation & Independent Testing
                             </label>
                             <ToggleSwitch
-                                id="dt-hypothesis-toggle"
-                                checked={hypothesisEnabled}
-                                onChange={toggleHypotheses}
+                                id="dt-modules-toggle"
+                                checked={modulesEnabled}
+                                onChange={toggleModules}
                             />
                         </div>
 
-                        {hypothesisEnabled && (
+                        {modulesEnabled && (
                             <div className="curated-subfeature-body">
-                                <div className="hypothesis-controls">
+                                <div className="modules-controls">
                                     <div className="slider-pair-row proximity-pair">
                                         <div className="input-group-tight">
-                                            <label htmlFor="dt-hypothesis-slider" className="input-label">
-                                                Hypothesis Count: <span id="dt-hypothesis-value">{hypothesisCount}</span>
+                                            <label htmlFor="dt-modules-slider" className="input-label">
+                                                Modules Count: <span id="dt-modules-value">{modulesCount}</span>
                                             </label>
                                             <SliderWithFill
-                                                id="dt-hypothesis-slider"
-                                                value={hypothesisCount > 0 ? hypothesisCount : 1}
+                                                id="dt-modules-slider"
+                                                value={modulesCount > 0 ? modulesCount : 1}
                                                 min={1}
-                                                max={MAX_HYPOTHESIS_COUNT}
+                                                max={MAX_MODULES_COUNT}
                                                 color="var(--accent-blue)"
-                                                onChange={onHypothesisChange}
+                                                onChange={onModulesChange}
                                             />
                                         </div>
                                         <div className="input-group-tight">
-                                            <label htmlFor="dt-hypothesis-proximity-slider" className="input-label">
-                                                Proximity loops: <span id="dt-hypothesis-proximity-value">{hypothesisProximityLoops}</span>
+                                            <label htmlFor="dt-modules-impact-review-slider" className="input-label">
+                                                Impact review loops: <span id="dt-modules-impact-review-value">{modulesImpactReviewLoops}</span>
                                             </label>
                                             <SliderWithFill
-                                                id="dt-hypothesis-proximity-slider"
-                                                value={hypothesisProximityLoops}
+                                                id="dt-modules-impact-review-slider"
+                                                value={modulesImpactReviewLoops}
                                                 min={1}
-                                                max={MAX_HYPOTHESIS_PROXIMITY_LOOPS}
+                                                max={MAX_MODULES_IMPACT_REVIEW_LOOPS}
                                                 color="var(--accent-blue)"
-                                                onChange={onHypothesisProximityLoopsChange}
+                                                onChange={onModulesImpactReviewLoopsChange}
                                             />
                                         </div>
                                     </div>
@@ -598,7 +598,7 @@ const CuratedContextSection: React.FC<{
                         )}
                     </div>
 
-                    <Figure4Visualization hypothesisEnabled={hypothesisEnabled} />
+                    <Figure4Visualization modulesEnabled={modulesEnabled} />
                 </div>
             </div>
         );
@@ -743,7 +743,7 @@ const BsrParametersSection: React.FC<{
 };
 
 const CONFIG_WARNING_TEXT =
-    'The current default configuration is optimal for most of the situations and is decided after doing a lot of experiments. Change the configuration only if you know exactly what you are doing and how it will impact the overall state, and, more importantly the costs. This is very sensitive configuration (even when using with Frontier Models). Small tweaks can waste your compute significantly. This popup might look annoying to you but it is intentional tbh.';
+    'The current default configuration is optimal for most of the situations and is finalized after doing a lot of experiments. Change the configuration only if you know exactly what you are doing and how it will impact the overall state, and, more importantly the costs. This is very sensitive configuration (doesnt matter whether you are using it with local models or with the frontier models). Small tweaks can waste your compute significantly.';
 
 const ConfigSensitivityWarningModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const openedAtRef = useRef(Date.now());
@@ -826,8 +826,8 @@ const DeepthinkConfigPanelComponent: React.FC<DeepthinkConfigPanelProps> = props
     const tokenSummary = useMemo(() => calculateDeepthinkTokenEstimate({
         strategiesCount: props.strategiesCount,
         strategyProximityLoops: props.strategyProximityLoops,
-        hypothesisCount: props.hypothesisEnabled ? props.hypothesisCount : 0,
-        hypothesisProximityLoops: props.hypothesisProximityLoops,
+        modulesCount: props.modulesEnabled ? props.modulesCount : 0,
+        modulesImpactReviewLoops: props.modulesImpactReviewLoops,
         deepthinkDepth: safeDepth,
         i: safeDepth,
         j: props.j,
@@ -837,9 +837,9 @@ const DeepthinkConfigPanelComponent: React.FC<DeepthinkConfigPanelProps> = props
     }), [
         props.strategiesCount,
         props.strategyProximityLoops,
-        props.hypothesisEnabled,
-        props.hypothesisCount,
-        props.hypothesisProximityLoops,
+        props.modulesEnabled,
+        props.modulesCount,
+        props.modulesImpactReviewLoops,
         safeDepth,
         props.j,
         props.k,
@@ -869,7 +869,7 @@ const DeepthinkConfigPanelComponent: React.FC<DeepthinkConfigPanelProps> = props
                         i={props.i}
                         j={props.j}
                         k={props.k}
-                        curatedContextEnabled={props.hypothesisEnabled}
+                        curatedContextEnabled={props.modulesEnabled}
                         onIChange={withConfigWarning(props.onIChange)}
                         onJChange={withConfigWarning(props.onJChange)}
                         onKChange={withConfigWarning(props.onKChange)}
@@ -878,12 +878,12 @@ const DeepthinkConfigPanelComponent: React.FC<DeepthinkConfigPanelProps> = props
                 <div className="config-bottom-grid">
                     <div className="config-left-col">
                         <CuratedContextSection
-                            hypothesisEnabled={props.hypothesisEnabled}
-                            hypothesisCount={props.hypothesisCount}
-                            hypothesisProximityLoops={props.hypothesisProximityLoops}
-                            onHypothesisToggle={withConfigWarning(props.onHypothesisToggle)}
-                            onHypothesisChange={withConfigWarning(props.onHypothesisChange)}
-                            onHypothesisProximityLoopsChange={withConfigWarning(props.onHypothesisProximityLoopsChange)}
+                            modulesEnabled={props.modulesEnabled}
+                            modulesCount={props.modulesCount}
+                            modulesImpactReviewLoops={props.modulesImpactReviewLoops}
+                            onModulesToggle={withConfigWarning(props.onModulesToggle)}
+                            onModulesChange={withConfigWarning(props.onModulesChange)}
+                            onModulesImpactReviewLoopsChange={withConfigWarning(props.onModulesImpactReviewLoopsChange)}
                         />
                         <div className="curated-subfeature-card">
                             <div className="curated-subfeature-header">
@@ -935,9 +935,9 @@ function deriveProps(controller: DeepthinkController): DeepthinkConfigPanelProps
         k: state.k ?? 4,
         onStrategiesChange: value => controller.setStrategiesCount(value),
         onStrategyProximityLoopsChange: value => controller.setStrategyProximityLoops(value),
-        onHypothesisChange: value => controller.setHypothesisCount(value),
-        onHypothesisProximityLoopsChange: value => controller.setHypothesisProximityLoops(value),
-        onHypothesisToggle: value => controller.setHypothesisEnabled(value),
+        onModulesChange: value => controller.setModulesCount(value),
+        onModulesImpactReviewLoopsChange: value => controller.setModulesImpactReviewLoops(value),
+        onModulesToggle: value => controller.setModulesEnabled(value),
         onIChange: value => {
             const clamped = Math.max(5, Math.min(20, Math.round(value)));
             controller.setI(clamped);

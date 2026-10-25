@@ -10,7 +10,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
     DeepthinkPipelineState,
     DeepthinkMainStrategyData,
-    DeepthinkHypothesisData,
+    DeepthinkModuleData,
 } from '../core/deepthinkCore';
 import MathHTML from '../../Styles/Components/RenderMathMarkdown';
 import { Icon as MIcon } from '../../UI/Icons';
@@ -22,8 +22,8 @@ import { DosSynthesisCard } from './DosSynthesisCard';
 // Shared Primitives
 // ═══════════════════════════════════════════════════════════════════════
 
-const hypothesisTesterDisplay = (hypothesis: DeepthinkHypothesisData): string =>
-    hypothesis.testerAttemptDisplay || hypothesis.testerAttempt || '';
+const modulesTesterDisplay = (mod: DeepthinkModuleData): string =>
+    mod.testerAttemptDisplay || mod.testerAttempt || '';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Show More / Show Less Toggle
@@ -512,38 +512,6 @@ const BranchVisualBsr: React.FC<{
     const pEvol = computed.pressure.EVOLVE || 0;
     const pPrun = computed.pressure.PRUNE || 0;
 
-    // Next-Window Forecast probabilities: PROGRESS, STALL, REGRESS
-    const nextPred = report.next_window_prediction;
-    const pProg = nextPred?.probabilities?.PROGRESS || 0;
-    const pStall = nextPred?.probabilities?.STALL || 0;
-    const pRegr = nextPred?.probabilities?.REGRESS || 0;
-
-    const forecastColors = React.useMemo(() => {
-        if (!nextPred) return [];
-        let prog = Math.round(pProg * 5);
-        let stall = Math.round(pStall * 5);
-        let regr = 5 - prog - stall;
-        if (regr < 0) {
-            if (stall > prog) stall += regr;
-            else prog += regr;
-            regr = 0;
-        }
-        const pool = [
-            ...Array(prog).fill({ fill: '#d1fae5', stroke: '#059669', gFill: '#047857' }),
-            ...Array(stall).fill({ fill: '#fef3c7', stroke: '#d97706', gFill: '#b45309' }),
-            ...Array(regr).fill({ fill: '#fee2e2', stroke: '#e11d48', gFill: '#be123c' })
-        ];
-        const seedBase = activeRecord?.updateNumber || 0;
-        for (let i = pool.length - 1; i > 0; i--) {
-            const seed = seedBase * 100 + i;
-            const rand = Math.sin(seed) * 10000;
-            const pseudo = rand - Math.floor(rand);
-            const j = Math.floor(pseudo * (i + 1));
-            [pool[i], pool[j]] = [pool[j], pool[i]];
-        }
-        return pool;
-    }, [pProg, pStall, pRegr, activeRecord?.updateNumber, nextPred]);
-
     // Determine continuous chain of surviving records up to activeIdx
     // If a branch survived (CONTINUE or EVOLVE) in previous windows, chain them cleanly.
     // If it was PRUNED, it reset, so the chain starts after the last PRUNE.
@@ -810,16 +778,24 @@ const BranchVisualBsr: React.FC<{
                             <span className="telemetry-val">{computed.progress_kept.toFixed(3)}</span>
                         </span>
                         <span className="telemetry-pill">
+                            <span className="telemetry-lbl">Drift:</span>
+                            <span className="telemetry-val">{computed.drift.toFixed(3)}</span>
+                        </span>
+                        <span className="telemetry-pill">
+                            <span className="telemetry-lbl">Stall Evidence:</span>
+                            <span className="telemetry-val">{computed.stall_evidence.toFixed(3)}</span>
+                        </span>
+                        <span className="telemetry-pill">
                             <span className="telemetry-lbl">Critique Alignment:</span>
                             <span className="telemetry-val">{(report.critique_alignment.value * 100).toFixed(0)}%</span>
                         </span>
                     </div>
                 </div>
 
-                {/* Right Panel: Current-Window Forecast (Vertical bars type probabilities) */}
-                <div className="bsr-side-panel bsr-forecast-panel" style={{ border: '1px solid rgba(255,255,255,0.1)', padding: '16px' }}>
+                {/* Right Panel: Critique Alignment & Window Summary */}
+                <div className="bsr-side-panel bsr-alignment-panel" style={{ border: '1px solid rgba(255,255,255,0.1)', padding: '16px' }}>
                     <div className="bsr-panel-header">
-                        <span className="bsr-panel-title">Current-Window Forecast</span>
+                        <span className="bsr-panel-title">Window Outcome: {computed.window_outcome}</span>
                         {records.length > 1 && (
                             <div className="bsr-update-tabs">
                                 {records.map((r, idx) => (
@@ -836,44 +812,10 @@ const BranchVisualBsr: React.FC<{
                         )}
                     </div>
 
-                    {nextPred ? (
-                        <>
-                            {/* Simplified Probabilities Strip instead of vertical bars */}
-                            <div className="bsr-forecast-probability-strip">
-                                <span style={{ color: '#10b981', fontWeight: 600 }}>{(pProg * 100).toFixed(0)}% PROGRESS</span>
-                                <span style={{ color: '#f59e0b', fontWeight: 600 }}>{(pStall * 100).toFixed(0)}% STALL</span>
-                                <span style={{ color: '#ef4444', fontWeight: 600 }}>{(pRegr * 100).toFixed(0)}% REGRESS</span>
-                            </div>
-
-                            {/* Forecasting Visual Dynamic (lastEvaluatedIter + 1, ..., + 5, G) */}
-                            {(() => {
-                                const lastEvaluatedIter = iterOrder.length > 0 ? iterOrder[iterOrder.length - 1] : 0;
-                                return (
-                                    <div style={{ marginTop: '20px', marginBottom: '24px', padding: '0 8px', width: '100%' }}>
-                                        <svg width="100%" height="50" viewBox="0 0 400 50" preserveAspectRatio="xMidYMid meet" style={{ overflow: 'visible' }}>
-                                            <line x1="20" y1="16" x2="385" y2="16" stroke="#4b5563" strokeWidth="1.5" />
-                                            <path d="M 378 10 L 388 16 L 378 22" fill="none" stroke="#4b5563" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                                            {[1, 2, 3, 4, 5].map((step, i) => {
-                                                const globalIter = lastEvaluatedIter + step;
-                                                const color = forecastColors[i] || { fill: '#d1fae5', stroke: '#059669', gFill: '#047857' };
-                                                return (
-                                                    <g key={step} transform={`translate(${i * 62 + 20}, 16)`}>
-                                                        <circle cx="0" cy="0" r="10" fill={color.fill} stroke={color.stroke} strokeWidth="1.5" />
-                                                        <text x="0" y="28" fontSize="12" textAnchor="middle" fill="var(--text-secondary-color)">{globalIter}</text>
-                                                    </g>
-                                                );
-                                            })}
-                                            <g transform={`translate(${5 * 62 + 20}, 16)`}>
-                                                <circle cx="0" cy="0" r="10" fill="#047857" stroke="#047857" strokeWidth="1.5" />
-                                                <text x="0" y="28" fontSize="12" textAnchor="middle" fill="var(--text-secondary-color)">G</text>
-                                            </g>
-                                        </svg>
-                                    </div>
-                                );
-                            })()}
-                        </>
-                    ) : (
-                        <div className="bsr-forecast-empty">No probabilistic forecast issued for this window.</div>
+                    {report.critique_alignment?.reason && (
+                        <div className="bsr-alignment-note" style={{ textAlign: 'left', marginTop: '12px' }}>
+                            <strong>Critique Alignment ({report.critique_alignment.value.toFixed(2)}):</strong> {report.critique_alignment.reason}
+                        </div>
                     )}
                 </div>
             </div>
@@ -1221,19 +1163,19 @@ const formatCompactStrategyId = (id: string): string => {
     return number ? `S${number}` : formatStrategyId(id);
 };
 
-type HypothesisRoundView = {
+type ModuleRoundView = {
     key: string;
     label: string;
     roundNumber?: number;
-    hypotheses: DeepthinkHypothesisData[];
+    modules: DeepthinkModuleData[];
     packet: string;
 };
 
-function hypothesisRoundLabel(roundNumber: number): string {
+function moduleRoundLabel(roundNumber: number): string {
     return `Heartbeat ${roundNumber}`;
 }
 
-function buildHypothesisRoundViews(process: DeepthinkPipelineState): HypothesisRoundView[] {
+function buildModuleRoundViews(process: DeepthinkPipelineState): ModuleRoundView[] {
     const roundNumberSet = new Set<number>();
 
     // 1. Collect all round numbers from heartbeats
@@ -1241,14 +1183,14 @@ function buildHypothesisRoundViews(process: DeepthinkPipelineState): HypothesisR
         if (h.heartbeat_no) roundNumberSet.add(h.heartbeat_no);
     });
 
-    // 2. Collect from hypothesisRounds
-    (process.hypothesisRounds || []).forEach(r => {
+    // 2. Collect from moduleRounds
+    (process.moduleRounds || []).forEach(r => {
         if (r.roundNumber) roundNumberSet.add(r.roundNumber);
     });
 
-    // 3. Collect from hypotheses
-    (process.hypotheses || []).forEach(h => {
-        if (h.roundNumber) roundNumberSet.add(h.roundNumber);
+    // 3. Collect from modules
+    (process.modules || []).forEach(m => {
+        if (m.roundNumber) roundNumberSet.add(m.roundNumber);
     });
 
     // 4. Collect from heartbeatNo
@@ -1267,36 +1209,36 @@ function buildHypothesisRoundViews(process: DeepthinkPipelineState): HypothesisR
     });
 
     if (roundNumberSet.size === 0) {
-        const roundNumber = process.hypotheses[0]?.roundNumber || 1;
+        const roundNumber = process.modules[0]?.roundNumber || 1;
         return [{
             key: `round-${roundNumber}`,
-            label: hypothesisRoundLabel(roundNumber),
+            label: moduleRoundLabel(roundNumber),
             roundNumber,
-            hypotheses: process.hypotheses || [],
+            modules: process.modules || [],
             packet: process.knowledgePacket || '',
         }];
     }
 
     const sortedRounds = Array.from(roundNumberSet).sort((a, b) => a - b);
-    const history = process.hypothesisHistory || [];
+    const history = process.modulesHistory || [];
 
     return sortedRounds.map((roundNumber) => {
         const hbBlock = (process.heartbeats || []).find(h => h.heartbeat_no === roundNumber);
-        const roundSnap = (process.hypothesisRounds || []).find(r => r.roundNumber === roundNumber);
+        const roundSnap = (process.moduleRounds || []).find(r => r.roundNumber === roundNumber);
 
-        let hypotheses: DeepthinkHypothesisData[] = [];
-        if (hbBlock?.hypotheses && hbBlock.hypotheses.length > 0) {
-            hypotheses = hbBlock.hypotheses;
-        } else if (roundSnap?.hypotheses && roundSnap.hypotheses.length > 0) {
-            hypotheses = roundSnap.hypotheses;
+        let modules: DeepthinkModuleData[] = [];
+        if (hbBlock?.modules && hbBlock.modules.length > 0) {
+            modules = hbBlock.modules;
+        } else if (roundSnap?.modules && roundSnap.modules.length > 0) {
+            modules = roundSnap.modules;
         } else if (history[roundNumber - 1]?.length) {
-            hypotheses = history[roundNumber - 1];
+            modules = history[roundNumber - 1];
         } else {
-            const filteredLive = (process.hypotheses || []).filter(h => h.roundNumber === roundNumber);
+            const filteredLive = (process.modules || []).filter(m => m.roundNumber === roundNumber);
             if (filteredLive.length > 0) {
-                hypotheses = filteredLive;
+                modules = filteredLive;
             } else if (roundNumber === (process.heartbeatNo || sortedRounds[sortedRounds.length - 1])) {
-                hypotheses = process.hypotheses || [];
+                modules = process.modules || [];
             }
         }
 
@@ -1304,39 +1246,39 @@ function buildHypothesisRoundViews(process: DeepthinkPipelineState): HypothesisR
 
         return {
             key: `round-${roundNumber}`,
-            label: hypothesisRoundLabel(roundNumber),
+            label: moduleRoundLabel(roundNumber),
             roundNumber,
-            hypotheses,
+            modules,
             packet,
         };
     });
 }
 
 // Curated Context Tab
-export const HypothesisExplorerTab: React.FC<{
+export const ModulesExplorerTab: React.FC<{
     process: DeepthinkPipelineState;
-    onViewArgument: (hypothesisId: string) => void;
+    onViewArgument: (moduleId: string) => void;
 }> = ({ process, onViewArgument }) => {
-    const roundViews = buildHypothesisRoundViews(process);
+    const roundViews = buildModuleRoundViews(process);
     const [activeRoundIndex, setActiveRoundIndex] = useState(Math.max(0, roundViews.length - 1));
     useEffect(() => {
         setActiveRoundIndex(Math.max(0, roundViews.length - 1));
     }, [roundViews.length]);
     const activeRound = roundViews[Math.min(activeRoundIndex, roundViews.length - 1)] || roundViews[0];
-    const activeHypotheses = activeRound?.hypotheses || [];
-    const hypothesesEnabled = process.runConfig?.hypothesisCount !== 0;
+    const activeModules = activeRound?.modules || [];
+    const modulesEnabled = process.runConfig?.modulesCount !== 0;
 
     const currentHeartbeatNo = activeRound?.roundNumber ?? (activeRoundIndex + 1);
 
     return (
-        <div className="deepthink-hypothesis-explorer">
-            <div className="hypothesis-round-layout">
-                <div className="hypothesis-round-pills" aria-label="Hypothesis heartbeat rounds">
+        <div className="deepthink-modules-explorer">
+            <div className="modules-round-layout">
+                <div className="modules-round-pills" aria-label="Modules heartbeat rounds">
                     {roundViews.map((round, index) => (
                         <button
                             key={round.key}
                             type="button"
-                            className={`hypothesis-round-pill${index === activeRoundIndex ? ' active' : ''}`}
+                            className={`modules-round-pill${index === activeRoundIndex ? ' active' : ''}`}
                             onClick={() => setActiveRoundIndex(index)}
                         >
                             {round.label}
@@ -1344,58 +1286,58 @@ export const HypothesisExplorerTab: React.FC<{
                     ))}
                 </div>
 
-                <div className="hypothesis-round-content">
+                <div className="modules-round-content">
                     {/* Synchronized Heartbeat DOS (shown inside each heartbeat) */}
-                    {hypothesesEnabled && (
+                    {modulesEnabled && (
                         <DosSynthesisCard
                             process={process}
                             heartbeatNo={currentHeartbeatNo}
                         />
                     )}
 
-                    <div className="curated-context-columns has-hypotheses">
-                        {hypothesesEnabled && (
-                            <section className="curated-context-hypotheses">
-                                <div className="curated-hypotheses-header">
-                                    <h3>Hypotheses</h3>
+                    <div className="curated-context-columns has-modules">
+                        {modulesEnabled && (
+                            <section className="curated-context-modules">
+                                <div className="curated-modules-header">
+                                    <h3>Modules</h3>
                                 </div>
 
-                                {activeHypotheses.length === 0 ? (
+                                {activeModules.length === 0 ? (
                                     <div className="status-message">
-                                        {process.hypothesisGenStatus === 'processing'
-                                            ? `Generating hypotheses for Heartbeat ${currentHeartbeatNo}…`
-                                            : `No hypotheses recorded for Heartbeat ${currentHeartbeatNo}.`}
+                                        {process.modulesGenStatus === 'processing'
+                                            ? `Generating modules for Heartbeat ${currentHeartbeatNo}…`
+                                            : `No modules recorded for Heartbeat ${currentHeartbeatNo}.`}
                                     </div>
                                 ) : (
-                                    <div className="agent-grid hypothesis-agent-grid">
-                                        {activeHypotheses.map((h, i) => (
-                                            <div key={h.id} className="agent-card">
-                                                <div className="agent-header hypothesis-card-header">
-                                                    <h4 className="agent-title">Hypothesis {i + 1}</h4>
+                                    <div className="agent-grid modules-agent-grid">
+                                        {activeModules.map((m, i) => (
+                                            <div key={m.id} className="agent-card">
+                                                <div className="agent-header modules-card-header">
+                                                    <h4 className="agent-title">Module {i + 1}</h4>
                                                     <div
-                                                        className="hypothesis-target-circles"
+                                                        className="modules-target-circles"
                                                         role="group"
-                                                        aria-label={`Targets ${h.targetBranchIds?.length ? h.targetBranchIds.map(formatCompactStrategyId).join(', ') : 'all branches'}`}
+                                                        aria-label={`Targets ${m.targetBranchIds?.length ? m.targetBranchIds.map(formatCompactStrategyId).join(', ') : 'all branches'}`}
                                                     >
-                                                        {h.targetBranchIds && h.targetBranchIds.length > 0
-                                                            ? h.targetBranchIds.map(id => (
-                                                                <span key={id} className="hypothesis-target-circle">{formatCompactStrategyId(id)}</span>
+                                                        {m.targetBranchIds && m.targetBranchIds.length > 0
+                                                            ? m.targetBranchIds.map(id => (
+                                                                <span key={id} className="modules-target-circle">{formatCompactStrategyId(id)}</span>
                                                             ))
-                                                            : <span className="hypothesis-target-circle">ALL</span>}
+                                                            : <span className="modules-target-circle">ALL</span>}
                                                     </div>
                                                 </div>
                                                 <div className="agent-results">
-                                                    <div className="hypothesis-text-container">
+                                                    <div className="modules-text-container">
                                                         <MathHTML
-                                                            content={h.hypothesisText || 'No hypothesis text'}
-                                                            className="hypothesis-text"
+                                                            content={m.moduleText || 'No module text'}
+                                                            className="modules-text"
                                                         />
                                                     </div>
-                                                    {hypothesisTesterDisplay(h) && (
+                                                    {modulesTesterDisplay(m) && (
                                                         <button
                                                             type="button"
                                                             className="view-argument-button"
-                                                            onClick={() => onViewArgument(h.id)}
+                                                            onClick={() => onViewArgument(m.id)}
                                                         >
                                                             <MIcon name="article" /> View The Argument
                                                         </button>

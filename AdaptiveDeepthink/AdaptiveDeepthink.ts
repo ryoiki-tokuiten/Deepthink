@@ -54,9 +54,9 @@ const listeners = new Set<(state: AdaptiveDeepthinkStoreState | null) => void>()
 const ROLE_MODEL_MAP: Record<AdaptiveAgentRole, keyof CustomizablePromptsAdaptiveDeepthink> = {
     'strategy-generator': 'model_strategyGeneration',
     'strategy-proximity': 'model_strategyGeneration',
-    'hypothesis-generator': 'model_hypothesisGeneration',
-    'hypothesis-proximity': 'model_hypothesisGeneration',
-    'hypothesis-testing': 'model_hypothesisTesting',
+    'modules-generator': 'model_modulesGeneration',
+    'modules-impact-review': 'model_modulesGeneration',
+    'modules-testing': 'model_modulesTesting',
     execution: 'model_execution',
     critique: 'model_solutionCritique',
     correction: 'model_corrector',
@@ -92,8 +92,8 @@ function newMsgId(prefix = 'msg'): string {
 function formatToolCallDisplay(toolCall: AdaptiveDeepthinkToolCall): string {
     switch (toolCall.type) {
         case 'generate_strategies': return `generate_strategies(${toolCall.count})`;
-        case 'generate_hypothesis': return `generate_hypothesis(${toolCall.count})`;
-        case 'test_hypothesis': return `test_hypothesis(${toolCall.hypothesisIds.length})`;
+        case 'generate_modules': return `generate_modules(${toolCall.count})`;
+        case 'test_modules': return `test_modules(${toolCall.moduleIds.length})`;
         case 'execute': return `execute(${toolCall.executions.length})`;
         case 'save': return `save(${toolCall.strategyIds.join(', ')})`;
         case 'finalize_pass_and_execute': return `finalize_pass_and_execute(${toolCall.executions.length})`;
@@ -160,13 +160,13 @@ function createInitialDeepthinkPipelineState(id: string, question: string): Deep
         activeTabId: 'live',
         activeStrategyTab: 0,
         initialStrategies: [],
-        hypotheses: [],
+        modules: [],
         solutionCritiques: [],
-        hypothesisExplorerComplete: false,
+        modulesExplorerComplete: false,
         knowledgePacket: '',
         finalJudgingStatus: 'pending',
         isStopRequested: false,
-        hypothesisGenStatus: 'pending',
+        modulesGenStatus: 'pending',
         solutionCritiquesStatus: 'pending',
         liveEvents: [],
     };
@@ -175,8 +175,8 @@ function createInitialDeepthinkPipelineState(id: string, question: string): Deep
 function createDeepthinkPrompts(prompts: CustomizablePromptsAdaptiveDeepthink): AdaptiveDeepthinkToolPrompts {
     return {
         sys_deepthink_initialStrategy: prompts.sys_adaptiveDeepthink_strategyGeneration,
-        sys_deepthink_hypothesisGeneration: prompts.sys_adaptiveDeepthink_hypothesisGeneration,
-        sys_deepthink_hypothesisTester: prompts.sys_adaptiveDeepthink_hypothesisTesting,
+        sys_deepthink_modulesGeneration: prompts.sys_adaptiveDeepthink_modulesGeneration,
+        sys_deepthink_modulesTester: prompts.sys_adaptiveDeepthink_modulesTesting,
         sys_deepthink_solutionAttempt: prompts.sys_adaptiveDeepthink_execution,
         sys_deepthink_solutionCritique: prompts.sys_adaptiveDeepthink_solutionCritique,
         sys_deepthink_solutionCorrection: prompts.sys_adaptiveDeepthink_corrector,
@@ -393,8 +393,8 @@ function normalizeImportedAdaptiveState(state: AdaptiveDeepthinkStoreState): Ada
     const question = state.coreState?.question || '';
     const coreState = state.coreState ?? createAdaptiveDeepthinkState(question);
     coreState.strategies = restoreMap(coreState.strategies);
-    coreState.hypotheses = restoreMap(coreState.hypotheses);
-    coreState.hypothesisTestings = restoreMap(coreState.hypothesisTestings);
+    coreState.modules = restoreMap(coreState.modules);
+    coreState.moduleTestings = restoreMap(coreState.moduleTestings);
     coreState.executions = restoreMap(coreState.executions);
     coreState.passes = new Map(Array.from(restoreMap<AdaptivePassRecord>(coreState.passes).entries()).map(([key, value]) => [Number(key), value]));
     coreState.artifacts = restoreMap(coreState.artifacts);

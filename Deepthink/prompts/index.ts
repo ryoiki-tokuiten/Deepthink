@@ -9,8 +9,8 @@
 
 import { deepthinkSharedDocument } from './sharedDocument.ts';
 import { strategyGeneratorPrompt } from './strategyGenerator.ts';
-import { hypothesisGeneratorPrompt } from './hypothesisGenerator.ts';
-import { hypothesisTesterPrompt } from './hypothesisTester.ts';
+import { modulesGeneratorPrompt } from './modulesGenerator.ts';
+import { modulesTesterPrompt } from './modulesTester.ts';
 import { solutionAttemptPrompt } from './solutionAttempt.ts';
 import { solutionCritiquePrompt } from './solutionCritique.ts';
 import { solutionCorrectionPrompt } from './solutionCorrection.ts';
@@ -21,8 +21,8 @@ import { finalJudgePrompt } from './finalJudge.ts';
 
 export interface CustomizablePromptsDeepthink {
   sys_deepthink_initialStrategy: string;
-  sys_deepthink_hypothesisGeneration: string;
-  sys_deepthink_hypothesisTester: string;
+  sys_deepthink_modulesGeneration: string;
+  sys_deepthink_modulesTester: string;
   sys_deepthink_solutionAttempt: string;
   sys_deepthink_solutionCritique: string;
   sys_deepthink_solutionCorrection: string;
@@ -32,8 +32,8 @@ export interface CustomizablePromptsDeepthink {
   sys_deepthink_finalJudge: string;
 
   model_initialStrategy?: string | null;
-  model_hypothesisGeneration?: string | null;
-  model_hypothesisTester?: string | null;
+  model_modulesGeneration?: string | null;
+  model_modulesTester?: string | null;
   model_solutionAttempt?: string | null;
   model_solutionCritique?: string | null;
   model_solutionCorrection?: string | null;
@@ -46,8 +46,8 @@ export interface CustomizablePromptsDeepthink {
 export function createDefaultCustomPromptsDeepthink(): CustomizablePromptsDeepthink {
   return {
     sys_deepthink_initialStrategy: strategyGeneratorPrompt,
-    sys_deepthink_hypothesisGeneration: hypothesisGeneratorPrompt,
-    sys_deepthink_hypothesisTester: hypothesisTesterPrompt,
+    sys_deepthink_modulesGeneration: modulesGeneratorPrompt,
+    sys_deepthink_modulesTester: modulesTesterPrompt,
     sys_deepthink_solutionAttempt: solutionAttemptPrompt,
     sys_deepthink_solutionCritique: solutionCritiquePrompt,
     sys_deepthink_solutionCorrection: solutionCorrectionPrompt,
@@ -61,8 +61,8 @@ export function createDefaultCustomPromptsDeepthink(): CustomizablePromptsDeepth
 export {
   deepthinkSharedDocument,
   strategyGeneratorPrompt,
-  hypothesisGeneratorPrompt,
-  hypothesisTesterPrompt,
+  modulesGeneratorPrompt,
+  modulesTesterPrompt,
   solutionAttemptPrompt,
   solutionCritiquePrompt,
   solutionCorrectionPrompt,

@@ -55,8 +55,8 @@ export interface ExportedConfig {
     modelParameters: {
         strategiesCount: number;
         strategyProximityLoops: number;
-        hypothesisCount: number;
-        hypothesisProximityLoops: number;
+        modulesCount: number;
+        modulesImpactReviewLoops: number;
         deepthinkDepth: number;
         isolateBranches: boolean;
         deepthinkCodeExecutionEnabled: boolean;

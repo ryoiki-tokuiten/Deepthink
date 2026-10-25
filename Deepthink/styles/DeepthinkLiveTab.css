@@ -198,7 +198,7 @@
     --agent-color: var(--accent-purple, #7c4af0);
     --agent-color-rgb: var(--accent-purple-rgb, 124, 74, 240);
 }
-.category-hypothesis {
+.category-modules {
     --agent-color: var(--accent-blue, #00d2ff);
     --agent-color-rgb: var(--accent-blue-rgb, 0, 210, 255);
 }

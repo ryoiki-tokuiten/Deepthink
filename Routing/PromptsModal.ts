@@ -254,8 +254,8 @@ export class PromptsModal {
                     prompts: ["deepthink-solution-attempt", "deepthink-solution-critique", "deepthink-solution-correction"]
                 },
                 {
-                    groupTitle: "3. HYPOTHESIS EXPLORATION",
-                    prompts: ["deepthink-hypothesis-generation", "deepthink-hypothesis-tester"]
+                    groupTitle: "3. MODULES EXPLORATION",
+                    prompts: ["deepthink-modules-generation", "deepthink-modules-tester"]
                 },
                 {
                     groupTitle: "4. EVALUATION & JUDGMENT",
@@ -268,8 +268,8 @@ export class PromptsModal {
                     prompts: ["adaptive-main"]
                 },
                 {
-                    groupTitle: "2. STRATEGY & HYPOTHESIS",
-                    prompts: ["adaptive-strategy-gen", "adaptive-hypothesis-gen", "adaptive-hypothesis-test"]
+                    groupTitle: "2. STRATEGY & MODULES",
+                    prompts: ["adaptive-strategy-gen", "adaptive-modules-gen", "adaptive-modules-test"]
                 },
                 {
                     groupTitle: "3. EXECUTION & CORRECTION",

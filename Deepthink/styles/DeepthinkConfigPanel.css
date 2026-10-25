@@ -608,11 +608,11 @@
 }
 
 /* ==========================================================================
-   Hypothesis Controls System
+   Modules Controls System
    ========================================================================== */
 
 .deepthink-config-scroll-container {
-    & .hypothesis-controls {
+    & .modules-controls {
         flex: 0 0 auto;
         padding: 0 16px 16px 16px;
         margin-top: 8px;
@@ -643,14 +643,14 @@
             }
         }
 
-        & #dt-hypothesis-value {
+        & #dt-modules-value {
             color: var(--accent-blue);
             font-weight: 600;
         }
     }
 }
 
-.hypothesis-slider-container {
+.modules-slider-container {
     padding-top: 0;
     margin-top: 0;
     border-top: 1px solid rgba(var(--dt-blue-rgb), 0.08);
@@ -1194,7 +1194,7 @@ button.token-summary-item {
 }
 
 /* ==========================================================================
-   Hypothesis Mode Switching Buttons
+   Modules Mode Switching Buttons
    ========================================================================== */
 
 
@@ -1786,7 +1786,7 @@ body.light-mode {
 
         & :is(.deepthink-method-card,
             .strategy-execution-card,
-            .hypothesis-controls,
+            .modules-controls,
             .information-packet-window,
             .bsr-parameters-window,
             .evolution-filter-options-container,
@@ -2711,6 +2711,7 @@ body.light-mode .figure4-visualization > text.ts { fill: #3d3d3a; }
     font-weight: 450;
     color: rgba(254, 226, 226, 0.94);
     letter-spacing: -0.005em;
+    text-align: left;
 }
 
 body.light-mode .dt-config-warning-overlay {

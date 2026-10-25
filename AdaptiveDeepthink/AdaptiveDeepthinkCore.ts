@@ -2,7 +2,7 @@
  * Adaptive Deepthink's pass-oriented orchestration tools.
  *
  * This mode intentionally reuses the independent Deepthink agents. The only
- * orchestration-specific behaviour lives here: strategy/hypothesis proximity
+ * orchestration-specific behaviour lives here: strategy proximity / modules impact review
  * loops, pass compaction, saved branch immutability, and branch rollback.
  */
 
@@ -12,12 +12,12 @@ import { nanoid } from 'nanoid';
 import {
     correctedSolutionsAgent,
     executeStrategiesAgent,
-    generateHypothesesAgent,
+    generateModulesAgent,
     generateStrategiesAgent,
-    hypothesesProximityAgent,
+    modulesImpactReviewAgent,
     solutionCritiqueAgent,
     strategiesProximityAgent,
-    testHypothesesAgent,
+    testModulesAgent,
     type AgentExecutionContext,
 } from '../Deepthink/core/agents';
 import {
@@ -26,17 +26,12 @@ import {
     type ProximityTurn,
 } from '../Deepthink/core/proximity';
 import type {
-    DeepthinkHypothesisData,
+    DeepthinkModuleData,
     DeepthinkLiveEvent,
     DeepthinkMainStrategyData,
     DeepthinkPipelineState,
     DeepthinkSolutionCritiqueData,
 } from '../Deepthink/core/deepthinkCore';
-import {
-    buildDeepthinkSandboxRepositoryAccess,
-    DEEPTHINK_SANDBOX_DIRECTORY_POLICY,
-    type DeepthinkSandboxRole,
-} from '../Deepthink/core/sandboxAccess';
 import {
     ensureDeepthinkResultsRepository,
     expandInlineReferenceMarkers,
@@ -59,17 +54,17 @@ import type { CallAIOptions } from '../Routing';
 export type AdaptiveAgentRole =
     | 'strategy-generator'
     | 'strategy-proximity'
-    | 'hypothesis-generator'
-    | 'hypothesis-proximity'
-    | 'hypothesis-testing'
+    | 'modules-generator'
+    | 'modules-impact-review'
+    | 'modules-testing'
     | 'execution'
     | 'critique'
     | 'correction';
 
 export type AdaptiveDeepthinkToolCall =
     | { type: 'generate_strategies'; count: number; proximityLoops?: number; specialContext?: string; replaceStrategyIds?: string[] }
-    | { type: 'generate_hypothesis'; count: number; proximityLoops?: number; specialContext?: string }
-    | { type: 'test_hypothesis'; hypothesisIds: string[] }
+    | { type: 'generate_modules'; count: number; impactReviewLoops?: number; specialContext?: string }
+    | { type: 'test_modules'; moduleIds: string[] }
     | { type: 'execute'; executions: AdaptiveExecutionRequest[]; specialContext?: string }
     | { type: 'save'; strategyIds: string[] }
     | { type: 'finalize_pass_and_execute'; executions: AdaptiveExecutionRequest[]; specialContext?: string }
@@ -79,15 +74,15 @@ export type AdaptiveDeepthinkToolCall =
 
 interface AdaptiveExecutionRequest {
     strategyId: string;
-    hypothesisIds: string[];
+    moduleIds: string[];
     /** Branch-local instructions. Never forwarded to critique or correction. */
     specialContext?: string;
 }
 
 export interface AdaptiveDeepthinkToolPrompts {
     sys_deepthink_initialStrategy: string;
-    sys_deepthink_hypothesisGeneration: string;
-    sys_deepthink_hypothesisTester: string;
+    sys_deepthink_modulesGeneration: string;
+    sys_deepthink_modulesTester: string;
     sys_deepthink_solutionAttempt: string;
     sys_deepthink_solutionCritique: string;
     sys_deepthink_solutionCorrection: string;
@@ -103,14 +98,14 @@ interface AdaptiveStrategy {
     preCorrectionSnapshot?: { commit: string; passNumber: number };
 }
 
-interface AdaptiveHypothesis {
+interface AdaptiveModule {
     id: string;
     text: string;
     passNumber: number;
 }
 
-interface AdaptiveHypothesisTesting {
-    hypothesis: string;
+interface AdaptiveModuleTesting {
+    moduleText: string;
     testing: string;
     passNumber: number;
 }
@@ -120,7 +115,7 @@ interface AdaptiveExecutionRecord {
     passNumber: number;
     strategyId: string;
     strategy: string;
-    hypothesisIds: string[];
+    moduleIds: string[];
     execution: string;
     critique: string;
     correction: string;
@@ -145,13 +140,13 @@ export interface AdaptiveDeepthinkState {
     error?: string;
     passNumber: number;
     strategies: Map<string, AdaptiveStrategy>;
-    hypotheses: Map<string, AdaptiveHypothesis>;
-    hypothesisTestings: Map<string, AdaptiveHypothesisTesting>;
+    modules: Map<string, AdaptiveModule>;
+    moduleTestings: Map<string, AdaptiveModuleTesting>;
     executions: Map<string, AdaptiveExecutionRecord>;
     passes: Map<number, AdaptivePassRecord>;
     artifacts: Map<string, AdaptiveArtifact>;
     strategyGenerationHistory: ProximityTurn[];
-    hypothesisGenerationHistory: ProximityTurn[];
+    modulesGenerationHistory: ProximityTurn[];
     compactedContextLinks: string[];
     compactionBoundary?: number;
     selectedSolution?: string;
@@ -219,32 +214,13 @@ function roleLabel(role: AdaptiveAgentRole): string {
     return {
         'strategy-generator': 'Strategy Generator',
         'strategy-proximity': 'Strategies Proximity',
-        'hypothesis-generator': 'Hypothesis Generator',
-        'hypothesis-proximity': 'Hypothesis Proximity',
-        'hypothesis-testing': 'Test Hypothesis',
+        'modules-generator': 'Modules Generator',
+        'modules-impact-review': 'Modules Impact Reviewer',
+        'modules-testing': 'Modules Testing',
         execution: 'Execution',
         critique: 'Critique',
         correction: 'Correction',
     }[role];
-}
-
-function sandboxRole(role: AdaptiveAgentRole): DeepthinkSandboxRole {
-    switch (role) {
-        case 'strategy-generator':
-        case 'strategy-proximity':
-            return 'Main Strategy Generation';
-        case 'hypothesis-generator':
-        case 'hypothesis-proximity':
-            return 'Hypothesis Generation';
-        case 'hypothesis-testing':
-            return 'Hypothesis Testing';
-        case 'execution':
-            return 'Solution Attempt';
-        case 'critique':
-            return 'Solution Critique';
-        case 'correction':
-            return 'Solution Correction';
-    }
 }
 
 function safeSegment(value: string): string {
@@ -276,44 +252,41 @@ function artifactOutputPath(state: AdaptiveDeepthinkState, strategyId: string | 
 }
 
 function strategyDirectory(strategy: AdaptiveStrategy): string {
-    return DEEPTHINK_SANDBOX_DIRECTORY_POLICY.strategyDirectory(strategy.slotIndex);
+    return `Strategy-${strategy.slotIndex + 1}`;
 }
 
-function hypothesisLabel(id: string): string {
-    return id.replace(/^H/i, '') || '1';
+function moduleLabel(id: string): string {
+    return id.replace(/^M/i, '') || '1';
 }
 
 function repositoryAccess(
     state: AdaptiveDeepthinkState,
     role: AdaptiveAgentRole,
     strategy?: AdaptiveStrategy,
-    hypothesisId?: string,
-    selectedHypothesisIds: string[] = []
+    moduleId?: string,
+    _selectedModuleIds: string[] = []
 ): SandboxRepositoryAccess {
-    const sandboxAgentRole = sandboxRole(role);
-    if (role === 'hypothesis-testing') {
-        return buildDeepthinkSandboxRepositoryAccess({
+    if (role === 'modules-testing') {
+        const label = moduleLabel(moduleId || '1');
+        return {
             repositoryId: state.id,
-            role: sandboxAgentRole,
-            hypothesisLabel: hypothesisLabel(hypothesisId || '1'),
-            hypothesisRoundNumber: state.passNumber,
-        });
+            agentDirectory: `Modules/Heartbeat-${state.passNumber}/Module-${label}`,
+            fullRepositoryRead: true,
+        };
     }
 
     if (strategy) {
-        return buildDeepthinkSandboxRepositoryAccess({
+        return {
             repositoryId: state.id,
-            role: sandboxAgentRole,
-            strategySlotIndex: strategy.slotIndex,
-            selectedHypothesisLabels: selectedHypothesisIds.map(hypothesisLabel),
-            selectedHypothesisRoundNumber: state.passNumber,
-            peerStrategySlotIndexes: role === 'correction'
-                ? Array.from(state.strategies.values()).filter(candidate => candidate.id !== strategy.id).map(candidate => candidate.slotIndex)
-                : [],
-        });
+            agentDirectory: strategyDirectory(strategy),
+            fullRepositoryRead: true,
+        };
     }
 
-    return buildDeepthinkSandboxRepositoryAccess({ repositoryId: state.id, role: sandboxAgentRole });
+    return {
+        repositoryId: state.id,
+        fullRepositoryRead: true,
+    };
 }
 
 function syncAgentContext(
@@ -322,14 +295,14 @@ function syncAgentContext(
     role: AdaptiveAgentRole,
     systemPrompt: string,
     strategy?: AdaptiveStrategy,
-    hypothesisId?: string,
-    selectedHypothesisIds: string[] = [],
+    moduleId?: string,
+    selectedModuleIds: string[] = [],
     executionGroupId?: string,
     executionGroupName?: string
 ): AgentExecutionContext {
     const modelName = context.getModelFor(role);
     const agentName = roleLabel(role);
-    const access = repositoryAccess(state, role, strategy, hypothesisId, selectedHypothesisIds);
+    const access = repositoryAccess(state, role, strategy, moduleId, selectedModuleIds);
     const strategyId = strategy?.id;
 
     return {
@@ -403,7 +376,7 @@ function syncAgentContext(
                 }
                 const result = await runSandboxToolAgent({
                     agentName,
-                    sessionId: `adaptive-${safeSegment(state.id)}-${safeSegment(agentName)}-${safeSegment(strategyId || hypothesisId || `pass-${state.passNumber}`)}`,
+                    sessionId: `adaptive-${safeSegment(state.id)}-${safeSegment(agentName)}-${safeSegment(strategyId || moduleId || `pass-${state.passNumber}`)}`,
                     messages: [new HumanMessage(promptText)],
                     systemPrompt,
                     modelName,
@@ -682,15 +655,15 @@ async function generateStrategyBatch(
     return `<Strategies pass="${state.passNumber}">\n${assigned.map(id => `<Strategy id="${id}">\n${state.strategies.get(id)?.text}\n</Strategy>`).join('\n\n')}\n</Strategies>`;
 }
 
-async function generateHypothesisBatch(
+async function generateModulesBatch(
     state: AdaptiveDeepthinkState,
-    toolCall: Extract<AdaptiveDeepthinkToolCall, { type: 'generate_hypothesis' }>,
+    toolCall: Extract<AdaptiveDeepthinkToolCall, { type: 'generate_modules' }>,
     context: AdaptiveDeepthinkToolExecutionContext,
     prompts: AdaptiveDeepthinkToolPrompts,
     images: Array<{ base64: string; mimeType: string }>
 ): Promise<string> {
     if (!Array.from(state.executions.values()).some(record => !state.strategies.get(record.strategyId)?.saved)) {
-        return '[ERROR: Hypotheses must be critique-driven. Execute and critique at least one strategy before generating hypotheses.]';
+        return '[ERROR: Modules must be critique-driven. Execute and critique at least one strategy before generating modules.]';
     }
     const count = Math.min(toolCall.count, MAX_BATCH_SIZE);
     const critiquePacket = recentExecutionCritiques(state);
@@ -699,126 +672,126 @@ async function generateHypothesisBatch(
         '<Latest Execution-Critique Packet>',
         critiquePacket,
         '</Latest Execution-Critique Packet>',
-        'Generate critique-driven hypotheses only. Do not inspect strategies, prior hypothesis packets, or correction output.',
+        'Generate critique-driven modules only. Do not inspect strategies, prior module packets, or correction output.',
     ].filter(Boolean).join('\n\n');
     const executionGroupId = `group-${nanoid(8)}`;
-    const executionGroupName = 'Hypothesis Generation Loop';
-    state.hypothesisGenerationHistory = normalizeProximityHistory(state.hypothesisGenerationHistory);
-    const generatorContext = syncAgentContext(state, context, 'hypothesis-generator', prompts.sys_deepthink_hypothesisGeneration, undefined, undefined, [], executionGroupId, executionGroupName);
-    const proximityContext = syncAgentContext(state, context, 'hypothesis-proximity', prompts.sys_deepthink_hypothesisGeneration, undefined, undefined, [], executionGroupId, executionGroupName);
+    const executionGroupName = 'Modules Generation Loop';
+    state.modulesGenerationHistory = normalizeProximityHistory(state.modulesGenerationHistory);
+    const generatorContext = syncAgentContext(state, context, 'modules-generator', prompts.sys_deepthink_modulesGeneration, undefined, undefined, [], executionGroupId, executionGroupName);
+    const impactReviewContext = syncAgentContext(state, context, 'modules-impact-review', prompts.sys_deepthink_modulesGeneration, undefined, undefined, [], executionGroupId, executionGroupName);
     const result = await refineWithProximity<string>({
-        loops: toolCall.proximityLoops ?? DEFAULT_PROXIMITY_LOOPS,
-        history: state.hypothesisGenerationHistory,
+        loops: toolCall.impactReviewLoops ?? DEFAULT_PROXIMITY_LOOPS,
+        history: state.modulesGenerationHistory,
         version: state.passNumber,
         generate: async (conversationHistory, revision) => {
             const generationContext = [
                 baseContext,
                 conversationHistory,
                 revision
-                    ? 'Revise hypotheses against the latest proximity review. Keep them falsifiable, orthogonal, and critique-driven.'
+                    ? 'Revise modules against the latest impact review. Keep them high-impact, orthogonal, and critique-driven.'
                     : '',
             ].filter(Boolean).join('\n\n');
             const response = await executeWithRetry(
-                () => generateHypothesesAgent(
+                () => generateModulesAgent(
                     state.question + getDirectTextContext(),
                     count,
                     generationContext,
-                    prompts.sys_deepthink_hypothesisGeneration,
+                    prompts.sys_deepthink_modulesGeneration,
                     generatorContext,
                     images,
                     true,
                 ),
                 context,
-                'hypothesis-generator'
+                'modules-generator'
             );
             const error = firstError(response);
-            if (error || !response.data) throw new Error(error || 'Hypothesis generator returned no data.');
-            const candidates = (response.data.hypotheses as unknown[]).slice(0, count).map(value => String(value));
-            if (!candidates.length) throw new Error('Hypothesis generator returned no hypotheses.');
+            if (error || !response.data) throw new Error(error || 'Modules Generator returned no data.');
+            const candidates = (response.data.modules as unknown[]).slice(0, count).map(value => String(value));
+            if (!candidates.length) throw new Error('Modules Generator returned no modules.');
             return {
                 candidates,
-                output: JSON.stringify({ hypotheses: candidates }, null, 2),
+                output: JSON.stringify({ modules: candidates }, null, 2),
             };
         },
         review: async (candidates, conversationHistory, round) => {
             if (context.abortSignal?.aborted) throw new Error('Adaptive Deepthink process was stopped.');
             const response = await executeWithRetry(
-                () => hypothesesProximityAgent(
+                () => modulesImpactReviewAgent(
                     state.question + getDirectTextContext(),
                     candidates,
                     conversationHistory,
                     baseContext,
-                    prompts.sys_deepthink_hypothesisGeneration,
-                    proximityContext,
+                    prompts.sys_deepthink_modulesGeneration,
+                    impactReviewContext,
                     images,
                 ),
                 context,
-                'hypothesis-proximity'
+                'modules-impact-review'
             );
             const error = firstError(response);
-            if (error || !response.data) throw new Error(error || 'Hypothesis proximity returned no data.');
+            if (error || !response.data) throw new Error(error || 'Modules Impact Reviewer returned no data.');
             const review = String(response.data.review);
-            recordArtifact(state, `${pathFor(state, undefined, 'hypothesis-proximity', `-Round-${round}`)}.md`, review);
+            recordArtifact(state, `${pathFor(state, undefined, 'modules-impact-review', `-Round-${round}`)}.md`, review);
             return review;
         },
         onHistory: history => {
-            state.hypothesisGenerationHistory = history;
+            state.modulesGenerationHistory = history;
             context.notifyUpdate?.();
         },
     });
     const candidates = result.candidates;
 
-    // Hypotheses are intentionally ephemeral. A new batch deletes the entire
+    // Modules are intentionally ephemeral. A new batch deletes the entire
     // previous batch and its tests; no stale corrective local minima survive.
-    state.hypotheses.clear();
-    state.hypothesisTestings.clear();
-    state.hypothesisGenerationHistory = result.history;
+    state.modules.clear();
+    state.moduleTestings.clear();
+    state.modulesGenerationHistory = result.history;
     const ids = candidates.map((text, index) => {
-        const id = `H${index + 1}`;
-        state.hypotheses.set(id, { id, text, passNumber: state.passNumber });
+        const id = `M${index + 1}`;
+        state.modules.set(id, { id, text, passNumber: state.passNumber });
         return id;
     });
-    recordArtifact(state, `${pathFor(state, undefined, 'hypothesis-generator', '-Final-Hypotheses')}.md`, candidates.map((hypothesis, index) => `## ${ids[index]}\n\n${hypothesis}`).join('\n\n'));
-    return `<Hypotheses pass="${state.passNumber}">\n${ids.map(id => `<Hypothesis id="${id}">\n${state.hypotheses.get(id)?.text}\n</Hypothesis>`).join('\n\n')}\n</Hypotheses>`;
+    recordArtifact(state, `${pathFor(state, undefined, 'modules-generator', '-Final-Modules')}.md`, candidates.map((moduleText, index) => `## ${ids[index]}\n\n${moduleText}`).join('\n\n'));
+    return `<Modules pass="${state.passNumber}">\n${ids.map(id => `<Module id="${id}">\n${state.modules.get(id)?.text}\n</Module>`).join('\n\n')}\n</Modules>`;
 }
 
-async function testHypotheses(
+async function testModules(
     state: AdaptiveDeepthinkState,
-    hypothesisIds: string[],
+    moduleIds: string[],
     context: AdaptiveDeepthinkToolExecutionContext,
     prompts: AdaptiveDeepthinkToolPrompts,
     images: Array<{ base64: string; mimeType: string }>
 ): Promise<string> {
     const executionGroupId = `group-${nanoid(8)}`;
-    const executionGroupName = 'Hypothesis Testing Phase';
+    const executionGroupName = 'Modules Testing Phase';
 
-    const results = await Promise.all(hypothesisIds.slice(0, MAX_BATCH_SIZE).map(async id => {
-        const hypothesis = state.hypotheses.get(id);
-        if (!hypothesis) return { id, error: 'Hypothesis not found.' };
-        const localHypotheses = new Map([[id, { text: hypothesis.text }]]);
+    const results = await Promise.all(moduleIds.slice(0, MAX_BATCH_SIZE).map(async id => {
+        const moduleItem = state.modules.get(id);
+        if (!moduleItem) return { id, error: 'Module not found.' };
+        const localModules = new Map([[id, { text: moduleItem.text }]]);
         const response = await executeWithRetry(
-            () => testHypothesesAgent(
+            () => testModulesAgent(
                 state.question + getDirectTextContext(),
                 [id],
-                localHypotheses,
+                localModules,
                 '',
-                prompts.sys_deepthink_hypothesisTester,
-                syncAgentContext(state, context, 'hypothesis-testing', prompts.sys_deepthink_hypothesisTester, undefined, id, [], executionGroupId, executionGroupName),
+                prompts.sys_deepthink_modulesTester,
+                syncAgentContext(state, context, 'modules-testing', prompts.sys_deepthink_modulesTester, undefined, id, [], executionGroupId, executionGroupName),
                 images,
             ),
             context,
-            'hypothesis-testing'
+            'modules-testing'
         );
         const error = firstError(response);
         const result = response.data?.results?.[0];
-        if (error || !result?.success) return { id, error: error || result?.error || 'Hypothesis test failed.' };
-        state.hypothesisTestings.set(id, { hypothesis: result.hypothesis, testing: result.testing, passNumber: state.passNumber });
-        recordArtifact(state, `${pathFor(state, id, 'hypothesis-testing')}.md`, result.testing);
+        if (error || !result?.success) return { id, error: error || result?.error || 'Module test failed.' };
+        state.moduleTestings.set(id, { moduleText: result.moduleText, testing: result.testing, passNumber: state.passNumber });
+        recordArtifact(state, `${pathFor(state, id, 'modules-testing')}.md`, result.testing);
         return { id, testing: result.testing };
     }));
-    return `<HypothesisTests pass="${state.passNumber}">\n${results.map(result => result.error
-        ? `<HypothesisTest id="${result.id}" status="error">${result.error}</HypothesisTest>`
-        : `<HypothesisTest id="${result.id}">\n${result.testing}\n</HypothesisTest>`).join('\n\n')}\n</HypothesisTests>`;
+    return `<ModuleTests pass="${state.passNumber}">\n${results.map(result => result.error
+        ? `<ModuleTest id="${result.id}" status="error">${result.error}</ModuleTest>`
+        : `<ModuleTest id="${result.id}">\n${result.testing}\n</ModuleTest>`).join('\n\n')}\n</ModuleTests>`;
 }
 
 async function restoreUnsavedStrategyIfNeeded(
@@ -844,21 +817,21 @@ async function executeOneStrategy(
     const strategy = state.strategies.get(request.strategyId);
     if (!strategy) return { strategyId: request.strategyId, error: 'Strategy not found.' };
     if (strategy.saved) return { strategyId: request.strategyId, error: 'Saved strategies are permanent and cannot be executed again.' };
-    const selectedHypothesisIds = request.hypothesisIds.filter(id => state.hypothesisTestings.has(id));
+    const selectedModuleIds = request.moduleIds.filter(id => state.moduleTestings.has(id));
     await restoreUnsavedStrategyIfNeeded(state, strategy, context);
 
     const executionGroupId = `group-${nanoid(8)}`;
     const executionGroupName = `Strategy ${strategy.id} Execution Loop`;
 
     const strategyMap = new Map([[strategy.id, { text: strategy.text }]]);
-    const testMap = new Map(selectedHypothesisIds.map(id => {
-        const testing = state.hypothesisTestings.get(id)!;
-        return [id, { hypothesis: testing.hypothesis, testing: testing.testing }] as const;
+    const testMap = new Map(selectedModuleIds.map(id => {
+        const testing = state.moduleTestings.get(id)!;
+        return [id, { module: testing.moduleText, testing: testing.testing }] as const;
     }));
     const execution = await executeWithRetry(
         () => executeStrategiesAgent(
             state.question + getDirectTextContext(),
-            [{ strategyId: strategy.id, hypothesisIds: selectedHypothesisIds }],
+            [{ strategyId: strategy.id, moduleIds: selectedModuleIds }],
             strategyMap,
             testMap,
             [
@@ -867,7 +840,7 @@ async function executeOneStrategy(
                 request.specialContext || '',
             ].filter(Boolean).join('\n\n'),
             prompts.sys_deepthink_solutionAttempt,
-            syncAgentContext(state, context, 'execution', prompts.sys_deepthink_solutionAttempt, strategy, undefined, selectedHypothesisIds, executionGroupId, executionGroupName),
+            syncAgentContext(state, context, 'execution', prompts.sys_deepthink_solutionAttempt, strategy, undefined, selectedModuleIds, executionGroupId, executionGroupName),
             images,
         ),
         context,
@@ -887,7 +860,7 @@ async function executeOneStrategy(
             executionMap,
             '',
             prompts.sys_deepthink_solutionCritique,
-            // The critique receives no hypothesis packet or branch special context.
+            // The critique receives no module packet or branch special context.
             syncAgentContext(state, context, 'critique', prompts.sys_deepthink_solutionCritique, strategy, undefined, [], executionGroupId, executionGroupName),
             images,
         ),
@@ -903,25 +876,25 @@ async function executeOneStrategy(
         const commit = await snapshotSandboxRepositoryById(state.id, `Adaptive pass ${state.passNumber} ${strategy.id} before correction`);
         if (commit) strategy.preCorrectionSnapshot = { commit, passNumber: state.passNumber };
     }
-    const hypothesisEntries = selectedHypothesisIds
+    const moduleEntries = selectedModuleIds
         .map((id, idx) => {
-            const testing = state.hypothesisTestings.get(id);
+            const testing = state.moduleTestings.get(id);
             return testing
-                ? `<Hypothesis ${idx + 1}>\nHypothesis: ${testing.hypothesis}\nHypothesis Testing: ${testing.testing}\n</Hypothesis ${idx + 1}>\n`
+                ? `<Module ${idx + 1}>\nModule: ${testing.moduleText}\nModules Testing: ${testing.testing}\n</Module ${idx + 1}>\n`
                 : '';
         })
         .filter(Boolean)
         .join('\n');
-    const hypothesisPacket = hypothesisEntries ? `<Full Information Packet>\n${hypothesisEntries}</Full Information Packet>` : undefined;
+    const modulePacket = moduleEntries ? `<Full Information Packet>\n${moduleEntries}</Full Information Packet>` : undefined;
 
     const correction = await executeWithRetry(
         () => correctedSolutionsAgent(
             state.question + getDirectTextContext(),
             [executionId],
             executionMap,
-            new Map([[executionId, { critique: critiqueResult.critique, hypothesisPacket }]]),
+            new Map([[executionId, { critique: critiqueResult.critique, modulePacket }]]),
             prompts.sys_deepthink_solutionCorrection,
-            syncAgentContext(state, context, 'correction', prompts.sys_deepthink_solutionCorrection, strategy, undefined, selectedHypothesisIds, executionGroupId, executionGroupName),
+            syncAgentContext(state, context, 'correction', prompts.sys_deepthink_solutionCorrection, strategy, undefined, selectedModuleIds, executionGroupId, executionGroupName),
             images,
         ),
         context,
@@ -937,7 +910,7 @@ async function executeOneStrategy(
         passNumber: state.passNumber,
         strategyId: strategy.id,
         strategy: strategy.text,
-        hypothesisIds: selectedHypothesisIds,
+        moduleIds: selectedModuleIds,
         execution: executionResult.execution,
         critique: critiqueResult.critique,
         correction: correctionResult.correctedSolution,
@@ -1012,11 +985,11 @@ export async function executeAdaptiveDeepthinkTool(
             case 'generate_strategies':
                 output = await generateStrategyBatch(state, toolCall, context, deepthinkPrompts, images);
                 break;
-            case 'generate_hypothesis':
-                output = await generateHypothesisBatch(state, toolCall, context, deepthinkPrompts, images);
+            case 'generate_modules':
+                output = await generateModulesBatch(state, toolCall, context, deepthinkPrompts, images);
                 break;
-            case 'test_hypothesis':
-                output = await testHypotheses(state, toolCall.hypothesisIds, context, deepthinkPrompts, images);
+            case 'test_modules':
+                output = await testModules(state, toolCall.moduleIds, context, deepthinkPrompts, images);
                 break;
             case 'execute':
                 output = await executeStrategies(state, toolCall.executions, toolCall.specialContext || '', context, deepthinkPrompts, images);
@@ -1088,13 +1061,13 @@ export function createAdaptiveDeepthinkState(question: string): AdaptiveDeepthin
         status: 'idle',
         passNumber: 1,
         strategies: new Map(),
-        hypotheses: new Map(),
-        hypothesisTestings: new Map(),
+        modules: new Map(),
+        moduleTestings: new Map(),
         executions: new Map(),
         passes: new Map([[1, { passNumber: 1, finalized: false, compactedFiles: [] }]]),
         artifacts: new Map(),
         strategyGenerationHistory: [],
-        hypothesisGenerationHistory: [],
+        modulesGenerationHistory: [],
         compactedContextLinks: [],
     };
 }
@@ -1102,7 +1075,7 @@ export function createAdaptiveDeepthinkState(question: string): AdaptiveDeepthin
 /** Project adaptive state into the existing Deepthink tabs and modals. */
 export function syncAdaptiveDeepthinkPipeline(state: AdaptiveDeepthinkState, pipeline: DeepthinkPipelineState): void {
     pipeline.strategyGenerationHistory = normalizeProximityHistory(state.strategyGenerationHistory);
-    pipeline.hypothesisGenerationHistory = normalizeProximityHistory(state.hypothesisGenerationHistory);
+    pipeline.modulesGenerationHistory = normalizeProximityHistory(state.modulesGenerationHistory);
     const strategies = Array.from(state.strategies.values()).sort((left, right) => left.slotIndex - right.slotIndex);
     pipeline.initialStrategies = strategies.map(strategy => {
         const latest = Array.from(state.executions.values())
@@ -1123,17 +1096,17 @@ export function syncAdaptiveDeepthinkPipeline(state: AdaptiveDeepthinkState, pip
             branchIterationCount: Math.max(0, ...Array.from(state.executions.values()).filter(record => record.strategyId === strategy.id).map(record => record.passNumber)),
         } as DeepthinkMainStrategyData;
     });
-    pipeline.hypotheses = Array.from(state.hypotheses.values()).map(hypothesis => {
-        const testing = state.hypothesisTestings.get(hypothesis.id);
+    pipeline.modules = Array.from(state.modules.values()).map(moduleItem => {
+        const testing = state.moduleTestings.get(moduleItem.id);
         return {
-            id: hypothesis.id,
-            hypothesisText: hypothesis.text,
+            id: moduleItem.id,
+            moduleText: moduleItem.text,
             testerAttempt: testing?.testing,
             testerAttemptDisplay: testing?.testing,
             testerStatus: testing ? 'completed' : 'pending',
-            roundNumber: hypothesis.passNumber,
-            globalIteration: hypothesis.passNumber,
-        } as DeepthinkHypothesisData;
+            roundNumber: moduleItem.passNumber,
+            globalIteration: moduleItem.passNumber,
+        } as DeepthinkModuleData;
     });
     pipeline.solutionCritiques = Array.from(state.executions.values()).map(record => ({
         id: `critique-${record.id}`,
@@ -1142,9 +1115,9 @@ export function syncAdaptiveDeepthinkPipeline(state: AdaptiveDeepthinkState, pip
         critiqueResponseDisplay: record.critique,
         status: 'completed',
     } as DeepthinkSolutionCritiqueData));
-    pipeline.hypothesisGenStatus = pipeline.hypotheses.length ? 'completed' : 'pending';
-    pipeline.hypothesisExplorerComplete = pipeline.hypotheses.length > 0 && pipeline.hypotheses.every(hypothesis => hypothesis.testerStatus === 'completed');
-    pipeline.knowledgePacket = Array.from(state.hypothesisTestings.entries()).map(([id, testing]) => `<Hypothesis id="${id}">\n${testing.hypothesis}\n\n${testing.testing}\n</Hypothesis>`).join('\n\n');
+    pipeline.modulesGenStatus = pipeline.modules.length ? 'completed' : 'pending';
+    pipeline.modulesExplorerComplete = pipeline.modules.length > 0 && pipeline.modules.every(m => m.testerStatus === 'completed');
+    pipeline.knowledgePacket = Array.from(state.moduleTestings.entries()).map(([id, testing]) => `<Module id="${id}">\n${testing.moduleText}\n\n${testing.testing}\n</Module>`).join('\n\n');
     pipeline.solutionCritiquesStatus = pipeline.solutionCritiques.length ? 'completed' : 'pending';
     if (state.selectedSolution) {
         pipeline.finalJudgedBestSolution = state.selectedSolution;

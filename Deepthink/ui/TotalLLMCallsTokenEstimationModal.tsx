@@ -71,8 +71,8 @@ const pathForPoints = (points: Array<{ x: number; y: number }>): string => (
 interface TokenVolumeGraphProps {
     strategiesCount: number;
     strategyProximityLoops?: number;
-    hypothesisCount: number;
-    hypothesisProximityLoops?: number;
+    modulesCount: number;
+    modulesImpactReviewLoops?: number;
     i: number;
     j?: number;
     k?: number;
@@ -83,8 +83,8 @@ interface TokenVolumeGraphProps {
 export const TokenVolumeGraph: React.FC<TokenVolumeGraphProps> = ({
     strategiesCount,
     strategyProximityLoops,
-    hypothesisCount,
-    hypothesisProximityLoops,
+    modulesCount,
+    modulesImpactReviewLoops,
     i,
     j,
     k,
@@ -98,27 +98,27 @@ export const TokenVolumeGraph: React.FC<TokenVolumeGraphProps> = ({
     const trend = useMemo(() => buildDeepthinkTokenTrend({
         strategiesCount,
         strategyProximityLoops,
-        hypothesisCount,
-        hypothesisProximityLoops,
+        modulesCount,
+        modulesImpactReviewLoops,
         j,
         k,
         isolateBranches,
         codeExecutionEnabled,
         maxDepth: safeDepth,
-    }), [strategiesCount, strategyProximityLoops, hypothesisCount, hypothesisProximityLoops, j, k, isolateBranches, codeExecutionEnabled, safeDepth]);
+    }), [strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, j, k, isolateBranches, codeExecutionEnabled, safeDepth]);
 
     const selected = useMemo(() => calculateDeepthinkTokenEstimate({
         strategiesCount,
         strategyProximityLoops,
-        hypothesisCount,
-        hypothesisProximityLoops,
+        modulesCount,
+        modulesImpactReviewLoops,
         deepthinkDepth: safeDepth,
         i: safeDepth,
         j,
         k,
         isolateBranches,
         codeExecutionEnabled,
-    }), [strategiesCount, strategyProximityLoops, hypothesisCount, hypothesisProximityLoops, j, k, isolateBranches, codeExecutionEnabled, safeDepth]);
+    }), [strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, j, k, isolateBranches, codeExecutionEnabled, safeDepth]);
 
     const [chartSize, setChartSize] = useState<{ width: number; height: number }>({
         width: TOKEN_CHART.width,
@@ -321,8 +321,8 @@ export const TotalLLMCallsTokenEstimationModal: React.FC<{
         return calculateDeepthinkApiCallsFromParams({
             strategiesCount: configState.strategiesCount,
             strategyProximityLoops: configState.strategyProximityLoops,
-            hypothesisCount: configState.hypothesisEnabled ? configState.hypothesisCount : 0,
-            hypothesisProximityLoops: configState.hypothesisProximityLoops,
+            modulesCount: configState.modulesEnabled ? configState.modulesCount : 0,
+            modulesImpactReviewLoops: configState.modulesImpactReviewLoops,
             i: configState.i,
             j: configState.j,
             k: configState.k,
@@ -342,8 +342,8 @@ export const TotalLLMCallsTokenEstimationModal: React.FC<{
     const tokenSummary = useMemo(() => calculateDeepthinkTokenEstimate({
         strategiesCount: configState.strategiesCount,
         strategyProximityLoops: configState.strategyProximityLoops,
-        hypothesisCount: configState.hypothesisEnabled ? configState.hypothesisCount : 0,
-        hypothesisProximityLoops: configState.hypothesisProximityLoops,
+        modulesCount: configState.modulesEnabled ? configState.modulesCount : 0,
+        modulesImpactReviewLoops: configState.modulesImpactReviewLoops,
         deepthinkDepth: safeDepth,
         i: safeDepth,
         j: configState.j,
@@ -431,8 +431,8 @@ export const TotalLLMCallsTokenEstimationModal: React.FC<{
                             <TokenVolumeGraph
                                 strategiesCount={configState.strategiesCount}
                                 strategyProximityLoops={configState.strategyProximityLoops}
-                                hypothesisCount={configState.hypothesisEnabled ? configState.hypothesisCount : 0}
-                                hypothesisProximityLoops={configState.hypothesisProximityLoops}
+                                modulesCount={configState.modulesEnabled ? configState.modulesCount : 0}
+                                modulesImpactReviewLoops={configState.modulesImpactReviewLoops}
                                 i={configState.i}
                                 j={configState.j}
                                 k={configState.k}

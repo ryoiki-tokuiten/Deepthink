@@ -24,13 +24,14 @@ import {
 
 const boundedCount = z.number().int().min(1).max(5);
 const optionalProximityLoops = z.number().int().min(1).max(5).optional();
+const optionalImpactReviewLoops = z.number().int().min(1).max(5).optional();
 const optionalContext = z.string().trim().min(1).max(8_000).optional();
 const strategyIds = z.array(z.string().trim().regex(/^S[1-5]$/)).min(1).max(5);
-const hypothesisIds = z.array(z.string().trim().regex(/^H[1-5]$/)).min(1).max(5);
+const moduleIds = z.array(z.string().trim().regex(/^M[1-5]$/)).min(1).max(5);
 
 const executionRequestSchema = z.object({
     strategyId: z.string().trim().regex(/^S[1-5]$/),
-    hypothesisIds: z.array(z.string().trim().regex(/^H[1-5]$/)).max(5),
+    moduleIds: z.array(z.string().trim().regex(/^M[1-5]$/)).max(5),
     specialContext: optionalContext,
 });
 
@@ -40,8 +41,8 @@ const generateStrategiesSchema = z.object({
     specialContext: optionalContext,
     replaceStrategyIds: z.array(z.string().trim().regex(/^S[1-5]$/)).max(5).optional(),
 });
-const generateHypothesisSchema = z.object({ count: boundedCount, proximityLoops: optionalProximityLoops, specialContext: optionalContext });
-const testHypothesisSchema = z.object({ hypothesisIds });
+const generateModulesSchema = z.object({ count: boundedCount, impactReviewLoops: optionalImpactReviewLoops, specialContext: optionalContext });
+const testModulesSchema = z.object({ moduleIds });
 const executeSchema = z.object({ executions: z.array(executionRequestSchema).min(1).max(5), specialContext: optionalContext });
 const saveSchema = z.object({ strategyIds });
 const readFilesSchema = z.object({ paths: z.array(z.string().trim().min(1).max(160)).min(1).max(12) });
@@ -61,19 +62,19 @@ const tools: ToolDefinition[] = [
             replaceStrategyIds: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Only these unsaved slots are replaced. Omit for a fresh unsaved batch.' },
         }, required: ['count'], additionalProperties: false,
     }),
-    definition('generate_hypothesis', 'Generate critique-driven hypotheses through the shared hypothesis/proximity revision loop. The proximityLoops argument steers how diverse the hypotheses should be; it defaults to 2 and may be set from 1 to 5. The loop always ends on a generator result. This replaces every prior hypothesis and test packet.', {
+    definition('generate_modules', 'Generate critique-driven modules through the shared Modules Generator / Modules Impact Reviewer revision loop. The impactReviewLoops argument steers how diverse and high-impact the modules should be; it defaults to 2 and may be set from 1 to 5. The loop always ends on a generator result. This replaces every prior module and test packet.', {
         type: 'object', properties: {
             count: { type: 'integer', minimum: 1, maximum: 5 },
-            proximityLoops: { type: 'integer', minimum: 1, maximum: 5, default: 2, description: 'How diverse the generated hypotheses should be. Higher values request more proximity revision rounds; defaults to 2.' },
+            impactReviewLoops: { type: 'integer', minimum: 1, maximum: 5, default: 2, description: 'How diverse and high-impact the generated modules should be. Higher values request more impact review rounds; defaults to 2.' },
             specialContext: { type: 'string', description: 'What the latest execution/critique evidence still fails to explain.' },
         }, required: ['count'], additionalProperties: false,
     }),
-    definition('test_hypothesis', 'Independently test the supplied current hypotheses. Test agents see only the individual hypothesis and core challenge.', {
-        type: 'object', properties: { hypothesisIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 5 } }, required: ['hypothesisIds'], additionalProperties: false,
+    definition('test_modules', 'Independently test the supplied current modules. Test agents see only the individual module and core challenge.', {
+        type: 'object', properties: { moduleIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 5 } }, required: ['moduleIds'], additionalProperties: false,
     }),
-    definition('execute', 'Run each selected strategy in parallel through Execution -> Critique -> Correction. Each branch may receive a different specialContext; critiques deliberately do not receive hypothesis context.', {
+    definition('execute', 'Run each selected strategy in parallel through Execution -> Critique -> Correction. Each branch may receive a different specialContext; critiques deliberately do not receive module context.', {
         type: 'object', properties: {
-            executions: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'object', properties: { strategyId: { type: 'string' }, hypothesisIds: { type: 'array', items: { type: 'string' }, maxItems: 5 }, specialContext: { type: 'string' } }, required: ['strategyId', 'hypothesisIds'], additionalProperties: false } },
+            executions: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'object', properties: { strategyId: { type: 'string' }, moduleIds: { type: 'array', items: { type: 'string' }, maxItems: 5 }, specialContext: { type: 'string' } }, required: ['strategyId', 'moduleIds'], additionalProperties: false } },
             specialContext: { type: 'string', description: 'Shared execution-only guidance for this call.' },
         }, required: ['executions'], additionalProperties: false,
     }),
@@ -82,7 +83,7 @@ const tools: ToolDefinition[] = [
     }),
     definition('finalize_pass_and_execute', 'Finalize the current pass, compact its full outputs into file links, advance to a fresh pass, and immediately run execute with the same parameters.', {
         type: 'object', properties: {
-            executions: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'object', properties: { strategyId: { type: 'string' }, hypothesisIds: { type: 'array', items: { type: 'string' }, maxItems: 5 }, specialContext: { type: 'string' } }, required: ['strategyId', 'hypothesisIds'], additionalProperties: false } },
+            executions: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'object', properties: { strategyId: { type: 'string' }, moduleIds: { type: 'array', items: { type: 'string' }, maxItems: 5 }, specialContext: { type: 'string' } }, required: ['strategyId', 'moduleIds'], additionalProperties: false } },
             specialContext: { type: 'string' },
         }, required: ['executions'], additionalProperties: false,
     }),
@@ -133,8 +134,8 @@ function artifact(tool: string, toolCall?: AdaptiveDeepthinkToolCall): AdaptiveD
 export function normalizeAdaptiveDeepthinkToolCall(name: string, args: unknown): AdaptiveDeepthinkToolCall | null {
     switch (name) {
         case 'generate_strategies': { const parsed = generateStrategiesSchema.safeParse(args ?? {}); return parsed.success ? { type: 'generate_strategies', ...parsed.data } : null; }
-        case 'generate_hypothesis': { const parsed = generateHypothesisSchema.safeParse(args ?? {}); return parsed.success ? { type: 'generate_hypothesis', ...parsed.data } : null; }
-        case 'test_hypothesis': { const parsed = testHypothesisSchema.safeParse(args ?? {}); return parsed.success ? { type: 'test_hypothesis', ...parsed.data } : null; }
+        case 'generate_modules': { const parsed = generateModulesSchema.safeParse(args ?? {}); return parsed.success ? { type: 'generate_modules', ...parsed.data } : null; }
+        case 'test_modules': { const parsed = testModulesSchema.safeParse(args ?? {}); return parsed.success ? { type: 'test_modules', ...parsed.data } : null; }
         case 'execute': { const parsed = executeSchema.safeParse(args ?? {}); return parsed.success ? { type: 'execute', ...parsed.data } : null; }
         case 'save': { const parsed = saveSchema.safeParse(args ?? {}); return parsed.success ? { type: 'save', ...parsed.data } : null; }
         case 'finalize_pass_and_execute': { const parsed = executeSchema.safeParse(args ?? {}); return parsed.success ? { type: 'finalize_pass_and_execute', ...parsed.data } : null; }
@@ -153,14 +154,14 @@ function compactedContext(state: AdaptiveDeepthinkState): string {
 
 function buildAdaptiveDeepthinkSystemPrompt(state: AdaptiveDeepthinkGraphState, systemPrompt: string): string {
     const strategies = Array.from(state.coreState.strategies.values()).map(strategy => `${strategy.id}${strategy.saved ? ' (saved)' : ''}`).join(', ') || 'none';
-    const hypotheses = Array.from(state.coreState.hypotheses.keys()).join(', ') || 'none';
+    const modules = Array.from(state.coreState.modules.keys()).join(', ') || 'none';
     return [
         systemPrompt,
         '',
         '<Runtime State>',
         `Current pass: ${state.coreState.passNumber}.`,
         `Strategies: ${strategies}.`,
-        `Current hypotheses: ${hypotheses}.`,
+        `Current modules: ${modules}.`,
         compactedContext(state.coreState),
         '</Runtime State>',
         '',
