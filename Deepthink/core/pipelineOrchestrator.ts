@@ -1,46 +1,30 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * MANDATORY REFERENCE: Read Deepthink_Consolidated_Specification.md before modifying!
- * The specification document (Deepthink/docs/Deepthink_Consolidated_Specification.md)
- * is the absolute source of truth for the entire pipeline, all loop barriers,
- * and data structures (§1, §2, §3, §4, §5, §6, §7, §8, §9).
- * NOTE: For ANY minor inconvenience or uncertainty during execution, ALWAYS consult
- * Deepthink_Consolidated_Specification.md first. It contains critical operational
- * details (failure policies, window_start rollbacks, etc.)
- * that must never be altered or ignored.
- */
-
 import { nanoid } from 'nanoid';
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
-import type {
-  BsrAction,
-  BsrComputedScores,
-  BsrEvolveForm,
-  BsrReport,
-  DeepthinkModuleData,
-  DeepthinkLiveEvent,
-  DeepthinkMainStrategyData,
-  DeepthinkPipelineState,
-  DosModuleFeedbackItem,
-  DosOutput,
-  HeartbeatBlock,
-  ProximityTurn,
-  RealizedModuleFeedback,
-} from './types.ts';
 import {
   evaluateBranchState,
   calculateUtilizationVector,
   SIZE_WEIGHTS,
   TAU,
   THETA,
-  type BsrConfigOptions,
-} from './formulas.ts';
-import {
   determinePostIterationStep,
   validateLoopBounds,
-} from './loopController.ts';
+  type BsrConfigOptions,
+  type BsrAction,
+  type BsrComputedScores,
+  type BsrEvolveForm,
+  type BsrReport,
+  type DeepthinkModuleData,
+  type DeepthinkLiveEvent,
+  type DeepthinkMainStrategyData,
+  type DeepthinkPipelineState,
+  type DosModuleFeedbackItem,
+  type DosOutput,
+  type HeartbeatBlock,
+  type ProximityTurn,
+  type RealizedModuleFeedback,
+  type SandboxRepositoryAccess,
+  type DeepthinkResultsContextFile,
+} from './types.ts';
 import {
   buildContextForBsr,
   buildContextForCorrectionAgent,
@@ -62,17 +46,11 @@ import {
   type DeepthinkAgentKind,
 } from './agentRegistry.ts';
 import { createDefaultCustomPromptsDeepthink } from '../prompts/index.ts';
-import { GitRepositoryHarness } from './gitRepository.ts';
 import { SharedWorkspaceManager, type SharedWorkspaceToolInput } from './sharedWorkspace.ts';
 import {
   buildModulesImpactReviewHistoryWithNotes,
   buildStrategyProximityHistoryWithNotes,
 } from './harnessNotes.ts';
-import type {
-  SandboxRepositoryAccess,
-  DeepthinkResultsContextFile,
-} from './types.ts';
-
 import {
   DEFAULT_NORMALIZATION_BOUNDS,
   normalizeTranscript,
@@ -84,6 +62,124 @@ import {
   isTerminalInferenceError,
   withSilenceWatchdog,
 } from '../../Core/ProviderError.ts';
+
+async function getSandboxRuntime() {
+  if (typeof window === 'undefined') return null;
+  try {
+    return await import('../../Core/SandboxToolRuntime.ts');
+  } catch {
+    return null;
+  }
+}
+
+export class GitRepositoryHarness {
+  private readonly repositoryId: string;
+  private readonly committedFiles: Map<string, string> = new Map();
+  private readonly archivedDirectories: string[] = [];
+  private readonly rollbacks: Array<{ slotIndex: number; commitHash: string }> = [];
+
+  constructor(repositoryId: string) {
+    this.repositoryId = repositoryId;
+  }
+
+  public getCommittedFiles(): Map<string, string> {
+    return new Map(this.committedFiles);
+  }
+
+  public getCommittedFile(path: string): string | undefined {
+    return this.committedFiles.get(path);
+  }
+
+  public getArchivedDirectories(): string[] {
+    return [...this.archivedDirectories];
+  }
+
+  public getRollbacks(): Array<{ slotIndex: number; commitHash: string }> {
+    return [...this.rollbacks];
+  }
+
+  public async initializeRepository(_strategyCount?: number): Promise<string | undefined> {
+    try {
+      const rt = await getSandboxRuntime();
+      if (rt?.ensureDeepthinkResultsRepository) {
+        const res = await rt.ensureDeepthinkResultsRepository(this.repositoryId);
+        return res?.resultPath;
+      }
+    } catch (err) {
+      console.warn('Sandbox results repository initialization notice:', err);
+    }
+    return undefined;
+  }
+
+  public async writeFilesAndCommit(commitMessage: string, files: DeepthinkResultsContextFile[]): Promise<void> {
+    if (!files.length) return;
+    for (const file of files) this.committedFiles.set(file.path, file.content);
+    try {
+      const rt = await getSandboxRuntime();
+      if (rt?.snapshotDeepthinkResultsRepository) {
+        await rt.snapshotDeepthinkResultsRepository(this.repositoryId, commitMessage, files);
+      }
+    } catch (err) {
+      console.warn(`Failed to commit context files (${commitMessage}):`, err);
+    }
+  }
+
+  private async snapshotWithFallback(commitMessage: string, fallback: string, files?: DeepthinkResultsContextFile[]): Promise<string> {
+    if (files?.length) await this.writeFilesAndCommit(commitMessage, files);
+    try {
+      const rt = await getSandboxRuntime();
+      if (rt?.snapshotSandboxRepositoryById) {
+        return await rt.snapshotSandboxRepositoryById(this.repositoryId, commitMessage);
+      }
+    } catch {}
+    return fallback;
+  }
+
+  public commitStrategyIteration(slotIndex: number, iteration: number, contextFiles?: DeepthinkResultsContextFile[]): Promise<string> {
+    return this.snapshotWithFallback(`Commit Strategy-${slotIndex + 1} at iteration ${iteration}`, `commit_${this.repositoryId}_slot${slotIndex}_it${iteration}`, contextFiles);
+  }
+
+  public commitWindowStart(slotIndex: number, windowStart: number, contextFiles?: DeepthinkResultsContextFile[]): Promise<string> {
+    return this.snapshotWithFallback(`Starting state for Strategy-${slotIndex + 1} at window beginning (iteration ${windowStart})`, `commit_${this.repositoryId}_slot${slotIndex}_start${windowStart}`, contextFiles);
+  }
+
+  public commitHeartbeat(heartbeatNo: number, contextFiles?: DeepthinkResultsContextFile[]): Promise<string> {
+    return this.snapshotWithFallback(`Curated Context Heartbeat ${heartbeatNo}`, `commit_${this.repositoryId}_heartbeat${heartbeatNo}`, contextFiles);
+  }
+
+  public commitStrategyHistory(filename: string, content?: string, trajectoryJsonl?: string): Promise<string> {
+    const files: DeepthinkResultsContextFile[] = content
+      ? [
+          { path: `strategies_history/${filename}`, content },
+          ...(trajectoryJsonl !== undefined ? [{ path: `strategies_history/${filename.replace(/\.md$/i, '.jsonl')}`, content: trajectoryJsonl }] : []),
+        ]
+      : [];
+    return this.snapshotWithFallback(`Strategy history update: ${filename}`, `commit_${this.repositoryId}_hist_${filename}`, files);
+  }
+
+  public async rollbackStrategy(slotIndex: number, commitHash: string): Promise<void> {
+    this.rollbacks.push({ slotIndex, commitHash });
+    const rt = await getSandboxRuntime();
+    if (rt?.restoreSandboxRepositoryStrategy) {
+      await rt.restoreSandboxRepositoryStrategy(this.repositoryId, `Strategy-${slotIndex + 1}`, commitHash);
+    }
+  }
+
+  public async pruneStrategy(slotIndex: number): Promise<string | undefined> {
+    const strategyDir = `Strategy-${slotIndex + 1}`;
+    const ordinal = String(this.archivedDirectories.length + 1).padStart(2, '0');
+    const targetArchived = `Pruned_Strategies/${strategyDir}_pruned_${ordinal}`;
+    const rt = await getSandboxRuntime();
+    if (rt?.archiveSandboxRepositoryStrategy) {
+      const res = await rt.archiveSandboxRepositoryStrategy(this.repositoryId, strategyDir);
+      const dir = res?.archivedDirectory || targetArchived;
+      this.archivedDirectories.push(dir);
+      return dir;
+    }
+    this.archivedDirectories.push(targetArchived);
+    return targetArchived;
+  }
+}
 
 export const INCLUDE_REASONING_IN_TRAJECTORY_JSONL = false;
 
@@ -2672,11 +2768,20 @@ export class DeepthinkPipelineOrchestrator {
               messages: result.messages,
             };
           } else {
+            const nonSandboxSystemInstruction = [
+              systemInstruction,
+              '',
+              '<Runtime Tool Availability>',
+              'deepthinkCodeExecutionEnabled = false. Sandbox terminal execution and tool calling (sandbox_exec, shared_workspace, final_output) are DISABLED for this run.',
+              'Do NOT attempt to call sandbox_exec, shared_workspace, final_output, or any other tool or function.',
+              'Output your complete final response directly as normal text/markdown (or raw JSON when your role requires JSON).',
+              '</Runtime Tool Availability>',
+            ].join('\n');
             const invokeDirectCall = async (signal?: AbortSignal, touch?: () => void) => {
               return await this.callbacks.callAI({
                 prompt: args.promptText,
                 model,
-                systemInstruction,
+                systemInstruction: nonSandboxSystemInstruction,
                 responseSchema: args.jsonResponse ? true : undefined,
                 thinkingConfig: { thinkingLevel: config.thinkingLevel },
                 agentKind: args.kind,

@@ -1,385 +1,239 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import { updatePromptContent } from '../Styles/Components/PromptStyling';
 import { globalState } from '../Core/State';
 import { renderIconMarkup } from '../UI/Icons';
 import { ModelSelectionUI } from './ModelSelectionUI';
-import {
-    ADAPTIVE_PROMPT_PANES,
-    CONTEXTUAL_PROMPT_PANES,
-    DEEPTHINK_PROMPT_PANES
-} from './PromptsModal/PromptModeConfigs';
+import type { CustomizablePromptsAdaptiveDeepthink } from '../AdaptiveDeepthink/AdaptiveDeepthinkPrompt';
+import type { CustomizablePromptsContextual } from '../Contextual/ContextualPrompts';
+import type { CustomizablePromptsDeepthink } from '../Deepthink/prompts';
+import { DEEPTHINK_AGENT_REGISTRY, type DeepthinkAgentKind } from '../Deepthink/core/agentRegistry';
+import type { PromptPaneConfig } from '../Styles/Components/PromptContent';
+
+function paneSlug(agentKind: DeepthinkAgentKind): string {
+    return agentKind.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
+}
+
+export const DEEPTHINK_PROMPT_PANES: readonly PromptPaneConfig<CustomizablePromptsDeepthink>[] =
+    (Object.keys(DEEPTHINK_AGENT_REGISTRY) as DeepthinkAgentKind[])
+        .filter(k => k !== 'strategyProximity' && k !== 'modulesImpactReview')
+        .map(agentKind => {
+            const metadata = DEEPTHINK_AGENT_REGISTRY[agentKind];
+            const slug = paneSlug(agentKind);
+            return {
+                key: `deepthink-${slug}`,
+                title: metadata.label,
+                promptKey: metadata.systemPromptKey,
+                modelKey: metadata.modelKey,
+                textareaId: `sys-deepthink-${slug}`,
+                agentName: agentKind,
+                showAvailableModels: true
+            };
+        });
+
+export const ADAPTIVE_PROMPT_PANES: readonly PromptPaneConfig<CustomizablePromptsAdaptiveDeepthink>[] = [
+    { key: 'adaptive-main', title: 'Main Orchestrator', modelKey: 'model_main', promptKey: 'sys_adaptiveDeepthink_main', textareaId: 'sys-adaptive-main', agentName: 'adaptive-main', rows: 12, placeholder: 'Main Adaptive Deepthink orchestrator system prompt...' },
+    { key: 'adaptive-strategy-gen', title: 'Strategy Generator', modelKey: 'model_strategyGeneration', promptKey: 'sys_adaptiveDeepthink_strategyGeneration', textareaId: 'sys-adaptive-strategy-gen', agentName: 'adaptive-strategy-gen', rows: 10, placeholder: 'Strategy generation agent system prompt...' },
+    { key: 'adaptive-modules-gen', title: 'Modules Generator', modelKey: 'model_modulesGeneration', promptKey: 'sys_adaptiveDeepthink_modulesGeneration', textareaId: 'sys-adaptive-modules-gen', agentName: 'adaptive-modules-gen', rows: 10, placeholder: 'Modules generator agent system prompt...' },
+    { key: 'adaptive-modules-test', title: 'Modules Testing', modelKey: 'model_modulesTesting', promptKey: 'sys_adaptiveDeepthink_modulesTesting', textareaId: 'sys-adaptive-modules-test', agentName: 'adaptive-modules-test', rows: 10, placeholder: 'Modules testing agent system prompt...' },
+    { key: 'adaptive-execution', title: 'Execution Agent', modelKey: 'model_execution', promptKey: 'sys_adaptiveDeepthink_execution', textareaId: 'sys-adaptive-execution', agentName: 'adaptive-execution', rows: 10, placeholder: 'Execution agent system prompt...' },
+    { key: 'adaptive-critique', title: 'Solution Critique', modelKey: 'model_solutionCritique', promptKey: 'sys_adaptiveDeepthink_solutionCritique', textareaId: 'sys-adaptive-critique', agentName: 'adaptive-critique', rows: 10, placeholder: 'Solution critique agent system prompt...' },
+    { key: 'adaptive-corrector', title: 'Corrector Agent', modelKey: 'model_corrector', promptKey: 'sys_adaptiveDeepthink_corrector', textareaId: 'sys-adaptive-corrector', agentName: 'adaptive-corrector', rows: 10, placeholder: 'Corrector agent system prompt...' }
+];
+
+export const CONTEXTUAL_PROMPT_PANES: readonly PromptPaneConfig<CustomizablePromptsContextual>[] = [
+    { key: 'contextual-main-generator', title: 'Main Generation Agent', modelKey: 'model_mainGenerator', promptKey: 'sys_contextual_mainGenerator', textareaId: 'sys-contextual-main-generator', agentName: 'contextual-main-generator', rows: 12, placeholder: 'Main generation agent (self-corrector) system prompt...' },
+    { key: 'contextual-iterative-agent', title: 'Iterative Agent', modelKey: 'model_iterativeAgent', promptKey: 'sys_contextual_iterativeAgent', textareaId: 'sys-contextual-iterative-agent', agentName: 'contextual-iterative-agent', rows: 12, placeholder: 'Iterative agent (solution critique) system prompt...' },
+    { key: 'contextual-solution-pool', title: 'Structured Noise Agent', modelKey: 'model_solutionPoolAgent', promptKey: 'sys_contextual_solutionPoolAgent', textareaId: 'sys-contextual-solution-pool', agentName: 'contextual-solution-pool', rows: 12, placeholder: 'Structured noise / strategy pool agent system prompt...' },
+    { key: 'contextual-memory', title: 'Memory Agent', modelKey: 'model_memoryAgent', promptKey: 'sys_contextual_memoryAgent', textareaId: 'sys-contextual-memory', agentName: 'contextual-memory', rows: 12, placeholder: 'Memory agent system prompt...' }
+];
+
+const NAV_STRUCTURE: Record<string, Array<{ groupTitle: string; prompts: string[] }>> = {
+    deepthink: [
+        { groupTitle: "1. STRATEGY GENERATION", prompts: ["deepthink-initial-strategy"] },
+        { groupTitle: "2. SOLUTION DEVELOPMENT", prompts: ["deepthink-solution-attempt", "deepthink-solution-critique", "deepthink-solution-correction"] },
+        { groupTitle: "3. MODULES EXPLORATION", prompts: ["deepthink-modules-generation", "deepthink-modules-tester"] },
+        { groupTitle: "4. EVALUATION & JUDGMENT", prompts: ["deepthink-memory-bank", "deepthink-dos", "deepthink-bsr", "deepthink-final-judge"] }
+    ],
+    adaptiveDeepthink: [
+        { groupTitle: "1. MAIN ORCHESTRATOR", prompts: ["adaptive-main"] },
+        { groupTitle: "2. STRATEGY & MODULES", prompts: ["adaptive-strategy-gen", "adaptive-modules-gen", "adaptive-modules-test"] },
+        { groupTitle: "3. EXECUTION & CORRECTION", prompts: ["adaptive-execution", "adaptive-critique", "adaptive-corrector"] }
+    ],
+    contextual: [
+        { groupTitle: "CONTEXTUAL AGENTS", prompts: ["contextual-main-generator", "contextual-iterative-agent", "contextual-solution-pool", "contextual-memory"] }
+    ]
+};
 
 export class PromptsModal {
-    private elements: {
-        overlay: HTMLElement | null;
-        closeButton: HTMLButtonElement | null;
-        trigger: HTMLElement | null;
-        nav: HTMLElement | null;
-        content: HTMLElement | null;
+    private elements = {
+        overlay: null as HTMLElement | null,
+        closeButton: null as HTMLButtonElement | null,
+        trigger: null as HTMLElement | null,
+        nav: null as HTMLElement | null,
+        content: null as HTMLElement | null
     };
-
-    private currentMode: string = 'deepthink';
+    private currentMode = 'deepthink';
     private modelConfig: any = null;
     private providerManager: any = null;
-    private agentModelUIs: Map<string, ModelSelectionUI> = new Map();
-
-    constructor() {
-        this.elements = {
-            overlay: null,
-            closeButton: null,
-            trigger: null,
-            nav: null,
-            content: null
-        };
-
-        // We can't initialize elements here because the DOM might not be ready
-        // Elements will be initialized lazily in show() or ensureElements()
-    }
-
-    private listenersInitialized: boolean = false;
+    private agentModelUIs = new Map<string, ModelSelectionUI>();
+    private listenersInitialized = false;
 
     private ensureElements(): boolean {
         if (this.elements.overlay) return true;
-
         this.elements.overlay = document.getElementById('prompts-modal-overlay');
         this.elements.closeButton = document.getElementById('prompts-modal-close-button') as HTMLButtonElement;
         this.elements.nav = document.getElementById('prompts-modal-nav');
         this.elements.content = document.getElementById('prompts-modal-content');
-
-        if (this.elements.overlay) {
-            if (!this.listenersInitialized) {
-                this.initializeEventListeners();
-                this.listenersInitialized = true;
-            }
-            return true;
+        if (this.elements.overlay && !this.listenersInitialized) {
+            this.initializeEventListeners();
+            this.listenersInitialized = true;
         }
-        return false;
+        return !!this.elements.overlay;
+    }
+
+    private closeAllDropdowns(): void {
+        document.querySelectorAll('.prompt-model-dropdown-panel.is-open, .prompt-model-trigger.is-open').forEach(el => el.classList.remove('is-open'));
     }
 
     private initializeEventListeners(): void {
-        // Trigger event listener will be set externally by ProviderManagementUI
-
-        if (this.elements.closeButton) {
-            this.elements.closeButton.addEventListener('click', () => this.hide());
-        }
-
-        if (this.elements.overlay) {
-            this.elements.overlay.addEventListener('click', (e) => {
-                if (e.target === this.elements.overlay) {
-                    this.hide();
-                }
-            });
-        }
-
-        // Add Escape key handler to close open model dropdowns first, then modal
-        document.addEventListener('keydown', (e) => {
+        this.elements.closeButton?.addEventListener('click', () => this.hide());
+        this.elements.overlay?.addEventListener('click', e => {
+            if (e.target === this.elements.overlay) this.hide();
+        });
+        document.addEventListener('keydown', e => {
             if (e.key === 'Escape') {
-                const openPanel = document.querySelector('.prompt-model-dropdown-panel.is-open');
-                if (openPanel) {
-                    openPanel.classList.remove('is-open');
-                    document.querySelectorAll('.prompt-model-trigger.is-open').forEach(t => {
-                        t.classList.remove('is-open');
-                    });
+                if (document.querySelector('.prompt-model-dropdown-panel.is-open')) {
+                    this.closeAllDropdowns();
                     e.stopPropagation();
                     return;
                 }
-                if (this.elements.overlay?.classList.contains('is-visible')) {
-                    this.hide();
-                }
+                if (this.elements.overlay?.classList.contains('is-visible')) this.hide();
             }
         });
-
-        // Close open model dropdowns on click outside
-        document.addEventListener('click', () => {
-            const openPanels = document.querySelectorAll('.prompt-model-dropdown-panel.is-open');
-            if (openPanels.length > 0) {
-                openPanels.forEach(p => p.classList.remove('is-open'));
-                document.querySelectorAll('.prompt-model-trigger.is-open').forEach(t => {
-                    t.classList.remove('is-open');
-                });
-            }
-        });
-
-        // Listen for mode changes to update the modal
+        document.addEventListener('click', () => this.closeAllDropdowns());
         window.addEventListener('appModeChanged', () => {
             this.setCurrentMode(globalState.currentMode);
-            if (this.elements.overlay?.classList.contains('is-visible')) {
-                this.initializeModal();
-            }
+            if (this.elements.overlay?.classList.contains('is-visible')) this.initializeModal();
         });
     }
 
     public show(): void {
-        if (!this.ensureElements()) {
-            console.error('Prompts modal elements not found in DOM');
-            return;
-        }
-
-        if (this.elements.overlay) {
-            this.initializeModal(); // Re-initialize on open to reflect current mode
-            this.elements.overlay.style.display = 'flex';
-            setTimeout(() => {
-                this.elements.overlay!.classList.add('is-visible');
-                // Force initial content sync after editors are enhanced
-                setTimeout(() => updatePromptContent(), 60);
-                // Safety: run once more after layout settles
-                setTimeout(() => updatePromptContent(), 200);
-            }, 10);
-        }
+        if (!this.ensureElements() || !this.elements.overlay) return;
+        this.initializeModal();
+        this.elements.overlay.style.display = 'flex';
+        setTimeout(() => {
+            this.elements.overlay?.classList.add('is-visible');
+            setTimeout(updatePromptContent, 60);
+            setTimeout(updatePromptContent, 200);
+        }, 10);
     }
 
     public hide(): void {
-        // Try to ensure elements exist, but don't fail if they don't (modal might not be open)
         this.ensureElements();
-
-        if (this.elements.overlay) {
-            this.elements.overlay.classList.remove('is-visible');
-            this.elements.overlay.addEventListener('transitionend', () => {
-                if (!this.elements.overlay!.classList.contains('is-visible')) {
-                    this.elements.overlay!.style.display = 'none';
-                }
-            }, { once: true });
-        }
+        if (!this.elements.overlay) return;
+        this.elements.overlay.classList.remove('is-visible');
+        this.elements.overlay.addEventListener('transitionend', () => {
+            if (!this.elements.overlay?.classList.contains('is-visible')) {
+                this.elements.overlay!.style.display = 'none';
+            }
+        }, { once: true });
     }
 
     public setCurrentMode(mode: string): void {
-        this.currentMode = this.normalizeModeKey(mode);
+        this.currentMode = mode === 'adaptive-deepthink' ? 'adaptiveDeepthink' : mode;
     }
 
-    public setModelConfig(modelConfig: any): void {
-        this.modelConfig = modelConfig;
-    }
-
-    public setProviderManager(providerManager: any): void {
-        this.providerManager = providerManager;
-    }
+    public setModelConfig(modelConfig: any): void { this.modelConfig = modelConfig; }
+    public setProviderManager(providerManager: any): void { this.providerManager = providerManager; }
 
     private initializeModal(): void {
         if (!this.elements.nav || !this.elements.content) return;
-
-        // Clear previous state
         this.elements.nav.innerHTML = '';
-        this.elements.content.querySelectorAll('.prompts-mode-container').forEach(el => el.classList.remove('active'));
-        this.elements.content.querySelectorAll('.prompt-content-pane').forEach(el => el.classList.remove('active'));
+        this.elements.content.querySelectorAll('.prompts-mode-container, .prompt-content-pane').forEach(el => el.classList.remove('active'));
 
         const activeModeContainer = document.getElementById(`${this.currentMode}-prompts-container`);
         if (!activeModeContainer) return;
-
         activeModeContainer.classList.add('active');
 
-        // Display current mode at the top of nav
         const modeTitle = document.createElement('h4');
         modeTitle.className = 'prompts-nav-mode-title';
-        modeTitle.textContent = `${this.getModeDisplayName(this.currentMode)} Mode Prompts`;
+        const display = this.currentMode === 'adaptiveDeepthink' ? 'Adaptive Deepthink' : (this.currentMode ? this.currentMode.charAt(0).toUpperCase() + this.currentMode.slice(1) : '');
+        modeTitle.textContent = `${display} Mode Prompts`;
         this.elements.nav.appendChild(modeTitle);
 
-        const navStructure = this.getPromptNavStructure()[this.currentMode as keyof ReturnType<typeof this.getPromptNavStructure>];
+        const navStructure = NAV_STRUCTURE[this.currentMode];
         if (!navStructure) return;
 
         let firstNavItem: HTMLElement | null = null;
-
-        navStructure.forEach((group: any) => {
+        navStructure.forEach(group => {
             const groupTitleEl = document.createElement('h5');
             groupTitleEl.className = 'prompts-nav-group-title';
             groupTitleEl.textContent = group.groupTitle;
             this.elements.nav!.appendChild(groupTitleEl);
 
-            group.prompts.forEach((promptKey: string) => {
+            group.prompts.forEach(promptKey => {
                 const pane = activeModeContainer.querySelector<HTMLElement>(`.prompt-content-pane[data-prompt-key="${promptKey}"]`);
                 if (!pane) return;
-
-                const titleElement = pane.querySelector<HTMLHeadingElement>('.prompt-pane-title');
-                const title = titleElement ? titleElement.textContent : 'Unnamed Section';
-
                 const navItem = document.createElement('div');
                 navItem.className = 'prompts-nav-item';
-                navItem.textContent = title;
+                navItem.textContent = pane.querySelector<HTMLHeadingElement>('.prompt-pane-title')?.textContent || 'Unnamed Section';
                 navItem.dataset.targetPane = promptKey;
                 this.elements.nav!.appendChild(navItem);
-
-                if (!firstNavItem) {
-                    firstNavItem = navItem;
-                }
+                if (!firstNavItem) firstNavItem = navItem;
 
                 navItem.addEventListener('click', () => {
-                    // Remove active class from all nav items
-                    this.elements.nav?.querySelectorAll('.prompts-nav-item').forEach(item => {
-                        item.classList.remove('active');
-                    });
-
-                    // Add active class to clicked item
+                    this.elements.nav?.querySelectorAll('.prompts-nav-item').forEach(item => item.classList.remove('active'));
                     navItem.classList.add('active');
-
-                    // Hide all content panes
-                    activeModeContainer.querySelectorAll('.prompt-content-pane').forEach(pane => {
-                        pane.classList.remove('active');
-                    });
-
-                    // Show corresponding content pane
+                    activeModeContainer.querySelectorAll('.prompt-content-pane').forEach(p => p.classList.remove('active'));
                     const targetPane = activeModeContainer.querySelector(`.prompt-content-pane[data-prompt-key="${promptKey}"]`);
                     if (targetPane) {
                         targetPane.classList.add('active');
-
-                        // Update prompt content when switching panes
-                        setTimeout(() => updatePromptContent(), 50);
+                        setTimeout(updatePromptContent, 50);
                         this.initializeModelSelectors();
                     }
                 });
             });
         });
 
-        // Activate the first one by default
-        if (firstNavItem) {
-            (firstNavItem as HTMLElement).click();
-        }
-
-        // Initialize model selectors after navigation is set up
+        (firstNavItem as HTMLElement | null)?.click();
         this.initializeModelSelectors();
-
-    }
-
-    private getPromptNavStructure() {
-        return {
-            deepthink: [
-                {
-                    groupTitle: "1. STRATEGY GENERATION",
-                    prompts: ["deepthink-initial-strategy"]
-                },
-                {
-                    groupTitle: "2. SOLUTION DEVELOPMENT",
-                    prompts: ["deepthink-solution-attempt", "deepthink-solution-critique", "deepthink-solution-correction"]
-                },
-                {
-                    groupTitle: "3. MODULES EXPLORATION",
-                    prompts: ["deepthink-modules-generation", "deepthink-modules-tester"]
-                },
-                {
-                    groupTitle: "4. EVALUATION & JUDGMENT",
-                    prompts: ["deepthink-memory-bank", "deepthink-dos", "deepthink-bsr", "deepthink-final-judge"]
-                }
-            ],
-            adaptiveDeepthink: [
-                {
-                    groupTitle: "1. MAIN ORCHESTRATOR",
-                    prompts: ["adaptive-main"]
-                },
-                {
-                    groupTitle: "2. STRATEGY & MODULES",
-                    prompts: ["adaptive-strategy-gen", "adaptive-modules-gen", "adaptive-modules-test"]
-                },
-                {
-                    groupTitle: "3. EXECUTION & CORRECTION",
-                    prompts: ["adaptive-execution", "adaptive-critique", "adaptive-corrector"]
-                }
-            ],
-            contextual: [
-                {
-                    groupTitle: "CONTEXTUAL AGENTS",
-                    prompts: ["contextual-main-generator", "contextual-iterative-agent", "contextual-solution-pool", "contextual-memory"]
-                }
-            ]
-        };
-    }
-
-    private normalizeModeKey(mode: string): string {
-        const mapping: Record<string, string> = {
-            'adaptive-deepthink': 'adaptiveDeepthink'
-        };
-        return mapping[mode] || mode;
-    }
-
-    private getModeDisplayName(normalizedMode: string): string {
-        const mapping: Record<string, string> = {
-            adaptiveDeepthink: 'Adaptive Deepthink'
-        };
-        const display = mapping[normalizedMode];
-        if (display) {
-            return display;
-        }
-
-        if (!normalizedMode) {
-            return '';
-        }
-
-        return normalizedMode.charAt(0).toUpperCase() + normalizedMode.slice(1);
     }
 
     private initializeModelSelectors(): void {
         if (!this.modelConfig) return;
-
-        const modelSelectors = document.querySelectorAll('.prompt-model-select');
-        modelSelectors.forEach((selector: Element) => {
-            const selectElement = selector as HTMLSelectElement;
+        document.querySelectorAll<HTMLSelectElement>('.prompt-model-select').forEach(selectElement => {
             const container = selectElement.parentElement as HTMLElement;
             if (!container) return;
-
             const agentName = selectElement.dataset.agent || '';
-
-            // Check if trigger and dropdown panel are already created
             let trigger = container.querySelector<HTMLButtonElement>(`.prompt-model-trigger[data-agent="${agentName}"]`);
             let dropdownPanel = container.querySelector<HTMLDivElement>(`.prompt-model-dropdown-panel[data-agent="${agentName}"]`);
 
             if (!trigger) {
-                // Hide native select
                 selectElement.style.display = 'none';
-
-                // Create the "Select Model" trigger button
                 trigger = document.createElement('button');
                 trigger.type = 'button';
                 trigger.className = 'prompt-model-trigger';
                 trigger.dataset.agent = agentName;
-                const currentVal = selectElement.value;
-                trigger.innerHTML = `
-                    <span class="prompt-model-trigger-text">${currentVal || 'Select Model'}</span>
-                    ${renderIconMarkup('ChevronDown', 'prompt-model-trigger-arrow', {}, 14)}
-                `;
+                trigger.innerHTML = `<span class="prompt-model-trigger-text">${selectElement.value || 'Select Model'}</span>${renderIconMarkup('ChevronDown', 'prompt-model-trigger-arrow', {}, 14)}`;
 
-                // Create the floating connected dropdown panel
                 dropdownPanel = document.createElement('div');
                 dropdownPanel.className = 'prompt-model-dropdown-panel';
                 dropdownPanel.dataset.agent = agentName;
+                container.append(trigger, dropdownPanel);
 
-                container.appendChild(trigger);
-                container.appendChild(dropdownPanel);
-
-                // Prevent clicks inside floating panel from propagating to document (which would close it)
-                dropdownPanel.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                });
-
-                // Toggle dropdown panel on trigger click
-                trigger.addEventListener('click', (e) => {
+                dropdownPanel.addEventListener('click', e => e.stopPropagation());
+                trigger.addEventListener('click', e => {
                     e.stopPropagation();
                     const isOpen = dropdownPanel!.classList.contains('is-open');
-
-                    // Close all other open dropdowns
-                    document.querySelectorAll('.prompt-model-dropdown-panel.is-open').forEach(p => {
-                        if (p !== dropdownPanel) p.classList.remove('is-open');
-                    });
-                    document.querySelectorAll('.prompt-model-trigger.is-open').forEach(t => {
-                        if (t !== trigger) t.classList.remove('is-open');
-                    });
-
-                    if (isOpen) {
-                        dropdownPanel!.classList.remove('is-open');
-                        trigger!.classList.remove('is-open');
-                    } else {
+                    this.closeAllDropdowns();
+                    if (!isOpen) {
                         dropdownPanel!.classList.add('is-open');
                         trigger!.classList.add('is-open');
-                        const ui = this.agentModelUIs.get(agentName);
-                        ui?.updateModelOptions();
+                        this.agentModelUIs.get(agentName)?.updateModelOptions();
                     }
                 });
             } else {
-                // Sync trigger text with current select element value
                 const triggerText = trigger.querySelector('.prompt-model-trigger-text');
-                if (triggerText) {
-                    triggerText.textContent = selectElement.value || 'Select Model';
-                }
+                if (triggerText) triggerText.textContent = selectElement.value || 'Select Model';
             }
 
             const existingUI = this.agentModelUIs.get(agentName);
@@ -395,105 +249,35 @@ export class PromptsModal {
                 agentName,
                 onModelChange: (model: string) => {
                     const triggerText = trigger?.querySelector('.prompt-model-trigger-text');
-                    if (triggerText) {
-                        triggerText.textContent = model || 'Select Model';
-                    }
-                    // Close floating panel on selection
-                    dropdownPanel?.classList.remove('is-open');
-                    trigger?.classList.remove('is-open');
+                    if (triggerText) triggerText.textContent = model || 'Select Model';
+                    this.closeAllDropdowns();
                 }
             });
             ui.initialize();
-            if (agentName) {
-                this.agentModelUIs.set(agentName, ui);
-            }
+            if (agentName) this.agentModelUIs.set(agentName, ui);
         });
 
-        // Set up change detection for all textareas
-        setTimeout(() => {
-            this.setupChangeDetection();
-        }, 100);
+        setTimeout(() => this.setupChangeDetection(), 100);
     }
 
     private setupChangeDetection(): void {
-        // Get all prompt textareas
-        const textareas = document.querySelectorAll('.prompt-textarea');
-
-        textareas.forEach((textarea) => {
-            const textareaElement = textarea as HTMLTextAreaElement;
-            const textareaId = textareaElement.id;
-
-            // Find the corresponding agent name from the textarea ID
-            const agentName = this.getAgentNameFromTextareaId(textareaId);
-            if (!agentName) return;
-
-            // Store original value on first load
-            if (!textareaElement.dataset.originalValue) {
-                textareaElement.dataset.originalValue = textareaElement.value;
-            }
-
-            // Add input listener to check for changes
-            textareaElement.addEventListener('input', () => {
-                this.checkPromptChanges(agentName);
-            });
-
-            // Initial check
-            this.checkPromptChanges(agentName);
+        const agentMap: Record<string, string> = {};
+        for (const pane of [...DEEPTHINK_PROMPT_PANES, ...ADAPTIVE_PROMPT_PANES, ...CONTEXTUAL_PROMPT_PANES]) {
+            if (pane.textareaId) agentMap[pane.textareaId] = pane.textareaId;
+        }
+        document.querySelectorAll<HTMLTextAreaElement>('.prompt-textarea').forEach(textarea => {
+            if (!agentMap[textarea.id]) return;
+            if (!textarea.dataset.originalValue) textarea.dataset.originalValue = textarea.value;
+            const check = () => textarea.classList.toggle('has-changes', textarea.value !== (textarea.dataset.originalValue ?? ''));
+            textarea.addEventListener('input', check);
+            check();
         });
     }
 
-    private getAgentNameFromTextareaId(textareaId: string): string | null {
-        // Reverse mapping from textarea ID to agent name
-        for (const [agentName, id] of Object.entries(this.getPromptAgentMap())) {
-            if (id === textareaId) {
-                return agentName;
-            }
-        }
-
-        return null;
-    }
-
-
-
-    private getPromptAgentMap(): Record<string, string> {
-        const map: Record<string, string> = {};
-
-        for (const pane of [
-            ...DEEPTHINK_PROMPT_PANES,
-            ...ADAPTIVE_PROMPT_PANES,
-            ...CONTEXTUAL_PROMPT_PANES
-        ]) {
-            if (pane.textareaId) {
-                map[pane.agentName ?? pane.key] = pane.textareaId;
-            }
-        }
-
-        return map;
-    }
-
-
-
-    private getTextareaIdForAgent(agentName: string): string | null {
-        return this.getPromptAgentMap()[agentName] || null;
-    }
-
-    private checkPromptChanges(agentName: string): void {
-        const textareaId = this.getTextareaIdForAgent(agentName);
-        if (!textareaId) return;
-        const textarea = document.getElementById(textareaId) as HTMLTextAreaElement | null;
-        if (!textarea) return;
-        const isChanged = textarea.value !== (textarea.dataset.originalValue ?? '');
-        textarea.classList.toggle('has-changes', isChanged);
-    }
-
     public updateTriggerState(isGenerating: boolean): void {
-        if (this.elements.trigger) {
-            const parentSection = this.elements.trigger.closest('.sidebar-section');
-            if (parentSection) {
-                parentSection.classList.toggle('disabled', isGenerating);
-            }
-            this.elements.trigger.style.pointerEvents = isGenerating ? 'none' : 'auto';
-            this.elements.trigger.style.opacity = isGenerating ? '0.6' : '1';
-        }
+        if (!this.elements.trigger) return;
+        this.elements.trigger.closest('.sidebar-section')?.classList.toggle('disabled', isGenerating);
+        this.elements.trigger.style.pointerEvents = isGenerating ? 'none' : 'auto';
+        this.elements.trigger.style.opacity = isGenerating ? '0.6' : '1';
     }
 }

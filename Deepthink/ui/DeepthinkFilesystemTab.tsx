@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
@@ -14,36 +14,201 @@ import { sql } from '@codemirror/lang-sql';
 import { StreamLanguage } from '@codemirror/language';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { Icon } from '../../UI/Icons';
-import { GitDiffView } from '../../Styles/Components/DiffModal/GitDiffView';
 import RenderMathMarkdown from '../../Styles/Components/RenderMathMarkdown';
-import '../styles/DeepthinkFilesystemTab.css';
 
-interface CommitItem {
-    hash: string;
-    date: string;
-    message: string;
+export interface SplitDiffRow {
+    left?: { lineNumber?: number; content: string; type: 'delete' | 'normal' };
+    right?: { lineNumber?: number; content: string; type: 'add' | 'normal' };
 }
 
-interface FileItem {
-    path: string;
-    size: number;
-    mtime: number;
+export interface GitDiffHunk {
+    header: string;
+    oldStart: number;
+    oldLines: number;
+    newStart: number;
+    newLines: number;
+    splitRows: SplitDiffRow[];
 }
 
-interface TreeFolder {
-    name: string;
-    type: 'folder';
-    children: Record<string, TreeNode>;
+export interface GitDiffFile {
+    id: string;
+    displayPath: string;
+    hunks: GitDiffHunk[];
 }
 
-interface TreeFile {
-    name: string;
-    type: 'file';
-    path: string;
-    size: number;
-    mtime: number;
+export function isHiddenPath(filePath: string): boolean {
+    if (!filePath) return false;
+    return filePath.split('/').some(segment => segment.startsWith('.') || segment === '__pycache__' || segment === 'node_modules');
 }
 
+export function parseGitDiff(raw: string): GitDiffFile[] {
+    if (!raw?.trim()) return [];
+    const files: GitDiffFile[] = [];
+    const lines = raw.split(/\r?\n/);
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+        if (line.startsWith('diff --git ')) {
+            const parts = line.slice(11).split(' ');
+            let oldPath = parts[0]?.replace(/^[ab]\//, '') || '';
+            let newPath = parts[1]?.replace(/^[ab]\//, '') || oldPath;
+            let displayPath = newPath || oldPath;
+
+            i++;
+            while (i < lines.length && !lines[i].startsWith('diff --git ') && !lines[i].startsWith('@@ ')) {
+                const headerLine = lines[i];
+                if (headerLine.startsWith('deleted file mode')) displayPath = oldPath;
+                else if (headerLine.startsWith('rename to ')) displayPath = headerLine.slice(10).trim();
+                else if (headerLine.startsWith('--- ')) {
+                    const p = headerLine.slice(4).trim();
+                    if (p !== '/dev/null') oldPath = p.replace(/^[ab]\//, '');
+                } else if (headerLine.startsWith('+++ ')) {
+                    const p = headerLine.slice(4).trim();
+                    if (p === '/dev/null') displayPath = oldPath;
+                    else newPath = p.replace(/^[ab]\//, '');
+                }
+                i++;
+            }
+
+            if (isHiddenPath(displayPath) || isHiddenPath(oldPath)) {
+                while (i < lines.length && !lines[i].startsWith('diff --git ')) i++;
+                continue;
+            }
+
+            const hunks: GitDiffHunk[] = [];
+            while (i < lines.length && !lines[i].startsWith('diff --git ')) {
+                if (lines[i].startsWith('@@ ')) {
+                    const m = lines[i].match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)/);
+                    if (!m) { i++; continue; }
+                    const oldStart = parseInt(m[1], 10);
+                    const oldLines = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+                    const newStart = parseInt(m[3], 10);
+                    const newLines = m[4] !== undefined ? parseInt(m[4], 10) : 1;
+                    const header = lines[i];
+                    let curOld = oldStart, curNew = newStart;
+                    const hunkRawLines: Array<{ prefix: string; text: string; oldNo?: number; newNo?: number }> = [];
+
+                    i++;
+                    while (i < lines.length && !lines[i].startsWith('@@ ') && !lines[i].startsWith('diff --git ')) {
+                        const hl = lines[i];
+                        if (!hl.startsWith('\\')) {
+                            const prefix = hl.charAt(0);
+                            const text = hl.slice(1);
+                            if (prefix === '+') hunkRawLines.push({ prefix: '+', text, newNo: curNew++ });
+                            else if (prefix === '-') hunkRawLines.push({ prefix: '-', text, oldNo: curOld++ });
+                            else hunkRawLines.push({ prefix: ' ', text, oldNo: curOld++, newNo: curNew++ });
+                        }
+                        i++;
+                    }
+
+                    const splitRows: SplitDiffRow[] = [];
+                    let pendingDeletes: Array<{ no: number; text: string }> = [];
+                    let pendingAdds: Array<{ no: number; text: string }> = [];
+
+                    const flushPending = () => {
+                        const count = Math.max(pendingDeletes.length, pendingAdds.length);
+                        for (let k = 0; k < count; k++) {
+                            splitRows.push({
+                                left: pendingDeletes[k] ? { lineNumber: pendingDeletes[k].no, content: pendingDeletes[k].text, type: 'delete' } : undefined,
+                                right: pendingAdds[k] ? { lineNumber: pendingAdds[k].no, content: pendingAdds[k].text, type: 'add' } : undefined,
+                            });
+                        }
+                        pendingDeletes = [];
+                        pendingAdds = [];
+                    };
+
+                    for (const r of hunkRawLines) {
+                        if (r.prefix === '-') pendingDeletes.push({ no: r.oldNo!, text: r.text });
+                        else if (r.prefix === '+') pendingAdds.push({ no: r.newNo!, text: r.text });
+                        else {
+                            flushPending();
+                            splitRows.push({
+                                left: { lineNumber: r.oldNo, content: r.text, type: 'normal' },
+                                right: { lineNumber: r.newNo, content: r.text, type: 'normal' },
+                            });
+                        }
+                    }
+                    flushPending();
+                    hunks.push({ header, oldStart, oldLines, newStart, newLines, splitRows });
+                } else {
+                    i++;
+                }
+            }
+            files.push({ id: `${oldPath}:${newPath}`, displayPath, hunks });
+        } else {
+            i++;
+        }
+    }
+    return files;
+}
+
+const GitDiffView: React.FC<{ diff: string }> = ({ diff }) => {
+    const parsedFiles = useMemo(() => parseGitDiff(diff), [diff]);
+
+    if (!diff?.trim() || parsedFiles.length === 0) {
+        return (
+            <div className="git-diff-view custom-scrollbar">
+                <div className="git-diff-empty-state">
+                    <p>No changes between selected snapshots.</p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="git-diff-view custom-scrollbar">
+            <div className="git-diff-container">
+                {parsedFiles.map(file => (
+                    <section key={file.id} className="git-diff-file-section">
+                        <div className="git-diff-file-header">
+                            <Icon name="file" />
+                            <span className="git-diff-file-path">{file.displayPath}</span>
+                        </div>
+                        {file.hunks.length === 0 ? (
+                            <div className="git-diff-empty-hunk">No text differences to display.</div>
+                        ) : (
+                            <table className="git-diff-split-table">
+                                <tbody>
+                                    {file.hunks.map((hunk, hIdx) => (
+                                        <React.Fragment key={hIdx}>
+                                            {hIdx > 0 && (
+                                                <tr className="git-diff-divider-row">
+                                                    <td colSpan={2} className="git-diff-divider-cell"><span>···</span></td>
+                                                </tr>
+                                            )}
+                                            {hunk.splitRows.map((row, rIdx) => (
+                                                <tr key={rIdx} className="git-diff-split-row">
+                                                    <td className={`git-diff-col-side ${row.left ? `git-diff-cell-${row.left.type}` : 'git-diff-cell-empty'}`}>
+                                                        <div className="git-diff-side-inner">
+                                                            <span className="git-diff-line-number">{row.left?.lineNumber ?? ''}</span>
+                                                            <span className="git-diff-line-code">{row.left?.content ?? ''}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className={`git-diff-col-side ${row.right ? `git-diff-cell-${row.right.type}` : 'git-diff-cell-empty'}`}>
+                                                        <div className="git-diff-side-inner">
+                                                            <span className="git-diff-line-number">{row.right?.lineNumber ?? ''}</span>
+                                                            <span className="git-diff-line-code">{row.right?.content ?? ''}</span>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </React.Fragment>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                    </section>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+interface CommitItem { hash: string; date: string; message: string; }
+interface FileItem { path: string; size: number; mtime: number; }
+interface TreeFolder { name: string; type: 'folder'; children: Record<string, TreeNode>; }
+interface TreeFile { name: string; type: 'file'; path: string; size: number; mtime: number; }
 type TreeNode = TreeFolder | TreeFile;
 type ExplorerView = 'file' | 'diff';
 
@@ -107,11 +272,7 @@ function getLanguageExtension(filename: string) {
     }
 }
 
-interface DeepthinkFilesystemTabProps {
-    repositoryId: string;
-}
-
-export const DeepthinkFilesystemTab: React.FC<DeepthinkFilesystemTabProps> = ({ repositoryId }) => {
+export const DeepthinkFilesystemTab: React.FC<{ repositoryId: string }> = ({ repositoryId }) => {
     const [history, setHistory] = useState<CommitItem[]>([]);
     const [selectedCommit, setSelectedCommit] = useState('current');
     const [compareBase, setCompareBase] = useState('current');
@@ -216,7 +377,6 @@ export const DeepthinkFilesystemTab: React.FC<DeepthinkFilesystemTabProps> = ({ 
         return () => observer.disconnect();
     }, []);
 
-    // The filesystem is a first-class Deepthink tab, not a card inside one.
     useEffect(() => {
         const container = document.getElementById('pipelines-content-container');
         container?.classList.add('filesystem-active');
@@ -241,15 +401,11 @@ export const DeepthinkFilesystemTab: React.FC<DeepthinkFilesystemTabProps> = ({ 
             if (id && id === repositoryId) {
                 void fetchHistory(id);
                 void fetchFileTree(id, selectedCommit);
-                if (view === 'diff') {
-                    void fetchDiff(id, compareBase, compareHead);
-                }
+                if (view === 'diff') void fetchDiff(id, compareBase, compareHead);
             }
         };
         window.addEventListener('deepthinkResultsSnapshot', onSnapshot);
-        return () => {
-            window.removeEventListener('deepthinkResultsSnapshot', onSnapshot);
-        };
+        return () => window.removeEventListener('deepthinkResultsSnapshot', onSnapshot);
     }, [repositoryId, selectedCommit, view, compareBase, compareHead]);
 
     useEffect(() => {
@@ -257,8 +413,7 @@ export const DeepthinkFilesystemTab: React.FC<DeepthinkFilesystemTabProps> = ({ 
     }, [repositoryId, selectedCommit]);
 
     useEffect(() => {
-        if (!repositoryId || view !== 'diff') return;
-        void fetchDiff(repositoryId, compareBase, compareHead);
+        if (repositoryId && view === 'diff') void fetchDiff(repositoryId, compareBase, compareHead);
     }, [repositoryId, compareBase, compareHead, view]);
 
     useEffect(() => {
@@ -423,7 +578,6 @@ export const DeepthinkFilesystemTab: React.FC<DeepthinkFilesystemTabProps> = ({ 
                                             </div>
                                         </div>
                                     </div>
-
                                     {isDiffLoading ? (
                                         <div className="vfs-code-loading">Loading diff comparison…</div>
                                     ) : (

@@ -129,6 +129,13 @@ export class ModelConfigManager {
     }
 
     public updateParameter<K extends keyof ModelParameters>(key: K, value: ModelParameters[K]): void {
+        if (key === 'deepthinkCodeExecutionEnabled' && value === true) {
+            this.parameters.isolateBranches = true;
+        }
+        if (key === 'isolateBranches' && this.parameters.deepthinkCodeExecutionEnabled) {
+            this.parameters.isolateBranches = true;
+            return;
+        }
         this.parameters[key] = value;
     }
 
@@ -181,7 +188,7 @@ export class ModelConfigManager {
     }
 
     public isIsolateBranchesEnabled(): boolean {
-        return this.parameters.isolateBranches === true;
+        return this.parameters.deepthinkCodeExecutionEnabled || this.parameters.isolateBranches === true;
     }
 
     public isDeepthinkCodeExecutionEnabled(): boolean {

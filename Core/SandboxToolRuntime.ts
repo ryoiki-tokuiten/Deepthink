@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import type { ToolDefinition } from '@langchain/core/language_models/base';
 import { AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import { DEFAULT_NORMALIZATION_BOUNDS, normalizeTranscript, validateTranscript } from '@letta-ai/trajectory';
@@ -56,31 +51,10 @@ interface SandboxToolAgentOptions {
     runScopeDescription?: string;
     agentFilesystemRules?: string[];
     repositoryAccess?: SandboxRepositoryAccess;
-    /**
-     * Maximum tool-call turns (m) before overtime grace window and tool revocation.
-     * Defaults to MAX_TOOL_TURNS (64).
-     */
     maxToolTurns?: number;
-    /**
-     * Maximum wall-clock duration in milliseconds before revoking tools and forcing final_output.
-     * Defaults to MAX_SANDBOX_DURATION_MS (60 minutes).
-     */
     maxDurationMs?: number;
-    /**
-     * Maximum allowed output tokens in final_output submission.
-     * Defaults to 5000 (10000 for Solution Correction and Memory Bank).
-     */
     maxOutputTokens?: number;
-    /**
-     * Optional role-specific contract for a structured final_output payload.
-     * The sandbox loop validates this while the model is still in its tool
-     * conversation, so an invalid payload becomes a recoverable tool error
-     * rather than discarding the agent's completed sandbox work.
-     */
     finalOutputContract?: SandboxFinalOutputContract;
-    /**
-     * Optional handler for real-time shared_workspace tool calls (§8.4).
-     */
     sharedWorkspaceHandler?: (input: SharedWorkspaceToolInput) => Promise<string>;
     abortSignal?: AbortSignal;
     retryDelaysMs?: readonly number[];
@@ -88,234 +62,27 @@ interface SandboxToolAgentOptions {
     onRetry?: (attempt: number, maxRetries: number, delayMs: number, error: unknown) => void;
 }
 
-type ContextualSandboxToolAgentOptions = SandboxToolAgentOptions;
-
 export interface SandboxRepositoryAccess {
     repositoryId: string;
-    /**
-     * The only repository directory this agent may write. Omit this for a
-     * completely read-only repository view; agents still have private /tmp
-     * scratch space for research and temporary files.
-     */
     agentDirectory?: string;
     agentDirectoryReadOnly?: boolean;
     readableDirectories?: string[];
-    /** Readable directories that intentionally follow the live writable branch. */
     liveReadableDirectories?: string[];
-    /**
-     * Descendant repository directories removed from otherwise readable parent
-     * mounts. This preserves branch-local permissions when a child directory
-     * belongs to a different role (for example Strategy-N/Critique).
-     */
     hiddenDirectories?: string[];
-    /** Mount the complete repository read-only instead of selected peers. */
     fullRepositoryRead?: boolean;
-    /** Reserved for the Adaptive Deepthink orchestrator's global workspace. */
     fullRepositoryWrite?: boolean;
-    /** Git commit used as the immutable baseline for read-only mounts. */
     revision?: string;
 }
 
 export interface SandboxFinalOutputContract {
-    /** Human-readable role/mode name used in tool descriptions and errors. */
     name: string;
-    /** Optional JSON Schema used for final_output.response when this role is structured. */
     responseSchema?: Record<string, unknown>;
-    /**
-     * Validate the parsed JSON payload. Throw an Error with a correction
-     * message when the payload does not match the role's accepted scheme.
-     */
     validate: (payload: unknown) => void;
 }
 
-export async function snapshotSandboxRepositoryById(repositoryId: string, commitMessage: string): Promise<string> {
-    const response = await fetch(`${getSandboxApiBasePath()}/snapshot`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ repositoryId, commitMessage }),
-    });
-    if (!response.ok) throw new Error(`Sandbox snapshot failed (${response.status}).`);
-    const payload = await response.json().catch(() => ({}));
-    if (typeof payload?.commit !== 'string' || !payload.commit) {
-        throw new Error('Sandbox snapshot did not return a repository revision.');
-    }
-    if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('deepthinkResultsSnapshot', {
-            detail: { repositoryId, commit: payload.commit },
-        }));
-    }
-    return payload.commit;
-}
-
-/** Restore only one strategy branch to a pre-correction repository checkpoint. */
-export async function restoreSandboxRepositoryStrategy(
-    repositoryId: string,
-    strategyDirectory: string,
-    commit: string
-): Promise<void> {
-    const response = await fetch(`${getSandboxApiBasePath()}/repository/restore-strategy`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ repositoryId, strategyDirectory, commit }),
-    });
-    if (!response.ok) {
-        let message = `Sandbox strategy restore failed (${response.status}).`;
-        try {
-            const payload = await response.json();
-            message = payload?.error || message;
-        } catch {
-            // Keep the useful HTTP-level error when the response is not JSON.
-        }
-        throw new Error(message);
-    }
-    if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('deepthinkResultsSnapshot', {
-            detail: { repositoryId },
-        }));
-    }
-}
-
-/** A file rendered from orchestration state into the durable Deepthink Results
- * repository. These files never enter the permission-scoped agent cache. */
 export interface DeepthinkResultsContextFile {
     path: string;
     content: string;
-}
-
-/**
- * Persist a pruned full-repository mirror under Results/deepthink_timestamp
- * and commit it as one atomic Deepthink iteration. The backend owns the
- * filesystem copy so agents retain their existing cache and permissions.
- */
-export async function snapshotDeepthinkResultsRepository(
-    repositoryId: string,
-    commitMessage: string,
-    contextFiles: DeepthinkResultsContextFile[]
-): Promise<void> {
-    const response = await fetch(`${getSandboxApiBasePath()}/repository/results-snapshot`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ repositoryId, commitMessage, contextFiles }),
-    });
-    if (!response.ok) {
-        let message = `Deepthink Results snapshot failed (${response.status}).`;
-        try {
-            const payload = await response.json();
-            message = payload?.error || message;
-        } catch {
-            // Keep the useful HTTP-level error when the response is not JSON.
-        }
-        throw new Error(message);
-    }
-    // The Results explorer is a projection of this repository, so refresh it
-    // precisely when a new Git snapshot lands—never on a polling timer.
-    window.dispatchEvent(new CustomEvent('deepthinkResultsSnapshot', {
-        detail: { repositoryId },
-    }));
-}
-
-/** Pre-create the durable Results Git repository at the start of a sandboxed
- * Deepthink run. This does not seed or expose any agent workspace files. */
-export async function ensureDeepthinkResultsRepository(repositoryId: string): Promise<{ resultPath?: string }> {
-    const response = await fetch(`${getSandboxApiBasePath()}/repository/ensure-deepthink`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ repositoryId }),
-    });
-    if (!response.ok) throw new Error(`Could not initialize Deepthink Results (${response.status}).`);
-    try {
-        const payload = await response.json();
-        return { resultPath: payload?.resultPath };
-    } catch {
-        return {};
-    }
-}
-
-/**
- * Persist or replace the single latest.gz export in the run's Results repository.
- */
-export async function saveSandboxLatestGz(
-    repositoryId: string,
-    state: unknown
-): Promise<{ ok: boolean; path?: string }> {
-    const response = await fetch(`${getSandboxApiBasePath()}/repository/save-latest-gz`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ repositoryId, state }),
-    });
-    if (!response.ok) {
-        let msg = `Failed to save latest.gz (${response.status})`;
-        try {
-            const err = await response.json();
-            msg = err?.error || msg;
-        } catch { }
-        throw new Error(msg);
-    }
-    return await response.json();
-}
-
-/**
- * Open the host Results repository directory in the user's OS file manager.
- */
-export async function openSandboxRepositoryDirectory(
-    repositoryId?: string
-): Promise<{ ok: boolean; path?: string }> {
-    const response = await fetch(`${getSandboxApiBasePath()}/repository/open-directory`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(repositoryId ? { repositoryId } : {}),
-    });
-    if (!response.ok) {
-        let msg = `Failed to open directory (${response.status})`;
-        try {
-            const err = await response.json();
-            msg = err?.error || msg;
-        } catch { }
-        throw new Error(msg);
-    }
-    return await response.json();
-}
-
-/**
- * Open the host /Results directory in the user's OS file manager.
- */
-export async function openResultsDirectory(): Promise<{ ok: boolean; path?: string }> {
-    return openSandboxRepositoryDirectory();
-}
-
-interface SandboxArchivedStrategy {
-    archivedDirectory?: string;
-    activeDirectory: string;
-}
-
-/**
- * Archive one active Deepthink strategy directory before a PRUNE replacement.
- * The backend performs this repository mutation atomically so a new branch can
- * safely reuse the stable Strategy-N directory name.
- */
-export async function archiveSandboxRepositoryStrategy(
-    repositoryId: string,
-    strategyDirectory: string
-): Promise<SandboxArchivedStrategy> {
-    const response = await fetch(`${getSandboxApiBasePath()}/repository/archive-strategy`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ repositoryId, strategyDirectory }),
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload?.error || 'Failed to archive the replaced strategy repository directory.');
-    if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('deepthinkResultsSnapshot', {
-            detail: { repositoryId },
-        }));
-    }
-    return payload as SandboxArchivedStrategy;
-}
-
-interface SandboxInlineOutputReference {
-    path: string;
-    kind?: 'file' | 'image';
-    label?: string;
 }
 
 interface SandboxToolAgentResult {
@@ -324,20 +91,11 @@ interface SandboxToolAgentResult {
     finalText: string;
     executionTrace?: SandboxToolExecutionTrace;
     executionTraceText?: string;
-    /** Full uncleaned trajectory of the invoke in .jsonl format (one JSON object per line). */
     rawTrajectoryJsonl?: string;
-    geminiContent?: {
-        parts: any[];
-    };
-    /** Raw BaseMessage[] from this private tool loop. This is kept only for
-     *  diagnostics/trace export; downstream agent histories must use promptText. */
+    geminiContent?: { parts: any[] };
     loopMessages?: BaseMessage[];
-    /** Full conversation messages up through the accepted final_output call,
-     *  used when continuing the same agent's trajectory across loop rounds. */
     messages?: BaseMessage[];
 }
-
-type ContextualSandboxToolAgentResult = SandboxToolAgentResult;
 
 export interface SandboxToolExecutionTrace {
     schema: 'sandbox_tool_execution_trace.v1';
@@ -364,18 +122,13 @@ export interface SandboxToolExecutionTraceMessage {
     additional_kwargs?: unknown;
     response_metadata?: unknown;
     id?: string;
-    images?: Array<{
-        filename: string;
-        mimeType: string;
-        url: string;
-    }>;
+    images?: Array<{ filename: string; mimeType: string; url: string }>;
 }
 
 export interface SeedFile {
     name: string;
     mimeType: string;
     base64: string;
-    /** Relative sandbox location, used for virtual filesystem context. */
     relativePath?: string;
 }
 
@@ -404,23 +157,26 @@ interface SandboxEnvironmentProfile {
     ok?: boolean;
     agentSummary?: string;
     setupErrors?: string[];
+    limits?: {
+        maxToolTurns?: number;
+        maxDurationMs?: number;
+        defaultCommandTimeoutMs?: number;
+        maxCommandTimeoutMs?: number;
+    };
 }
 
 const sandboxToolSchema = z.object({
     command: z.string().trim().min(1),
-    timeout_ms: z.number().int().positive().max(300_000).optional()
+    timeout_ms: z.number().int().positive().optional()
 });
-
-const finalOutputToolSchema = z.object({
-    response: z.unknown()
-}).strict();
+const finalOutputToolSchema = z.object({ response: z.unknown() }).strict();
 
 const SANDBOX_TOOL_NAME = 'sandbox_exec';
 const FINAL_OUTPUT_TOOL_NAME = 'final_output';
 const MAX_TOOL_TURNS = 64;
 const OVERTIME_GRACE_TURNS = 5;
 const FORCED_FINAL_OUTPUT_TURNS = 5;
-const MAX_SANDBOX_DURATION_MS = 60 * 60_000; // 1 hour wall-clock budget
+const MAX_SANDBOX_DURATION_MS = 60 * 60_000;
 const SANDBOX_WARNING_10_MIN_MS = 10 * 60_000;
 const SANDBOX_WARNING_5_MIN_MS = 5 * 60_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 5000;
@@ -428,53 +184,111 @@ const OMIT_TRACE_VALUE = Symbol('omitTraceValue');
 const REDACTED_THOUGHT_TRACE = '[thought content omitted from shared execution trace]';
 let sandboxEnvironmentProfilePromise: Promise<SandboxEnvironmentProfile | null> | null = null;
 
+function dispatchSnapshotEvent(repositoryId: string, commit?: string) {
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('deepthinkResultsSnapshot', {
+            detail: commit ? { repositoryId, commit } : { repositoryId },
+        }));
+    }
+}
+
+async function postSandboxJson<T = any>(endpoint: string, body: unknown, fallbackError: string): Promise<T> {
+    const response = await fetch(`${getSandboxApiBasePath()}${endpoint}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.error || `${fallbackError} (${response.status}).`);
+    return payload as T;
+}
+
+export async function snapshotSandboxRepositoryById(repositoryId: string, commitMessage: string): Promise<string> {
+    const payload = await postSandboxJson<{ commit?: string }>('/snapshot', { repositoryId, commitMessage }, 'Sandbox snapshot failed');
+    if (typeof payload?.commit !== 'string' || !payload.commit) {
+        throw new Error('Sandbox snapshot did not return a repository revision.');
+    }
+    dispatchSnapshotEvent(repositoryId, payload.commit);
+    return payload.commit;
+}
+
+export async function restoreSandboxRepositoryStrategy(repositoryId: string, strategyDirectory: string, commit: string): Promise<void> {
+    await postSandboxJson('/repository/restore-strategy', { repositoryId, strategyDirectory, commit }, 'Sandbox strategy restore failed');
+    dispatchSnapshotEvent(repositoryId);
+}
+
+export async function snapshotDeepthinkResultsRepository(
+    repositoryId: string,
+    commitMessage: string,
+    contextFiles: DeepthinkResultsContextFile[]
+): Promise<void> {
+    await postSandboxJson('/repository/results-snapshot', { repositoryId, commitMessage, contextFiles }, 'Deepthink Results snapshot failed');
+    dispatchSnapshotEvent(repositoryId);
+}
+
+export async function ensureDeepthinkResultsRepository(repositoryId: string): Promise<{ resultPath?: string }> {
+    const payload = await postSandboxJson<{ resultPath?: string }>('/repository/ensure-deepthink', { repositoryId }, 'Could not initialize Deepthink Results');
+    return { resultPath: payload?.resultPath };
+}
+
+export async function saveSandboxLatestGz(repositoryId: string, state: unknown): Promise<{ ok: boolean; path?: string }> {
+    return postSandboxJson('/repository/save-latest-gz', { repositoryId, state }, 'Failed to save latest.gz');
+}
+
+export async function openSandboxRepositoryDirectory(repositoryId?: string): Promise<{ ok: boolean; path?: string }> {
+    return postSandboxJson('/repository/open-directory', repositoryId ? { repositoryId } : {}, 'Failed to open directory');
+}
+
+export const openResultsDirectory = () => openSandboxRepositoryDirectory();
+
+export async function archiveSandboxRepositoryStrategy(
+    repositoryId: string,
+    strategyDirectory: string
+): Promise<{ archivedDirectory?: string; activeDirectory: string }> {
+    const payload = await postSandboxJson<{ archivedDirectory?: string; activeDirectory: string }>(
+        '/repository/archive-strategy',
+        { repositoryId, strategyDirectory },
+        'Failed to archive the replaced strategy repository directory.'
+    );
+    dispatchSnapshotEvent(repositoryId);
+    return payload;
+}
+
 const READ_ONLY_BASH_COMMANDS = new Set([
     'ls', 'cat', 'rg', 'grep', 'egrep', 'fgrep', 'find', 'head', 'tail',
     'wc', 'stat', 'file', 'tree', 'pwd', 'which', 'type', 'realpath', 'dirname', 'basename', 'du', 'df',
 ]);
-const READ_ONLY_GIT_SUBCOMMANDS = new Set([
-    'status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'ls-files', 'ls-tree',
-]);
+const READ_ONLY_GIT_SUBCOMMANDS = new Set(['status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'ls-files', 'ls-tree']);
 const FILE_WRITE_REDIRECT_OPERATORS = new Set(['>', '>>', '>|', '&>', '&>>', '<>']);
 const MUTATING_FIND_FLAGS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fls']);
 
 function extractBashWordText(word: any): string {
-    if (!word || !Array.isArray(word.parts)) return '';
-    return word.parts
-        .map((part: any) => (part.type === 'Literal' || part.type === 'SingleQuoted') ? String(part.value ?? '') : '')
-        .join('');
+    return Array.isArray(word?.parts)
+        ? word.parts.map((p: any) => (p.type === 'Literal' || p.type === 'SingleQuoted') ? String(p.value ?? '') : '').join('')
+        : '';
 }
 
 function isReadOnlySimpleCommandWords(words: string[]): boolean {
     const tokens = words.filter(Boolean);
-    if (tokens.length === 0) return false;
+    if (!tokens.length) return false;
     const [first, ...rest] = tokens[0] === 'rtk' ? tokens.slice(1) : tokens;
     if (!first) return false;
     if (first === 'read' && tokens[0] === 'rtk') return true;
-    if (first === 'find') {
-        return !rest.some(arg => MUTATING_FIND_FLAGS.has(arg));
-    }
+    if (first === 'find') return !rest.some(arg => MUTATING_FIND_FLAGS.has(arg));
     if (READ_ONLY_BASH_COMMANDS.has(first)) return true;
     if (first === 'git') {
-        const subcommand = rest.find(arg => !arg.startsWith('-'));
-        return !!subcommand && READ_ONLY_GIT_SUBCOMMANDS.has(subcommand);
+        const sub = rest.find(arg => !arg.startsWith('-'));
+        return !!sub && READ_ONLY_GIT_SUBCOMMANDS.has(sub);
     }
     return false;
 }
 
-/**
- * Parses a shell command string into a Bash AST using `just-bash` and returns
- * true when the AST contains no file-write redirections (`>`, `>>`, etc.) and
- * every command node sits in the read-only inspection allowlist.
- */
 export function isReadOnlyBashCommand(command: string): boolean {
     try {
         const ast = parseBashAst(command);
         let sawCommand = false;
         const checkCommand = (cmd: any): boolean => {
-            if ((cmd.redirections || []).some((r: any) => FILE_WRITE_REDIRECT_OPERATORS.has(r.operator))) {
-                return false;
-            }
+            if ((cmd.redirections || []).some((r: any) => FILE_WRITE_REDIRECT_OPERATORS.has(r.operator))) return false;
             if (cmd.type === 'SimpleCommand') {
                 sawCommand = true;
                 const words = [extractBashWordText(cmd.name), ...(cmd.args || []).map(extractBashWordText)];
@@ -483,10 +297,7 @@ export function isReadOnlyBashCommand(command: string): boolean {
                     Array.isArray(w.parts) && w.parts.some((p: any) => p.type === 'CommandSubstitution' || p.type === 'ProcessSubstitution')
                 );
             }
-            if (cmd.type === 'Subshell' || cmd.type === 'Group') {
-                return Array.isArray(cmd.body) && cmd.body.every(checkStatement);
-            }
-            return false;
+            return (cmd.type === 'Subshell' || cmd.type === 'Group') && Array.isArray(cmd.body) && cmd.body.every(checkStatement);
         };
         const checkStatement = (stmt: any): boolean =>
             Array.isArray(stmt.pipelines) && stmt.pipelines.every((p: any) => Array.isArray(p.commands) && p.commands.every(checkCommand));
@@ -555,72 +366,49 @@ function createFinalOutputToolDefinition(contract?: SandboxFinalOutputContract):
     };
 }
 
+
 function isImageUpload(file: { mimeType?: string }): boolean {
     return typeof file.mimeType === 'string' && file.mimeType.startsWith('image/');
 }
 
-function extensionForMimeType(mimeType: string): string {
-    switch (mimeType) {
-        case 'image/jpeg':
-            return '.jpg';
-        case 'image/gif':
-            return '.gif';
-        case 'image/webp':
-            return '.webp';
-        case 'image/bmp':
-            return '.bmp';
-        case 'image/tiff':
-            return '.tiff';
-        case 'text/plain':
-            return '.txt';
-        case 'text/csv':
-            return '.csv';
-        case 'application/json':
-            return '.json';
-        case 'application/pdf':
-            return '.pdf';
-        case 'image/png':
-        default:
-            return mimeType.startsWith('image/') ? '.png' : '.bin';
-    }
+const MIME_EXTENSIONS: Record<string, string> = {
+    'image/jpeg': '.jpg',
+    'image/gif': '.gif',
+    'image/webp': '.webp',
+    'image/bmp': '.bmp',
+    'image/tiff': '.tiff',
+    'text/plain': '.txt',
+    'text/csv': '.csv',
+    'application/json': '.json',
+    'application/pdf': '.pdf',
+    'image/png': '.png',
+};
+
+export function extensionForMimeType(mimeType: string): string {
+    return MIME_EXTENSIONS[mimeType] ?? (mimeType.startsWith('image/') ? '.png' : '.bin');
 }
 
 function getDefaultSeedFiles(): SeedFile[] {
-    return globalState.directContextFiles
-        .map((file, index) => {
-            const fileWithName = file as typeof file & { name?: string };
-            const fallbackName = `uploaded-file-${index + 1}${extensionForMimeType(file.mimeType)}`;
-            return {
-                name: fileWithName.name || fallbackName,
-                mimeType: file.mimeType,
-                base64: file.base64
-            };
-        });
+    return globalState.directContextFiles.map((file, i) => ({
+        name: (file as any).name || `uploaded-file-${i + 1}${extensionForMimeType(file.mimeType)}`,
+        mimeType: file.mimeType,
+        base64: file.base64,
+    }));
+}
+
+function toUserUploadedFiles(files: Array<{ name?: string; mimeType: string; base64: string }>, prefix: string): SeedFile[] {
+    return files.map((file, i) => {
+        const name = (file.name || `${prefix}-${i + 1}${extensionForMimeType(file.mimeType)}`).replace(/[\\/]+/g, '_');
+        return { ...file, name, relativePath: `user_uploaded/${name}` };
+    });
 }
 
 function getDirectContextSandboxFiles(seedFiles: SeedFile[]): SeedFile[] {
-    return seedFiles.map((file, index) => {
-        const fallbackName = `direct-context-file-${index + 1}${extensionForMimeType(file.mimeType)}`;
-        const name = (file.name || fallbackName).replace(/[\\/]+/g, '_');
-        return {
-            ...file,
-            name,
-            relativePath: `user_uploaded/${name}`,
-        };
-    });
+    return toUserUploadedFiles(seedFiles, 'direct-context-file');
 }
 
 function getDefaultFilesystemFiles(): SeedFile[] {
-    return globalState.filesystemContextFiles.map((file, index) => {
-        const fallbackName = `uploaded-file-${index + 1}${extensionForMimeType(file.mimeType)}`;
-        const name = (file.name || fallbackName).replace(/[\\/]+/g, '_');
-        return {
-            name,
-            mimeType: file.mimeType,
-            base64: file.base64,
-            relativePath: `user_uploaded/${name}`,
-        };
-    });
+    return toUserUploadedFiles(globalState.filesystemContextFiles, 'uploaded-file');
 }
 
 function getProviderImageContent(
@@ -635,37 +423,21 @@ function getProviderImageContent(
             ...(text ? [{ type: 'text', text }] : []),
             ...images.map(image => ({
                 type: 'image',
-                source: {
-                    type: 'base64',
-                    media_type: image.mimeType,
-                    data: image.base64
-                }
+                source: { type: 'base64', media_type: image.mimeType, data: image.base64 }
             }))
         ];
     }
-
     if (providerName === 'gemini') {
         return [
             ...(text ? [{ text }] : []),
-            // Gemini accepts inline binary parts for its supported document,
-            // image, audio, and video inputs, so preserve direct uploads as
-            // native inputs instead of turning them into rough text estimates.
-            ...validFiles.map(file => ({
-                inlineData: {
-                    mimeType: file.mimeType,
-                    data: file.base64
-                }
-            }))
+            ...validFiles.map(file => ({ inlineData: { mimeType: file.mimeType, data: file.base64 } }))
         ];
     }
-
     return [
         ...(text ? [{ type: 'text', text }] : []),
         ...images.map(image => ({
             type: 'image_url',
-            image_url: {
-                url: `data:${image.mimeType};base64,${image.base64}`
-            }
+            image_url: { url: `data:${image.mimeType};base64,${image.base64}` }
         }))
     ];
 }
@@ -675,9 +447,7 @@ function createImageMessage(
     text: string,
     files: Array<{ mimeType: string; base64: string }>
 ): HumanMessage {
-    return new HumanMessage({
-        content: getProviderImageContent(providerName, text, files)
-    });
+    return new HumanMessage({ content: getProviderImageContent(providerName, text, files) });
 }
 
 function buildUploadedFileMessage(providerName: ResolvedProvider['providerName'], files: SeedFile[]): HumanMessage | null {
@@ -707,31 +477,17 @@ function buildUploadedFileMessage(providerName: ResolvedProvider['providerName']
     return createImageMessage(providerName, text, nativeFiles);
 }
 
+
 function buildGeneratedImageMessage(providerName: ResolvedProvider['providerName'], images: SandboxToolImage[]): HumanMessage | null {
     const attachable = images.filter(image => !!image.base64);
-    if (attachable.length === 0) return null;
-
-    return createImageMessage(providerName, '', attachable.map(image => ({
-        mimeType: image.mimeType,
-        base64: image.base64!
-    })));
+    return attachable.length ? createImageMessage(providerName, '', attachable.map(img => ({ mimeType: img.mimeType, base64: img.base64! }))) : null;
 }
 
 function buildGeminiHistoryContent(displayText: string, images: SandboxToolImage[]): { parts: any[] } | undefined {
     const attachable = images.filter(image => !!image.base64);
-    if (attachable.length === 0) return undefined;
-
-    return {
-        parts: [
-            { text: displayText },
-            ...attachable.map(image => ({
-                inlineData: {
-                    mimeType: image.mimeType,
-                    data: image.base64!
-                }
-            }))
-        ]
-    };
+    return attachable.length ? {
+        parts: [{ text: displayText }, ...attachable.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64! } }))]
+    } : undefined;
 }
 
 function buildEnvironmentProfileText(environmentProfile: SandboxEnvironmentProfile | null): string {
@@ -916,6 +672,7 @@ function buildSystemPrompt(
     ].join('\n');
 }
 
+
 async function invokeAgentTurn(
     provider: ResolvedProvider,
     messages: BaseMessage[],
@@ -927,26 +684,16 @@ async function invokeAgentTurn(
     const finalOutputToolDefinition = createFinalOutputToolDefinition(options.finalOutputContract);
     const tools: ToolDefinition[] = onlyFinalOutputTool
         ? [finalOutputToolDefinition]
-        : [
-            sandboxToolDefinition,
-            finalOutputToolDefinition,
-            ...(options.sharedWorkspaceHandler ? [sharedWorkspaceToolDefinition] : []),
-        ];
+        : [sandboxToolDefinition, finalOutputToolDefinition, ...(options.sharedWorkspaceHandler ? [sharedWorkspaceToolDefinition] : [])];
 
-    return invokeToolCallingAgentTurn(
-        provider,
-        messages,
-        systemPrompt,
-        tools,
-        {
-            modelName: provider.modelName,
-            abortSignal: options.abortSignal,
-            retryDelaysMs: options.retryDelaysMs,
-            silenceTimeoutMs: options.silenceTimeoutMs,
-            label: `${options.agentName} (turn ${turnNumber}, ${provider.providerName}:${provider.modelName})`,
-            onRetry: options.onRetry,
-        }
-    );
+    return invokeToolCallingAgentTurn(provider, messages, systemPrompt, tools, {
+        modelName: provider.modelName,
+        abortSignal: options.abortSignal,
+        retryDelaysMs: options.retryDelaysMs,
+        silenceTimeoutMs: options.silenceTimeoutMs,
+        label: `${options.agentName} (turn ${turnNumber}, ${provider.providerName}:${provider.modelName})`,
+        onRetry: options.onRetry,
+    });
 }
 
 async function executeSandboxTool(
@@ -956,75 +703,36 @@ async function executeSandboxTool(
     repositoryAccess?: SandboxRepositoryAccess,
     timeoutMs?: number
 ): Promise<SandboxToolResponse> {
-    const response = await fetch(`${getSandboxApiBasePath()}/execute`, {
-        method: 'POST',
-        headers: {
-            'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-            sessionId,
-            command,
-            timeoutMs,
-            repositoryAccess,
-            files: seedFiles ?? undefined
-        })
-    });
-
-    const payload = await response.json();
-    if (!response.ok) {
-        throw new Error(payload?.error || 'Sandbox backend request failed.');
-    }
-    return normalizeSandboxToolResponseUrls(payload as SandboxToolResponse);
+    const payload = await postSandboxJson<SandboxToolResponse>(
+        '/execute',
+        { sessionId, command, timeoutMs, repositoryAccess, files: seedFiles ?? undefined },
+        'Sandbox backend request failed'
+    );
+    return {
+        ...payload,
+        images: payload.images?.map(img => ({ ...img, url: withAppBasePath(img.url) })),
+        visibleFiles: payload.visibleFiles?.map(img => ({ ...img, url: withAppBasePath(img.url) })),
+    };
 }
 
-interface VirtualEnvironmentCommandOptions {
+export async function runVirtualEnvironmentCommand(options: {
     sessionId: string;
     command: string;
     seedFiles?: SeedFile[];
     repositoryAccess?: SandboxRepositoryAccess;
     timeoutMs?: number;
-}
-
-/**
- * Direct terminal transport for a tool-calling orchestrator. It deliberately
- * uses the same backend session and repository access contract as sandbox_exec
- * so its files appear in the Deepthink Filesystem tab.
- */
-export async function runVirtualEnvironmentCommand(
-    options: VirtualEnvironmentCommandOptions
-): Promise<Pick<SandboxToolResponse, 'ok' | 'exitCode' | 'stdout' | 'stderr' | 'error' | 'durationMs'>> {
-    const result = await executeSandboxTool(
-        options.sessionId,
-        options.command,
-        options.seedFiles ?? null,
-        options.repositoryAccess,
-        options.timeoutMs,
-    );
-    return {
-        ok: result.ok,
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        error: result.error,
-        durationMs: result.durationMs,
-    };
+}): Promise<Pick<SandboxToolResponse, 'ok' | 'exitCode' | 'stdout' | 'stderr' | 'error' | 'durationMs'>> {
+    const r = await executeSandboxTool(options.sessionId, options.command, options.seedFiles ?? null, options.repositoryAccess, options.timeoutMs);
+    return { ok: r.ok, exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, error: r.error, durationMs: r.durationMs };
 }
 
 async function getSandboxEnvironmentProfile(): Promise<SandboxEnvironmentProfile | null> {
     if (!sandboxEnvironmentProfilePromise) {
         sandboxEnvironmentProfilePromise = fetch(`${getSandboxApiBasePath()}/environment`, {
             method: 'GET',
-            headers: {
-                'accept': 'application/json'
-            }
-        })
-            .then(async response => {
-                if (!response.ok) return null;
-                return await response.json() as SandboxEnvironmentProfile;
-            })
-            .catch(() => null);
+            headers: { accept: 'application/json' }
+        }).then(async res => res.ok ? await res.json() as SandboxEnvironmentProfile : null).catch(() => null);
     }
-
     return sandboxEnvironmentProfilePromise;
 }
 
@@ -1038,109 +746,36 @@ function getSandboxApiBasePath(): string {
 }
 
 function withAppBasePath(url: string): string {
-    if (!url.startsWith('/api/sandbox/')) return url;
-    return `${getAppBasePath()}${url}`;
-}
-
-function normalizeSandboxToolImageUrls(images?: SandboxToolImage[]): SandboxToolImage[] | undefined {
-    return images?.map(image => {
-        return { ...image, url: withAppBasePath(image.url) };
-    });
-}
-
-function normalizeSandboxToolResponseUrls(response: SandboxToolResponse): SandboxToolResponse {
-    return {
-        ...response,
-        images: normalizeSandboxToolImageUrls(response.images),
-        visibleFiles: response.visibleFiles?.map(image => ({ ...image, url: withAppBasePath(image.url) }))
-    };
-}
-
-function formatCommandBlock(command: string): string {
-    return [
-        '<!-- CODE_EXECUTION_START -->',
-        '<!-- LANGUAGE: bash -->',
-        '```bash',
-        command.trimEnd(),
-        '```',
-        '<!-- CODE_EXECUTION_END -->'
-    ].join('\n');
-}
-
-function formatOutputBlock(response: SandboxToolResponse): string {
-    const lines: string[] = [];
-    lines.push(`exit_code=${response.exitCode}`);
-    lines.push(`duration_ms=${response.durationMs}`);
-
-    if (response.stdout?.trim()) {
-        lines.push('\nstdout:');
-        lines.push(response.stdout.trimEnd());
-    }
-
-    if (response.stderr?.trim()) {
-        lines.push('\nstderr:');
-        lines.push(response.stderr.trimEnd());
-    }
-
-    if (response.error) {
-        lines.push('\nerror:');
-        lines.push(response.error.trimEnd());
-    }
-
-    if (response.visibleFiles?.length) {
-        lines.push('\nvisible_image_files:');
-        response.visibleFiles.forEach(file => {
-            lines.push(`- ${file.filename} (${file.mimeType}, ${file.size} bytes)`);
-        });
-    }
-
-    return [
-        '<!-- EXECUTION_OUTPUT_START -->',
-        '```',
-        lines.join('\n').trimEnd(),
-        '```',
-        '<!-- EXECUTION_OUTPUT_END -->'
-    ].join('\n');
-}
-
-function formatImageLinks(images: SandboxToolImage[]): string {
-    if (images.length === 0) return '';
-
-    return [
-        'Generated or updated images:',
-        ...images.map(image => `![${image.filename}](${image.url})`)
-    ].join('\n');
+    return url.startsWith('/api/sandbox/') ? `${getAppBasePath()}${url}` : url;
 }
 
 function formatToolTranscript(command: string, response: SandboxToolResponse): string {
+    const lines = [`exit_code=${response.exitCode}`, `duration_ms=${response.durationMs}`];
+    if (response.stdout?.trim()) lines.push('\nstdout:', response.stdout.trimEnd());
+    if (response.stderr?.trim()) lines.push('\nstderr:', response.stderr.trimEnd());
+    if (response.error) lines.push('\nerror:', response.error.trimEnd());
+    if (response.visibleFiles?.length) {
+        lines.push('\nvisible_image_files:', ...response.visibleFiles.map(f => `- ${f.filename} (${f.mimeType}, ${f.size} bytes)`));
+    }
+    const imgs = response.images ?? [];
     return [
         '### Tool Execution Command',
-        formatCommandBlock(command),
+        `<!-- CODE_EXECUTION_START -->\n<!-- LANGUAGE: bash -->\n\`\`\`bash\n${command.trimEnd()}\n\`\`\`\n<!-- CODE_EXECUTION_END -->`,
         '',
         '### Command Output',
-        formatOutputBlock(response),
+        `<!-- EXECUTION_OUTPUT_START -->\n\`\`\`\n${lines.join('\n').trimEnd()}\n\`\`\`\n<!-- EXECUTION_OUTPUT_END -->`,
         '',
-        formatImageLinks(response.images ?? [])
+        imgs.length ? ['Generated or updated images:', ...imgs.map(i => `![${i.filename}](${i.url})`)].join('\n') : ''
     ].filter(Boolean).join('\n');
-}
-
-function formatIntermediateModelOutput(text: string): string {
-    return `### Intermediate Model Output\n${text}`;
 }
 
 function normalizeWorkspaceReferencePath(rawPath: string, access?: SandboxRepositoryAccess): string | null {
     const raw = rawPath.trim().replace(/\\/g, '/');
     if (!raw || raw.includes('\0')) return null;
-
     const fromWorkspaceRoot = raw.startsWith('/workspace/');
     const fromRelativeRoot = raw.startsWith('../');
-    let normalized = raw
-        .replace(/^\/workspace\/?/, '')
-        .replace(/^\.\//, '');
-
-    while (normalized.startsWith('../')) {
-        normalized = normalized.slice(3);
-    }
+    let normalized = raw.replace(/^\/workspace\/?/, '').replace(/^\.\//, '');
+    while (normalized.startsWith('../')) normalized = normalized.slice(3);
 
     const parts: string[] = [];
     for (const part of normalized.split('/')) {
@@ -1148,249 +783,121 @@ function normalizeWorkspaceReferencePath(rawPath: string, access?: SandboxReposi
         if (part === '..') return null;
         parts.push(part);
     }
+    if (!parts.length) return null;
 
-    if (parts.length === 0) return null;
-
-    if (access && access.agentDirectory && !fromWorkspaceRoot && !fromRelativeRoot) {
-        const visibleDirectories = new Set([
-            access.agentDirectory,
-            ...(access.readableDirectories || []),
-            'tmp',
-            'direct_context',
-            'user_uploaded',
-        ]);
-        if (!visibleDirectories.has(parts[0]) && (!access.fullRepositoryRead || parts.length === 1)) {
+    if (access?.agentDirectory && !fromWorkspaceRoot && !fromRelativeRoot) {
+        const visible = new Set([access.agentDirectory, ...(access.readableDirectories || []), 'tmp', 'direct_context', 'user_uploaded']);
+        if (!visible.has(parts[0]) && (!access.fullRepositoryRead || parts.length === 1)) {
             parts.unshift(access.agentDirectory);
         }
     }
-
     return parts.join('/');
 }
 
-function encodeSandboxFileUrl(sessionId: string, relativePath: string): string {
-    const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/');
-    return withAppBasePath(`/api/sandbox/files/${encodeURIComponent(sessionId)}/${encodedPath}`);
-}
-
-function isImageReference(reference: SandboxInlineOutputReference): boolean {
-    // Agents occasionally label an image artifact as a generic "file". The
-    // actual path is authoritative here: rendering image bytes as a code file
-    // both looks broken and can create an enormous text payload in the UI.
-    return reference.kind === 'image' || /\.(png|jpe?g|gif|webp|bmp|tiff?|svg)$/i.test(reference.path);
-}
-
-function markdownForReference(sessionId: string, reference: SandboxInlineOutputReference): string {
-    const url = encodeSandboxFileUrl(sessionId, reference.path);
-    const label = (reference.label || reference.path.split('/').pop() || reference.path).replace(/[\]\n\r]/g, ' ').trim();
-
-    if (isImageReference(reference)) {
-        return `![${label}](${url})`;
-    }
-
-    return `[${label}](${url})`;
-}
-
-export function expandInlineReferenceMarkers(
-    text: string,
-    sessionId: string,
-    access?: SandboxRepositoryAccess
-): string {
+export function expandInlineReferenceMarkers(text: string, sessionId: string, access?: SandboxRepositoryAccess): string {
     if (!text) return text;
-    return text.replace(/\[\[(image|file):([^\]|\n\r]+)(?:\|([^\]\n\r]+))?\]\]/g, (_match, kind, rawPath, rawLabel) => {
-        const path = normalizeWorkspaceReferencePath(String(rawPath), access);
-        if (!path) return '';
-        return markdownForReference(sessionId, {
-            kind: kind === 'image' ? 'image' : 'file',
-            path,
-            label: rawLabel ? String(rawLabel).trim() : undefined,
-        });
+    return text.replace(/\[\[(image|file):([^\]|\n\r]+)(?:\|([^\]\n\r]+))?\]\]/g, (_m, kind, rawPath, rawLabel) => {
+        const normPath = normalizeWorkspaceReferencePath(String(rawPath), access);
+        if (!normPath) return '';
+        const url = withAppBasePath(`/api/sandbox/files/${encodeURIComponent(sessionId)}/${normPath.split('/').map(encodeURIComponent).join('/')}`);
+        const label = (rawLabel ? String(rawLabel).trim() : (normPath.split('/').pop() || normPath)).replace(/[\]\n\r]/g, ' ').trim();
+        const isImg = kind === 'image' || /\.(png|jpe?g|gif|webp|bmp|tiff?|svg)$/i.test(normPath);
+        return isImg ? `![${label}](${url})` : `[${label}](${url})`;
     });
 }
 
-function buildSubmittedFinalOutput(args: {
-    finalText: string;
-    sessionId: string;
-    repositoryAccess?: SandboxRepositoryAccess;
-}): string {
-    return expandInlineReferenceMarkers(args.finalText.trim(), args.sessionId, args.repositoryAccess).trim();
-}
-
-function getFinalText(message: AIMessage): string {
-    return messageContentToText(message.content).trim();
-}
-
-function getSandboxToolCalls(message: AIMessage) {
-    return (message.tool_calls ?? []).filter(toolCall => toolCall.name === SANDBOX_TOOL_NAME);
-}
-
-function getFinalOutputToolCalls(message: AIMessage) {
-    return (message.tool_calls ?? []).filter(toolCall => toolCall.name === FINAL_OUTPUT_TOOL_NAME);
-}
-
-function getSharedWorkspaceToolCalls(message: AIMessage) {
-    return (message.tool_calls ?? []).filter(toolCall => toolCall.name === SHARED_WORKSPACE_TOOL_NAME);
-}
-
-function structuredFinalOutputText(
-    response: unknown,
-    contract: SandboxFinalOutputContract | undefined
-): string {
+function structuredFinalOutputText(response: unknown, contract?: SandboxFinalOutputContract): string {
     if (!contract) {
         if (typeof response !== 'string' || !response.trim()) {
             throw new Error('final_output.response must be a non-empty string for this role.');
         }
         return response.trim();
     }
-
     let payload = response;
     if (typeof payload === 'string') {
         let candidate = payload.trim();
-        const fenceMatch = candidate.match(/```(?:json|json5)?\s*\n?([\s\S]*?)\n?\s*```/i);
-        if (fenceMatch && fenceMatch[1]?.trim()) {
+        const fenceMatch = candidate.match(/\`\`\`(?:json|json5)?\s*\n?([\s\S]*?)\n?\s*\`\`\`/i);
+        if (fenceMatch?.[1]?.trim()) {
             candidate = fenceMatch[1].trim();
         } else if (!candidate.startsWith('{') && !candidate.startsWith('[')) {
-            const firstBrace = candidate.indexOf('{');
-            const lastBrace = candidate.lastIndexOf('}');
-            if (firstBrace !== -1 && lastBrace > firstBrace) {
-                candidate = candidate.substring(firstBrace, lastBrace + 1).trim();
-            }
+            const first = candidate.indexOf('{');
+            const last = candidate.lastIndexOf('}');
+            if (first !== -1 && last > first) candidate = candidate.substring(first, last + 1).trim();
         }
         try {
             payload = JSON.parse(candidate);
         } catch (error) {
-            const details = error instanceof Error ? error.message : 'invalid JSON';
-            throw new Error(`${contract.name} requires a JSON object in final_output.response. JSON parsing failed: ${details}`);
+            throw new Error(`${contract.name} requires a JSON object in final_output.response. JSON parsing failed: ${error instanceof Error ? error.message : 'invalid JSON'}`);
         }
     }
-
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         throw new Error(`${contract.name} requires final_output.response to be a JSON object.`);
     }
-
     contract.validate(payload);
     return typeof response === 'string' ? response.trim() : JSON.stringify(payload);
 }
 
-function isLikelyImageDataUri(value: string): boolean {
-    return /^data:image\/[^;]+;base64,/i.test(value);
-}
-
-function redactBinaryString(value: string, label: string): string {
-    return `[${label} omitted from text trace; length=${value.length}]`;
-}
-
-function normalizeTraceKey(key: string | undefined): string {
-    return (key || '').replace(/[_-]+/g, '').toLowerCase();
-}
-
 function isProviderThinkingRecord(record: Record<string, unknown>): boolean {
-    const type = typeof record.type === 'string' ? record.type.toLowerCase() : '';
-    return record.thought === true ||
-        type === 'thinking' ||
-        type === 'reasoning' ||
-        type === 'redacted_thinking';
+    const t = typeof record.type === 'string' ? record.type.toLowerCase() : '';
+    return record.thought === true || t === 'thinking' || t === 'reasoning' || t === 'redacted_thinking';
 }
 
 function hasToolPayload(record: Record<string, unknown>): boolean {
-    return 'functionCall' in record ||
-        'functionResponse' in record ||
-        'tool_calls' in record ||
-        'tool_call' in record ||
-        'tool_use' in record ||
-        'tool_result' in record;
+    return ['functionCall', 'functionResponse', 'tool_calls', 'tool_call', 'tool_use', 'tool_result'].some(k => k in record);
 }
 
-function shouldOmitTraceField(key: string | undefined, parent?: Record<string, unknown>): boolean {
-    const normalized = normalizeTraceKey(key);
-    if (normalized === 'thoughtsignature' || normalized === 'thinkingsignature') return true;
-    if (normalized === 'thought' && parent && isProviderThinkingRecord(parent)) return true;
-    if (normalized === 'signature' && parent && isProviderThinkingRecord(parent)) return true;
-    if (normalized === 'reasoningcontent' || normalized === 'thinkingcontent') return true;
-    return false;
+function shouldOmitTraceField(key?: string, parent?: Record<string, unknown>): boolean {
+    const norm = (key || '').replace(/[_-]+/g, '').toLowerCase();
+    if (norm === 'thoughtsignature' || norm === 'thinkingsignature' || norm === 'reasoningcontent' || norm === 'thinkingcontent') return true;
+    return (norm === 'thought' || norm === 'signature') && !!parent && isProviderThinkingRecord(parent);
 }
 
 function scrubTraceValue(value: unknown, key?: string, parent?: Record<string, unknown>): unknown | typeof OMIT_TRACE_VALUE {
-    if (shouldOmitTraceField(key, parent)) {
-        return OMIT_TRACE_VALUE;
-    }
-
+    if (shouldOmitTraceField(key, parent)) return OMIT_TRACE_VALUE;
     if (typeof value === 'string') {
-        if (isLikelyImageDataUri(value)) {
-            const mimeMatch = value.match(/^data:([^;]+);base64,/i);
-            return redactBinaryString(value, `${mimeMatch?.[1] || 'image'} data URI`);
+        if (/^data:image\/[^;]+;base64,/i.test(value)) {
+            const m = value.match(/^data:([^;]+);base64,/i);
+            return `[${m?.[1] || 'image'} data URI omitted from text trace; length=${value.length}]`;
         }
-
         const parentMime = parent?.mimeType || parent?.mime_type || parent?.media_type;
-        if (
-            key === 'data' &&
-            typeof parentMime === 'string' &&
-            parentMime.startsWith('image/') &&
-            value.length > 128
-        ) {
-            return redactBinaryString(value, `${parentMime} base64`);
+        if (key === 'data' && typeof parentMime === 'string' && parentMime.startsWith('image/') && value.length > 128) {
+            return `[${parentMime} base64 omitted from text trace; length=${value.length}]`;
         }
-
         return value;
     }
-
-    if (Array.isArray(value)) {
-        return value
-            .map(item => scrubTraceValue(item))
-            .filter(item => item !== OMIT_TRACE_VALUE);
-    }
-
+    if (Array.isArray(value)) return value.map(item => scrubTraceValue(item)).filter(item => item !== OMIT_TRACE_VALUE);
     if (value && typeof value === 'object') {
         const record = value as Record<string, unknown>;
         if (isProviderThinkingRecord(record) && !hasToolPayload(record)) {
-            return {
-                type: typeof record.type === 'string' ? record.type : 'thought',
-                redacted: REDACTED_THOUGHT_TRACE,
-            };
+            return { type: typeof record.type === 'string' ? record.type : 'thought', redacted: REDACTED_THOUGHT_TRACE };
         }
-
         const entries: Array<[string, unknown]> = [];
-        Object.entries(record).forEach(([entryKey, entryValue]) => {
-            const scrubbed = scrubTraceValue(entryValue, entryKey, record);
-            if (scrubbed !== OMIT_TRACE_VALUE) {
-                entries.push([entryKey, scrubbed]);
-            }
-        });
+        for (const [k, v] of Object.entries(record)) {
+            const scrubbed = scrubTraceValue(v, k, record);
+            if (scrubbed !== OMIT_TRACE_VALUE) entries.push([k, scrubbed]);
+        }
         return Object.fromEntries(entries);
     }
-
     return value;
 }
 
-function messageRoleForTrace(messageType: string): SandboxToolExecutionTraceMessage['role'] {
-    switch (messageType) {
-        case 'ai':
-            return 'assistant';
-        case 'human':
-            return 'user';
-        case 'system':
-            return 'system';
-        case 'tool':
-            return 'tool';
-        default:
-            return 'unknown';
-    }
-}
+const ROLE_MAP: Record<string, SandboxToolExecutionTraceMessage['role']> = {
+    ai: 'assistant', human: 'user', system: 'system', tool: 'tool'
+};
 
 function messageTypeForTrace(message: BaseMessage): string {
     const getter = (message as { _getType?: () => string })._getType;
-    if (typeof getter === 'function') return getter.call(message);
-    return message.constructor?.name || 'unknown';
+    return typeof getter === 'function' ? getter.call(message) : (message.constructor?.name || 'unknown');
 }
 
 function buildTraceMessage(message: BaseMessage): SandboxToolExecutionTraceMessage {
     const raw = message as any;
     const messageType = messageTypeForTrace(message);
     const traced: SandboxToolExecutionTraceMessage = {
-        role: messageRoleForTrace(messageType),
+        role: ROLE_MAP[messageType] || 'unknown',
         message_type: messageType,
         content: scrubTraceValue(raw.content),
     };
-
     if (raw.tool_calls) traced.tool_calls = scrubTraceValue(raw.tool_calls);
     if (raw.invalid_tool_calls) traced.invalid_tool_calls = scrubTraceValue(raw.invalid_tool_calls);
     if (raw.tool_call_id) traced.tool_call_id = String(raw.tool_call_id);
@@ -1400,34 +907,10 @@ function buildTraceMessage(message: BaseMessage): SandboxToolExecutionTraceMessa
     if (raw.response_metadata && Object.keys(raw.response_metadata).length > 0) traced.response_metadata = scrubTraceValue(raw.response_metadata);
     if (raw.id) traced.id = String(raw.id);
     if (Array.isArray(raw.artifact?.images)) traced.images = raw.artifact.images;
-
     return traced;
 }
 
-function buildExecutionTrace(args: {
-    options: SandboxToolAgentOptions;
-    provider: ResolvedProvider;
-    sessionId: string;
-    finalText: string;
-    loopMessages: BaseMessage[];
-}): SandboxToolExecutionTrace {
-    return {
-        schema: 'sandbox_tool_execution_trace.v1',
-        sandbox_tool_name: SANDBOX_TOOL_NAME,
-        agent: {
-            name: args.options.agentName,
-            provider: args.provider.providerName,
-            model: args.provider.modelName,
-            session_id: args.sessionId,
-        },
-        final_text: args.finalText,
-        messages: args.loopMessages.map(buildTraceMessage),
-    };
-}
-
 export function isContextualSandboxToolEnabled(): boolean {
-    // Uploaded files are meaningful only when agents have a sandbox in which
-    // to inspect them, so either upload bucket activates the runtime per run.
     return globalState.virtualEnvironmentEnabled
         || globalState.directContextFiles.length > 0
         || globalState.filesystemContextFiles.length > 0;
@@ -1436,41 +919,19 @@ export function isContextualSandboxToolEnabled(): boolean {
 function extractReasoningTextsFromMessage(message: BaseMessage): string[] {
     const raw = message as any;
     const texts: string[] = [];
-
     if (Array.isArray(raw.content)) {
         for (const part of raw.content) {
-            if (!part || typeof part !== 'object') continue;
-            const record = part as Record<string, unknown>;
-            if (isProviderThinkingRecord(record)) {
-                const candidate = typeof record.thinking === 'string'
-                    ? record.thinking
-                    : typeof record.text === 'string'
-                        ? record.text
-                        : typeof record.summary === 'string'
-                            ? record.summary
-                            : '';
-                if (candidate.trim()) texts.push(candidate.trim());
+            if (part && typeof part === 'object' && isProviderThinkingRecord(part as Record<string, unknown>)) {
+                const c = [part.thinking, part.text, part.summary].find(x => typeof x === 'string' && x.trim());
+                if (c) texts.push(c.trim());
             }
         }
     }
-
-    const kwargsReasoning = raw.additional_kwargs?.reasoning_content ?? raw.additional_kwargs?.thinking;
-    if (typeof kwargsReasoning === 'string' && kwargsReasoning.trim()) {
-        texts.push(kwargsReasoning.trim());
-    }
+    const kw = raw.additional_kwargs?.reasoning_content ?? raw.additional_kwargs?.thinking;
+    if (typeof kw === 'string' && kw.trim()) texts.push(kw.trim());
     return texts;
 }
 
-function isHarnessReminderText(text: string): boolean {
-    const trimmed = text.trimStart();
-    return trimmed.startsWith('<harness_note>') ||
-        trimmed.startsWith('Your previous response was ordinary prose, so it was not submitted.');
-}
-
-/**
- * Controls whether model reasoning/thinking blocks are emitted into `.jsonl` trajectory files.
- * Disabled by default to keep on-disk `.jsonl` files compact for downstream agent inspection.
- */
 export const INCLUDE_REASONING_IN_TRAJECTORY_JSONL = false;
 
 export function sanitizeTrajectoryRecordsForJsonl(
@@ -1479,11 +940,9 @@ export function sanitizeTrajectoryRecordsForJsonl(
 ): Array<Record<string, unknown>> {
     let firstUserDropped = false;
     const cleaned: Array<Record<string, unknown>> = [];
-
     for (const record of records) {
         if (!record || typeof record !== 'object') continue;
         const roleOrKind = record.role ?? record.kind;
-
         if (roleOrKind === 'system') continue;
         if (roleOrKind === 'user' && !firstUserDropped) {
             firstUserDropped = true;
@@ -1491,54 +950,17 @@ export function sanitizeTrajectoryRecordsForJsonl(
         }
         if (roleOrKind === 'reasoning' && !includeReasoning) continue;
 
-        const copy: Record<string, unknown> = { ...record };
-        delete copy.timestamp;
-        delete copy.captured_at;
-        delete copy.id;
-        delete copy.tool_call_id;
-        delete copy.source_message_id;
-        delete copy.source_line_id;
-
+        const { timestamp, captured_at, id, tool_call_id, source_message_id, source_line_id, ...copy } = record as Record<string, any>;
         if (Array.isArray(copy.tool_calls)) {
             copy.tool_calls = copy.tool_calls.map((tc: any) => {
                 if (!tc || typeof tc !== 'object') return tc;
-                const tcCopy: Record<string, unknown> = { ...tc };
-                delete tcCopy.id;
+                const { id: _id, ...tcCopy } = tc;
                 return tcCopy;
             });
         }
-
         cleaned.push(copy);
     }
-
     return cleaned;
-}
-
-/**
- * Formats a simple system/user/assistant exchange (or single-message fallback)
- * into `@letta-ai/trajectory` validated `.jsonl` records.
- */
-export function formatTrajectoryWithLetta(args: {
-    systemInstruction?: string;
-    userPrompt?: string;
-    assistantResponse: string;
-    reasoningText?: string;
-}): string {
-    const messages: BaseMessage[] = [];
-    if (args.systemInstruction?.trim()) {
-        messages.push(new SystemMessage(args.systemInstruction));
-    }
-    if (args.userPrompt?.trim()) {
-        messages.push(new HumanMessage(args.userPrompt));
-    } else {
-        messages.push(new HumanMessage('[agent invocation]'));
-    }
-    const aiMsg = new AIMessage(args.assistantResponse || '[empty response]');
-    if (INCLUDE_REASONING_IN_TRAJECTORY_JSONL && args.reasoningText?.trim()) {
-        (aiMsg as any).additional_kwargs = { reasoning_content: args.reasoningText.trim() };
-    }
-    messages.push(aiMsg);
-    return buildRawTrajectoryJsonl(messages);
 }
 
 export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
@@ -1548,11 +970,8 @@ export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
         const raw = message as any;
         const callId = typeof raw.tool_call_id === 'string' ? raw.tool_call_id : '';
         if (!callId) continue;
-        const content = typeof raw.content === 'string'
-            ? raw.content
-            : JSON.stringify(scrubTraceValue(raw.content));
-        const ok = raw.status !== 'error';
-        toolResultByCallId.set(callId, { content, ok });
+        const content = typeof raw.content === 'string' ? raw.content : JSON.stringify(scrubTraceValue(raw.content));
+        toolResultByCallId.set(callId, { content, ok: raw.status !== 'error' });
     }
 
     const lettaRows: Array<Record<string, unknown>> = [];
@@ -1563,65 +982,39 @@ export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
     for (const message of allMessages) {
         const raw = message as any;
         const messageType = messageTypeForTrace(message);
-
-        if (messageType === 'system') {
-            continue;
-        }
+        if (messageType === 'system') continue;
 
         if (messageType === 'human') {
             const text = messageContentToText(raw.content).trim();
-            if (!text || isHarnessReminderText(text)) continue;
-            lettaRows.push({
-                kind: 'user',
-                text,
-                captured_at: nextTimestamp(),
-            });
+            if (!text || text.startsWith('<harness_note>') || text.startsWith('Your previous response was ordinary prose, so it was not submitted.')) continue;
+            lettaRows.push({ kind: 'user', text, captured_at: nextTimestamp() });
             continue;
         }
 
         if (messageType === 'ai') {
             const msgId = typeof raw.id === 'string' && raw.id ? raw.id : `msg_${stepIdx}`;
             if (INCLUDE_REASONING_IN_TRAJECTORY_JSONL) {
-                const reasoningTexts = extractReasoningTextsFromMessage(message);
-                for (const reasoning of reasoningTexts) {
-                    lettaRows.push({
-                        kind: 'reasoning',
-                        source_message_id: msgId,
-                        text: reasoning,
-                        captured_at: nextTimestamp(),
-                    });
+                for (const reasoning of extractReasoningTextsFromMessage(message)) {
+                    lettaRows.push({ kind: 'reasoning', source_message_id: msgId, text: reasoning, captured_at: nextTimestamp() });
                 }
             }
-
             const text = messageContentToText(raw.content).trim();
             if (text) {
-                lettaRows.push({
-                    kind: 'assistant',
-                    source_message_id: msgId,
-                    text,
-                    captured_at: nextTimestamp(),
-                });
+                lettaRows.push({ kind: 'assistant', source_message_id: msgId, text, captured_at: nextTimestamp() });
             }
-
             const toolCalls = Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
             for (let i = 0; i < toolCalls.length; i++) {
                 const call = toolCalls[i] ?? {};
                 const callId = typeof call.id === 'string' && call.id ? call.id : `${msgId}_call_${i + 1}`;
                 const toolName = typeof call.name === 'string' && call.name ? call.name : 'unknown_tool';
                 const callArgs = call.args ?? {};
-                const command = toolName === SANDBOX_TOOL_NAME && typeof callArgs?.command === 'string'
-                    ? callArgs.command
-                    : '';
-
-                const matchedResult = toolResultByCallId.get(callId);
-                let resultText = matchedResult?.content ?? (toolName === FINAL_OUTPUT_TOOL_NAME ? 'final_output accepted.' : '');
-                const resultOk = matchedResult?.ok ?? true;
-
-                // Pass 2 (just-bash AST classification): mask output of read-only commands when exit_code === 0
+                const command = toolName === SANDBOX_TOOL_NAME && typeof callArgs?.command === 'string' ? callArgs.command : '';
+                const matched = toolResultByCallId.get(callId);
+                let resultText = matched?.content ?? (toolName === FINAL_OUTPUT_TOOL_NAME ? 'final_output accepted.' : '');
+                const resultOk = matched?.ok ?? true;
                 if (toolName === SANDBOX_TOOL_NAME && resultOk && command && isReadOnlyBashCommand(command)) {
                     resultText = 'exit_code=0 [read-only command output masked]';
                 }
-
                 lettaRows.push({
                     kind: 'tool_call',
                     source_line_id: callId,
@@ -1635,49 +1028,28 @@ export function buildRawTrajectoryJsonl(allMessages: BaseMessage[]): string {
         }
     }
 
-    if (!lettaRows.some(row => row.kind === 'user')) {
-        lettaRows.unshift({
-            kind: 'user',
-            text: '[sandbox invocation]',
-            captured_at: new Date(baseMs - 1_000).toISOString(),
-        });
+    if (!lettaRows.some(r => r.kind === 'user')) {
+        lettaRows.unshift({ kind: 'user', text: '[sandbox invocation]', captured_at: new Date(baseMs - 1_000).toISOString() });
     }
-    if (!lettaRows.some(row => row.kind === 'assistant' || row.kind === 'tool_call')) {
-        lettaRows.push({
-            kind: 'assistant',
-            text: '[completed]',
-            captured_at: nextTimestamp(),
-        });
+    if (!lettaRows.some(r => r.kind === 'assistant' || r.kind === 'tool_call')) {
+        lettaRows.push({ kind: 'assistant', text: '[completed]', captured_at: nextTimestamp() });
     }
 
     try {
         const normalized = normalizeTranscript({
             source: 'letta-code',
-            transcript: lettaRows.map(row => JSON.stringify(row)).join('\n'),
-            bounds: {
-                ...DEFAULT_NORMALIZATION_BOUNDS,
-                toolResults: { maxCharacters: null, strategy: 'head-tail' },
-            },
-            filters: {
-                systemMessages: 'omit',
-                toolResults: 'include',
-            },
+            transcript: lettaRows.map(r => JSON.stringify(r)).join('\n'),
+            bounds: { ...DEFAULT_NORMALIZATION_BOUNDS, toolResults: { maxCharacters: null, strategy: 'head-tail' } },
+            filters: { systemMessages: 'omit', toolResults: 'include' },
         });
-
         validateTranscript(normalized.records);
-        return sanitizeTrajectoryRecordsForJsonl(normalized.records)
-            .map(record => JSON.stringify(record))
-            .join('\n');
+        return sanitizeTrajectoryRecordsForJsonl(normalized.records).map(r => JSON.stringify(r)).join('\n');
     } catch {
-        return sanitizeTrajectoryRecordsForJsonl(lettaRows)
-            .map(row => JSON.stringify(row))
-            .join('\n');
+        return sanitizeTrajectoryRecordsForJsonl(lettaRows).map(r => JSON.stringify(r)).join('\n');
     }
 }
 
-export async function runSandboxToolAgent(
-    options: SandboxToolAgentOptions
-): Promise<SandboxToolAgentResult> {
+export async function runSandboxToolAgent(options: SandboxToolAgentOptions): Promise<SandboxToolAgentResult> {
     const provider = resolveProviderForModel(options.modelName);
     if (!provider.providerConfig?.isConfigured || (provider.providerName === 'openai-compatible'
         ? !provider.providerConfig.baseURL
@@ -1697,8 +1069,8 @@ export async function runSandboxToolAgent(
     let finalText = '';
     let shouldSeedBackend = !messages.some(m => messageTypeForTrace(m) === 'tool' && (m as any).name === SANDBOX_TOOL_NAME);
 
-    const maxToolTurns = Math.max(1, options.maxToolTurns ?? MAX_TOOL_TURNS);
-    const maxDurationMs = Math.max(1, options.maxDurationMs ?? MAX_SANDBOX_DURATION_MS);
+    const maxToolTurns = Math.max(1, options.maxToolTurns ?? environmentProfile?.limits?.maxToolTurns ?? MAX_TOOL_TURNS);
+    const maxDurationMs = Math.max(1, options.maxDurationMs ?? environmentProfile?.limits?.maxDurationMs ?? MAX_SANDBOX_DURATION_MS);
     const maxOutputTokens = Math.max(1, options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
     const totalAllowedTurns = maxToolTurns + OVERTIME_GRACE_TURNS + FORCED_FINAL_OUTPUT_TURNS;
     const maxMinutes = Math.max(1, Math.round(maxDurationMs / 60_000));
@@ -1708,53 +1080,47 @@ export async function runSandboxToolAgent(
     let timeExpiredRevoked = false;
     let forcedTimeExpiredTurnsUsed = 0;
 
-    const uploadedFileMessage = (options.omitUploadedFileMessage || options.messages.length > 1)
-        ? null
-        : buildUploadedFileMessage(provider.providerName, seedFiles);
-    if (uploadedFileMessage) {
-        messages.push(uploadedFileMessage);
+    if (!options.omitUploadedFileMessage && options.messages.length <= 1) {
+        const uploadedFileMessage = buildUploadedFileMessage(provider.providerName, seedFiles);
+        if (uploadedFileMessage) messages.push(uploadedFileMessage);
     }
 
-    // Mark where the tool loop starts so we can capture the raw messages afterwards
     const loopStartIndex = messages.length;
+    const pushRejectedOtherCalls = (allCalls: any[], activeCall: any, reason: string) => {
+        for (const c of allCalls) {
+            if (c !== activeCall) {
+                messages.push(new ToolMessage({ name: c.name, content: reason, tool_call_id: c.id ?? nanoid(8), status: 'error' }));
+            }
+        }
+    };
 
     for (let turn = 0; turn < totalAllowedTurns; turn++) {
         if (options.abortSignal?.aborted) {
             throw options.abortSignal.reason ?? new Error('Process stopped by user');
         }
 
-        const elapsedBeforeTurn = Date.now() - sandboxStartedAt;
-        const remainingBeforeTurn = maxDurationMs - elapsedBeforeTurn;
-        if (!timeExpiredRevoked && remainingBeforeTurn <= 0) {
+        if (!timeExpiredRevoked && maxDurationMs - (Date.now() - sandboxStartedAt) <= 0) {
             timeExpiredRevoked = true;
             messages.push(new HumanMessage(buildSandboxTimeExpiredFinalSubmitHarnessNote(maxMinutes)));
         }
-        if (timeExpiredRevoked) {
-            if (forcedTimeExpiredTurnsUsed >= FORCED_FINAL_OUTPUT_TURNS) {
-                break;
-            }
-            forcedTimeExpiredTurnsUsed++;
-        }
+        if (timeExpiredRevoked && forcedTimeExpiredTurnsUsed++ >= FORCED_FINAL_OUTPUT_TURNS) break;
 
         const onlyFinalOutputTool = timeExpiredRevoked || turn >= maxToolTurns + OVERTIME_GRACE_TURNS;
         const response = await invokeAgentTurn(provider, messages, systemPrompt, options, onlyFinalOutputTool, turn + 1);
-        for (const call of response.tool_calls ?? []) {
+        const toolCalls = response.tool_calls ?? [];
+        for (const call of toolCalls) {
             if (!call.id) call.id = nanoid(8);
         }
         messages.push(response);
 
-        const modelText = getFinalText(response);
-        const sandboxToolCalls = getSandboxToolCalls(response);
-        const finalOutputToolCalls = getFinalOutputToolCalls(response);
-        const sharedWorkspaceToolCalls = getSharedWorkspaceToolCalls(response);
+        const modelText = messageContentToText(response.content).trim();
+        const sandboxToolCalls = toolCalls.filter(c => c.name === SANDBOX_TOOL_NAME);
+        const finalOutputToolCalls = toolCalls.filter(c => c.name === FINAL_OUTPUT_TOOL_NAME);
+        const sharedWorkspaceToolCalls = toolCalls.filter(c => c.name === SHARED_WORKSPACE_TOOL_NAME);
         const hasToolCalls = sandboxToolCalls.length > 0 || finalOutputToolCalls.length > 0 || sharedWorkspaceToolCalls.length > 0;
 
         if (modelText) {
-            transcriptParts.push(
-                hasToolCalls
-                    ? (transcriptParts.length === 0 ? modelText : formatIntermediateModelOutput(modelText))
-                    : modelText
-            );
+            transcriptParts.push(hasToolCalls && transcriptParts.length > 0 ? `### Intermediate Model Output\n${modelText}` : modelText);
         }
 
         if (finalOutputToolCalls.length > 0) {
@@ -1780,15 +1146,7 @@ export async function runSandboxToolAgent(
                     tool_call_id: toolCall.id ?? nanoid(8),
                     status: 'error'
                 }));
-                for (const otherCall of response.tool_calls ?? []) {
-                    if (otherCall === toolCall) continue;
-                    messages.push(new ToolMessage({
-                        name: otherCall.name,
-                        content: 'Not executed: final_output was rejected in the same turn.',
-                        tool_call_id: otherCall.id ?? nanoid(8),
-                        status: 'error',
-                    }));
-                }
+                pushRejectedOtherCalls(toolCalls, toolCall, 'Not executed: final_output was rejected in the same turn.');
             } else {
                 const outputTokenCount = countTextTokens(candidateFinalText);
                 if (outputTokenCount > maxOutputTokens) {
@@ -1799,18 +1157,8 @@ export async function runSandboxToolAgent(
                         tool_call_id: toolCall.id ?? nanoid(8),
                         status: 'error',
                     }));
-                    for (const otherCall of response.tool_calls ?? []) {
-                        if (otherCall === toolCall) continue;
-                        messages.push(new ToolMessage({
-                            name: otherCall.name,
-                            content: 'Not executed: final_output exceeded the token limit in the same turn.',
-                            tool_call_id: otherCall.id ?? nanoid(8),
-                            status: 'error',
-                        }));
-                    }
-                    messages.push(new HumanMessage(
-                        buildFinalOutputTokenGateHarnessNote(options.agentName, outputTokenCount, maxOutputTokens)
-                    ));
+                    pushRejectedOtherCalls(toolCalls, toolCall, 'Not executed: final_output exceeded the token limit in the same turn.');
+                    messages.push(new HumanMessage(buildFinalOutputTokenGateHarnessNote(options.agentName, outputTokenCount, maxOutputTokens)));
                     transcriptParts.push(`[${FINAL_OUTPUT_TOOL_NAME} token gate error]: ${tokenErrorText}`);
                 } else {
                     finalText = candidateFinalText;
@@ -1818,7 +1166,6 @@ export async function runSandboxToolAgent(
                 }
             }
         } else if (onlyFinalOutputTool) {
-            // All other tools have been revoked; reject any non-final_output tool calls and demand final_output
             for (const revokedCall of [...sandboxToolCalls, ...sharedWorkspaceToolCalls]) {
                 messages.push(new ToolMessage({
                     name: revokedCall.name,
@@ -1830,50 +1177,40 @@ export async function runSandboxToolAgent(
                 }));
             }
             messages.push(new HumanMessage(
-                timeExpiredRevoked
-                    ? buildSandboxTimeExpiredFinalSubmitHarnessNote(maxMinutes)
-                    : buildRevokedToolsFinalSubmitHarnessNote()
+                timeExpiredRevoked ? buildSandboxTimeExpiredFinalSubmitHarnessNote(maxMinutes) : buildRevokedToolsFinalSubmitHarnessNote()
             ));
         } else {
-            if (sharedWorkspaceToolCalls.length > 0) {
-                for (const toolCall of sharedWorkspaceToolCalls) {
-                    let toolContent = '';
-                    let isOk = true;
-                    let tokenLimitError: SharedWorkspaceTokenLimitError | null = null;
-                    try {
-                        const rawArgs = (toolCall.args ?? {}) as Record<string, unknown>;
-                        if (rawArgs.action === 'write') {
-                            throw new Error(
-                                'Full-file "write" is disabled on shared_workspace.md to prevent overwriting peer agents\' work. Use action="edit" (with old_string and new_string) or action="append" (with content).'
-                            );
-                        }
-                        const parsed = sharedWorkspaceToolSchema.parse(rawArgs);
-                        if (!options.sharedWorkspaceHandler) {
-                            throw new Error('shared_workspace tool is not available for this role.');
-                        }
-                        toolContent = await options.sharedWorkspaceHandler(parsed);
-                    } catch (error) {
-                        isOk = false;
-                        if (error instanceof SharedWorkspaceTokenLimitError || (error as any)?.name === 'SharedWorkspaceTokenLimitError') {
-                            tokenLimitError = error as SharedWorkspaceTokenLimitError;
-                        }
-                        toolContent = `shared_workspace call failed: ${error instanceof Error ? error.message : 'Invalid parameters.'}`;
+            for (const toolCall of sharedWorkspaceToolCalls) {
+                let toolContent = '';
+                let isOk = true;
+                let tokenLimitError: SharedWorkspaceTokenLimitError | null = null;
+                try {
+                    const rawArgs = (toolCall.args ?? {}) as Record<string, unknown>;
+                    if (rawArgs.action === 'write') {
+                        throw new Error('Full-file "write" is disabled on shared_workspace.md to prevent overwriting peer agents\' work. Use action="edit" (with old_string and new_string) or action="append" (with content).');
                     }
-                    messages.push(new ToolMessage({
-                        name: SHARED_WORKSPACE_TOOL_NAME,
-                        content: toolContent,
-                        tool_call_id: toolCall.id ?? nanoid(8),
-                        status: isOk ? 'success' : 'error',
-                    }));
-                    transcriptParts.push(`[shared_workspace ${toolCall.args?.action ?? 'call'}]:\n${toolContent}`);
-                    if (tokenLimitError) {
-                        messages.push(new HumanMessage(
-                            buildSharedWorkspaceTokenGateHarnessNote(
-                                tokenLimitError.tokenCount ?? SHARED_WORKSPACE_MAX_TOKENS + 1,
-                                tokenLimitError.maxTokens ?? SHARED_WORKSPACE_MAX_TOKENS
-                            )
-                        ));
+                    const parsed = sharedWorkspaceToolSchema.parse(rawArgs);
+                    if (!options.sharedWorkspaceHandler) throw new Error('shared_workspace tool is not available for this role.');
+                    toolContent = await options.sharedWorkspaceHandler(parsed);
+                } catch (error) {
+                    isOk = false;
+                    if (error instanceof SharedWorkspaceTokenLimitError || (error as any)?.name === 'SharedWorkspaceTokenLimitError') {
+                        tokenLimitError = error as SharedWorkspaceTokenLimitError;
                     }
+                    toolContent = `shared_workspace call failed: ${error instanceof Error ? error.message : 'Invalid parameters.'}`;
+                }
+                messages.push(new ToolMessage({
+                    name: SHARED_WORKSPACE_TOOL_NAME,
+                    content: toolContent,
+                    tool_call_id: toolCall.id ?? nanoid(8),
+                    status: isOk ? 'success' : 'error',
+                }));
+                transcriptParts.push(`[shared_workspace ${toolCall.args?.action ?? 'call'}]:\n${toolContent}`);
+                if (tokenLimitError) {
+                    messages.push(new HumanMessage(buildSharedWorkspaceTokenGateHarnessNote(
+                        tokenLimitError.tokenCount ?? SHARED_WORKSPACE_MAX_TOKENS + 1,
+                        tokenLimitError.maxTokens ?? SHARED_WORKSPACE_MAX_TOKENS
+                    )));
                 }
             }
 
@@ -1886,51 +1223,33 @@ export async function runSandboxToolAgent(
             }
 
             if (sandboxToolCalls.length > 0) {
-                const seedFilesForBatch = shouldSeedBackend
-                    ? [...directContextSandboxFiles, ...filesystemFiles]
-                    : null;
+                const seedFilesForBatch = shouldSeedBackend ? [...directContextSandboxFiles, ...filesystemFiles] : null;
                 shouldSeedBackend = false;
 
                 const batchResults = await Promise.all(
                     sandboxToolCalls.map(async (toolCall, index) => {
                         let parsedCommand = '';
                         let toolResponse: SandboxToolResponse;
-
                         try {
                             const parsed = sandboxToolSchema.parse(toolCall.args ?? {});
                             parsedCommand = parsed.command;
-                            toolResponse = await executeSandboxTool(
-                                sessionId,
-                                parsedCommand,
-                                index === 0 ? seedFilesForBatch : null,
-                                options.repositoryAccess,
-                                parsed.timeout_ms
-                            );
+                            toolResponse = await executeSandboxTool(sessionId, parsedCommand, index === 0 ? seedFilesForBatch : null, options.repositoryAccess, parsed.timeout_ms);
                         } catch (error) {
                             toolResponse = {
-                                ok: false,
-                                exitCode: 1,
-                                stdout: '',
-                                stderr: '',
+                                ok: false, exitCode: 1, stdout: '', stderr: '',
                                 error: error instanceof Error ? error.message : 'Sandbox tool call failed.',
-                                durationMs: 0,
-                                images: [],
-                                visibleFiles: []
+                                durationMs: 0, images: [], visibleFiles: []
                             };
                         }
-
                         return { toolCall, parsedCommand, toolResponse };
                     })
                 );
 
                 for (const { toolCall, parsedCommand, toolResponse } of batchResults) {
                     transcriptParts.push(formatToolTranscript(parsedCommand || '[Invalid or missing sandbox command]', toolResponse));
-                    (toolResponse.images ?? []).forEach(image => {
-                        if (image.base64) {
-                            historyImages.set(image.filename, image);
-                        }
-                    });
-
+                    for (const image of toolResponse.images ?? []) {
+                        if (image.base64) historyImages.set(image.filename, image);
+                    }
                     const toolContent = [
                         `Sandbox command ${toolResponse.ok ? 'completed' : 'failed'}.`,
                         `exit_code=${toolResponse.exitCode}`,
@@ -1939,7 +1258,7 @@ export async function runSandboxToolAgent(
                         toolResponse.stderr?.trim() ? `stderr:\n${toolResponse.stderr.trimEnd()}` : '',
                         toolResponse.error ? `error:\n${toolResponse.error.trimEnd()}` : '',
                         toolResponse.visibleFiles?.length
-                            ? `visible_image_files:\n${toolResponse.visibleFiles.map(file => `- ${file.filename} (${file.mimeType})`).join('\n')}`
+                            ? `visible_image_files:\n${toolResponse.visibleFiles.map(f => `- ${f.filename} (${f.mimeType})`).join('\n')}`
                             : 'visible_image_files: none',
                     ].filter(Boolean).join('\n\n');
 
@@ -1948,27 +1267,20 @@ export async function runSandboxToolAgent(
                         content: toolContent,
                         tool_call_id: toolCall.id ?? nanoid(8),
                         status: toolResponse.ok ? 'success' : 'error',
-                        artifact: {
-                            images: (toolResponse.images ?? []).map(({ filename, mimeType, url }) => ({ filename, mimeType, url })),
-                        },
+                        artifact: { images: (toolResponse.images ?? []).map(({ filename, mimeType, url }) => ({ filename, mimeType, url })) },
                     }));
 
                     const generatedImageMessage = buildGeneratedImageMessage(provider.providerName, toolResponse.images ?? []);
-                    if (generatedImageMessage) {
-                        messages.push(generatedImageMessage);
-                    }
+                    if (generatedImageMessage) messages.push(generatedImageMessage);
                 }
             }
         }
 
-        // Inject tool-call budget countdown notes and overtime transitions (§8.5)
         const completedTurns = turn + 1;
         const remainingInMainBudget = maxToolTurns - completedTurns;
         if (!timeExpiredRevoked) {
-            if (remainingInMainBudget === 10) {
-                messages.push(new HumanMessage(buildRemainingToolCallsHarnessNote(10, maxToolTurns)));
-            } else if (remainingInMainBudget === 5) {
-                messages.push(new HumanMessage(buildRemainingToolCallsHarnessNote(5, maxToolTurns)));
+            if (remainingInMainBudget === 10 || remainingInMainBudget === 5) {
+                messages.push(new HumanMessage(buildRemainingToolCallsHarnessNote(remainingInMainBudget, maxToolTurns)));
             } else if (completedTurns === maxToolTurns) {
                 messages.push(new HumanMessage(buildOvertimeFinalSubmitHarnessNote(maxToolTurns, OVERTIME_GRACE_TURNS)));
             } else if (completedTurns === maxToolTurns + OVERTIME_GRACE_TURNS) {
@@ -1976,17 +1288,14 @@ export async function runSandboxToolAgent(
             }
         }
 
-        // Inject wall-clock time countdown notes at <= 10 minutes and <= 5 minutes remaining, and enforce 60-minute cutoff
-        const elapsedAfterTurn = Date.now() - sandboxStartedAt;
-        const remainingTimeMs = maxDurationMs - elapsedAfterTurn;
+        const remainingTimeMs = maxDurationMs - (Date.now() - sandboxStartedAt);
         if (remainingTimeMs <= 0) {
             if (!timeExpiredRevoked) {
                 timeExpiredRevoked = true;
                 messages.push(new HumanMessage(buildSandboxTimeExpiredFinalSubmitHarnessNote(maxMinutes)));
             }
         } else if (remainingTimeMs <= SANDBOX_WARNING_5_MIN_MS && !warned5MinRemaining) {
-            warned5MinRemaining = true;
-            warned10MinRemaining = true;
+            warned5MinRemaining = warned10MinRemaining = true;
             messages.push(new HumanMessage(buildRemainingSandboxTimeHarnessNote(5, maxMinutes)));
         } else if (remainingTimeMs <= SANDBOX_WARNING_10_MIN_MS && !warned10MinRemaining) {
             warned10MinRemaining = true;
@@ -2001,27 +1310,22 @@ export async function runSandboxToolAgent(
         throw new Error(`${options.agentName} exceeded ${maxToolTurns} sandbox tool turns (plus ${OVERTIME_GRACE_TURNS} grace turns and ${FORCED_FINAL_OUTPUT_TURNS} forced-submit turns) without submitting final_output.`);
     }
 
-    const submittedText = buildSubmittedFinalOutput({
-        finalText,
-        sessionId,
-        repositoryAccess: options.repositoryAccess,
-    });
+    const submittedText = expandInlineReferenceMarkers(finalText.trim(), sessionId, options.repositoryAccess).trim();
     const displayText = submittedText || transcriptParts.join('\n\n').trim();
-
-    // Capture raw messages only for diagnostics. These must not be replayed
-    // into downstream agent histories; promptText is the submitted answer.
     const loopMessages = messages.slice(loopStartIndex);
-    const executionTrace = buildExecutionTrace({
-        options,
-        provider,
-        sessionId,
-        finalText,
-        loopMessages,
-    });
-    const rawTrajectoryJsonl = buildRawTrajectoryJsonl([
-        new SystemMessage(systemPrompt),
-        ...messages,
-    ]);
+    const executionTrace: SandboxToolExecutionTrace = {
+        schema: 'sandbox_tool_execution_trace.v1',
+        sandbox_tool_name: SANDBOX_TOOL_NAME,
+        agent: {
+            name: options.agentName,
+            provider: provider.providerName,
+            model: provider.modelName,
+            session_id: sessionId,
+        },
+        final_text: finalText,
+        messages: loopMessages.map(buildTraceMessage),
+    };
+    const rawTrajectoryJsonl = buildRawTrajectoryJsonl([new SystemMessage(systemPrompt), ...messages]);
 
     return {
         text: displayText,
@@ -2038,8 +1342,4 @@ export async function runSandboxToolAgent(
     };
 }
 
-export async function runContextualSandboxToolAgent(
-    options: ContextualSandboxToolAgentOptions
-): Promise<ContextualSandboxToolAgentResult> {
-    return runSandboxToolAgent(options);
-}
+export const runContextualSandboxToolAgent = runSandboxToolAgent;

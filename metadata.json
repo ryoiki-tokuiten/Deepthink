@@ -1,4 +1,7 @@
 {
   "name": "Deepthink",
-  "description": "Entire Iterative Studio"
+  "description": "Entire Iterative Studio",
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

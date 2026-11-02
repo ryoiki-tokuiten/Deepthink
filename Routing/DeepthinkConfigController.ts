@@ -126,12 +126,21 @@ export class DeepthinkConfigController extends EventTarget {
     }
 
     public setIsolateBranchesEnabled(enabled: boolean): void {
+        if (this.modelConfig.isDeepthinkCodeExecutionEnabled()) {
+            this.modelConfig.updateParameter('isolateBranches', true);
+            return;
+        }
         this.modelConfig.updateParameter('isolateBranches', enabled);
         this.emitChange('isolateBranches');
     }
 
     public setCodeExecutionEnabled(enabled: boolean): void {
+        const wasIsolated = this.modelConfig.isIsolateBranchesEnabled();
         this.modelConfig.updateParameter('deepthinkCodeExecutionEnabled', enabled);
+        if (enabled && !wasIsolated) {
+            this.modelConfig.updateParameter('isolateBranches', true);
+            this.emitChange('isolateBranches');
+        }
         this.emitChange('codeExecutionEnabled');
         window.dispatchEvent(new CustomEvent('sandboxToggled', { detail: { enabled } }));
     }

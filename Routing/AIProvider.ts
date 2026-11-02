@@ -1,38 +1,60 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import { GoogleGenAI, GenerateContentResponse, Part, ThinkingLevel } from "@google/genai";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText, streamText, Output } from "ai";
 import { globalState } from "../Core/State";
 import { normalizeOpenAICompatibleProviderError } from "../Core/ProviderError";
-import { getModelsDevModels, extractReasoningEffortOptions } from "./ModelsDevCatalog";
-import {
-    getOpenAICompatibleProxyBaseURL,
-    OPENAI_COMPATIBLE_ENDPOINT_HEADER,
-} from './OpenAICompatibleProxy';
+import { getModelsDevModels, extractReasoningEffortOptions } from "./ProviderManager";
 
-// ============================================================================
-// Types & Interfaces
-// ============================================================================
+export interface Part {
+    text?: string;
+    thought?: boolean;
+    thoughtSignature?: string;
+    inlineData?: { mimeType: string; data: string };
+    functionCall?: { id?: string; name?: string; args?: Record<string, any> };
+    functionResponse?: { id?: string; name?: string; response?: Record<string, any> };
+    [key: string]: any;
+}
+
+export interface Content {
+    role?: string;
+    parts?: Part[];
+}
+
+export interface GenerateContentResponse {
+    text?: string;
+    candidates?: Array<{ content?: Content; [key: string]: any }>;
+    response?: { text: () => string; candidates?: Array<{ content?: Content }> };
+    [key: string]: any;
+}
+
+export const OPENAI_COMPATIBLE_ENDPOINT_HEADER = 'x-openai-compatible-endpoint';
+
+function getAppApiBaseURL(subPath: string): string {
+    const configuredBase = (import.meta as any).env?.BASE_URL || '/';
+    const appBase = configuredBase.endsWith('/') ? configuredBase.slice(0, -1) : configuredBase;
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
+    return `${origin}${appBase}${subPath}`;
+}
+
+export function getOpenAICompatibleProxyBaseURL(): string {
+    return getAppApiBaseURL('/api/openai-compatible');
+}
+
+export function getGeminiApiBaseURL(): string {
+    return getAppApiBaseURL('/api/gemini');
+}
 
 interface StructuredMessage {
     role: 'system' | 'assistant' | 'user';
     content: string;
-    /** Optional: raw Gemini Parts for model turns with native function calling.
-     *  Passed directly to the API to preserve inlineData images, function
-     *  calls/responses, and thought_signature for correct multi-turn context. */
     rawParts?: any[];
 }
 
 export interface ThinkingConfig {
-    thinkingBudget?: number;  // Optional token count if needed
+    thinkingBudget?: number;
     thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | string;
-    tools?: any[];  // Function declarations to enable thought signatures
+    tools?: any[];
 }
 
 export interface AIProviderRequestOptions {
@@ -43,21 +65,14 @@ export interface AIProviderRequestOptions {
 export interface DiscoveredModel {
     id: string;
     displayName?: string;
-    /** Undefined means the provider did not publish a reliable vision capability. */
     supportsImageInput?: boolean;
-    /** Undefined means the provider did not publish a reliable tool capability. */
     supportsTools?: boolean;
-    /** Undefined means the provider did not publish a reliable JSON capability. */
     supportsStructuredOutputs?: boolean;
-    /** Undefined means the provider did not publish a reliable reasoning capability. */
     supportsReasoning?: boolean;
-    /** Optional specific reasoning effort options supported by this model. */
     reasoningOptions?: string[];
 }
 
 type ListedModel = string | DiscoveredModel;
-
-
 
 export interface AIProvider {
     initialize(apiKey: string): boolean;
@@ -74,83 +89,29 @@ export interface AIProvider {
     listModels?(): Promise<ListedModel[]>;
 }
 
-// Helper to check if input is structured messages
-function isStructuredMessages(input: any): input is StructuredMessage[] {
-    return Array.isArray(input) && input.length > 0 && 'role' in input[0] && 'content' in input[0];
-}
+const isStructuredMessages = (input: any): input is StructuredMessage[] =>
+    Array.isArray(input) && input.length > 0 && 'role' in input[0] && 'content' in input[0];
 
-// Helper to check if a Part contains inline image data
-function hasInlineData(part: any): part is { inlineData: { mimeType: string; data: string } } {
-    return part && part.inlineData && part.inlineData.mimeType && part.inlineData.data;
-}
+const hasInlineData = (part: any): part is { inlineData: { mimeType: string; data: string } } =>
+    Boolean(part?.inlineData?.mimeType && part?.inlineData?.data);
 
-// ============================================================================
-// Shared Utilities
-// ============================================================================
+const hasText = (part: any): part is { text: string } => Boolean(part && typeof part.text === 'string');
 
-function hasText(part: any): part is { text: string } {
-    return part && typeof part.text === 'string';
-}
+const wrapAsGeminiResponse = (text: string): any => ({
+    text,
+    response: { text: () => text, candidates: [{ content: { parts: [{ text }] } }] }
+});
 
-/** Wraps plain text into the Gemini-compatible response shape used by all non-Gemini providers. */
-function wrapAsGeminiResponse(text: string): any {
-    return {
-        text,
-        response: {
-            text: () => text,
-            candidates: [{ content: { parts: [{ text }] } }]
-        }
-    };
-}
-
-/**
- * Merges incoming streamed Gemini parts into an accumulated parts array.
- * Preserves thought parts, thoughtSignature, functionCall, and inlineData while
- * coalescing consecutive plain text or plain thought deltas.
- */
 function appendStreamedGeminiParts(accumulatedParts: any[], incomingParts: any[]): void {
     for (const part of incomingParts) {
         if (!part || typeof part !== 'object') continue;
         const cloned = JSON.parse(JSON.stringify(part));
         const prev = accumulatedParts[accumulatedParts.length - 1];
+        const isPure = (p: any, thought: boolean) =>
+            Boolean(p.thought) === thought && typeof p.text === 'string' &&
+            !p.thoughtSignature && !p.functionCall && !p.functionResponse && !p.inlineData;
 
-        const isPureThoughtText =
-            cloned.thought === true &&
-            typeof cloned.text === 'string' &&
-            !cloned.thoughtSignature &&
-            !cloned.functionCall &&
-            !cloned.functionResponse &&
-            !cloned.inlineData;
-
-        const isPureRegularText =
-            !cloned.thought &&
-            typeof cloned.text === 'string' &&
-            !cloned.thoughtSignature &&
-            !cloned.functionCall &&
-            !cloned.functionResponse &&
-            !cloned.inlineData;
-
-        if (
-            isPureThoughtText &&
-            prev &&
-            prev.thought === true &&
-            typeof prev.text === 'string' &&
-            !prev.thoughtSignature &&
-            !prev.functionCall &&
-            !prev.functionResponse &&
-            !prev.inlineData
-        ) {
-            prev.text += cloned.text;
-        } else if (
-            isPureRegularText &&
-            prev &&
-            !prev.thought &&
-            typeof prev.text === 'string' &&
-            !prev.thoughtSignature &&
-            !prev.functionCall &&
-            !prev.functionResponse &&
-            !prev.inlineData
-        ) {
+        if (prev && ((isPure(cloned, true) && isPure(prev, true)) || (isPure(cloned, false) && isPure(prev, false)))) {
             prev.text += cloned.text;
         } else {
             accumulatedParts.push(cloned);
@@ -158,313 +119,139 @@ function appendStreamedGeminiParts(accumulatedParts: any[], incomingParts: any[]
     }
 }
 
-/**
- * Builds an OpenAI-compatible messages array from our unified input types.
- * Shared by OpenAI and Local providers.
- * When visionSupport is true, Part[] with inlineData is converted to image_url format.
- */
-function buildChatMessages(
-    promptOrParts: string | Part[] | StructuredMessage[],
-    systemInstruction?: string,
-    visionSupport: boolean = false
-): any[] {
+function buildChatMessages(promptOrParts: string | Part[] | StructuredMessage[], systemInstruction?: string, visionSupport = false): any[] {
     const messages: any[] = [];
-
+    if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
     if (isStructuredMessages(promptOrParts)) {
-        if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
         for (const msg of promptOrParts) messages.push({ role: msg.role, content: msg.content });
         return messages;
     }
-
     if (visionSupport && Array.isArray(promptOrParts) && promptOrParts.length > 0) {
-        if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
         const contentParts: any[] = [];
         for (const part of promptOrParts) {
-            if (hasText(part)) {
-                contentParts.push({ type: 'text', text: part.text });
-            } else if (hasInlineData(part) && part.inlineData.mimeType.startsWith('image/')) {
-                    contentParts.push({
-                        type: 'image_url',
-                        image_url: { url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` }
-                    });
+            if (hasText(part)) contentParts.push({ type: 'text', text: part.text });
+            else if (hasInlineData(part) && part.inlineData.mimeType.startsWith('image/')) {
+                contentParts.push({ type: 'image_url', image_url: { url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` } });
             }
         }
         if (contentParts.length > 0) messages.push({ role: 'user', content: contentParts });
         return messages;
     }
-
-    if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
     const userContent = typeof promptOrParts === 'string'
         ? promptOrParts
-        : Array.isArray(promptOrParts)
-            ? promptOrParts.map((p: any) => p.text).filter(Boolean).join('\n')
-            : String(promptOrParts);
+        : Array.isArray(promptOrParts) ? promptOrParts.map((p: any) => p.text).filter(Boolean).join('\n') : String(promptOrParts);
     messages.push({ role: 'user', content: userContent });
     return messages;
 }
 
-/**
- * Converts the application's provider-neutral input into AI SDK model
- * messages. The AI SDK uses `image` parts while the legacy OpenAI client path
- * uses `image_url`; keeping this conversion local prevents either path from
- * changing the other providers' request shapes. System content is returned as
- * `instructions` because the AI SDK does not allow system messages in the
- * `messages` field.
- */
-function buildLanguageModelPrompt(
-    promptOrParts: string | Part[] | StructuredMessage[],
-    systemInstruction?: string
-): { messages: any[]; instructions?: string } {
+function buildLanguageModelPrompt(promptOrParts: string | Part[] | StructuredMessage[], systemInstruction?: string): { messages: any[]; instructions?: string } {
     const instructions: string[] = systemInstruction ? [systemInstruction] : [];
-
+    let messages: any[];
     if (isStructuredMessages(promptOrParts)) {
-        const messages = promptOrParts.flatMap(message => {
-            if (message.role === 'system') {
-                instructions.push(message.content);
-                return [];
-            }
-
-            return [{
-                role: message.role,
-                content: message.content,
-            }];
+        messages = promptOrParts.flatMap(m => {
+            if (m.role === 'system') { instructions.push(m.content); return []; }
+            return [{ role: m.role, content: m.content }];
         });
-
-        return {
-            messages,
-            ...(instructions.length > 0 ? { instructions: instructions.join('\n\n') } : {}),
-        };
-    }
-
-    if (Array.isArray(promptOrParts) && promptOrParts.length > 0) {
+    } else if (Array.isArray(promptOrParts) && promptOrParts.length > 0) {
         const content: any[] = [];
         for (const part of promptOrParts) {
-            if (hasText(part)) {
-                content.push({ type: 'text', text: part.text });
-            } else if (hasInlineData(part) && part.inlineData.mimeType.startsWith('image/')) {
-                content.push({
-                    type: 'image',
-                    image: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
-                });
+            if (hasText(part)) content.push({ type: 'text', text: part.text });
+            else if (hasInlineData(part) && part.inlineData.mimeType.startsWith('image/')) {
+                content.push({ type: 'image', image: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` });
             }
         }
-
-        return {
-            messages: [{ role: 'user', content: content.length > 0 ? content : '' }],
-            ...(instructions.length > 0 ? { instructions: instructions.join('\n\n') } : {}),
-        };
+        messages = [{ role: 'user', content: content.length > 0 ? content : '' }];
+    } else {
+        messages = [{ role: 'user', content: typeof promptOrParts === 'string' ? promptOrParts : String(promptOrParts) }];
     }
-
-    return {
-        messages: [{ role: 'user', content: typeof promptOrParts === 'string' ? promptOrParts : String(promptOrParts) }],
-        ...(instructions.length > 0 ? { instructions: instructions.join('\n\n') } : {}),
-    };
+    return { messages, ...(instructions.length > 0 ? { instructions: instructions.join('\n\n') } : {}) };
 }
 
-/**
- * Builds Anthropic-compatible messages and extracts system prompt separately.
- * Anthropic requires system messages in a dedicated field rather than in the messages array,
- * and uses a different vision format (source.type: 'base64' instead of image_url).
- */
-function buildAnthropicMessages(
-    promptOrParts: string | Part[] | StructuredMessage[],
-    systemInstruction?: string
-): { messages: any[], systemPrompt: string | undefined } {
+function buildAnthropicMessages(promptOrParts: string | Part[] | StructuredMessage[], systemInstruction?: string): { messages: any[]; systemPrompt: string | undefined } {
     let messages: any[] = [];
     let systemPrompt = systemInstruction;
-
     if (isStructuredMessages(promptOrParts)) {
-        const systemMessages: string[] = [];
-        if (systemInstruction) systemMessages.push(systemInstruction);
+        const sys: string[] = systemInstruction ? [systemInstruction] : [];
         for (const msg of promptOrParts) {
-            if (msg.role === 'system') {
-                systemMessages.push(msg.content);
-            } else {
-                messages.push({ role: msg.role, content: msg.content });
-            }
+            if (msg.role === 'system') sys.push(msg.content);
+            else messages.push({ role: msg.role, content: msg.content });
         }
-        if (systemMessages.length > 0) systemPrompt = systemMessages.join('\n\n');
+        if (sys.length > 0) systemPrompt = sys.join('\n\n');
     } else if (Array.isArray(promptOrParts) && promptOrParts.length > 0) {
         const contentParts: any[] = [];
         for (const part of promptOrParts) {
-            if (hasText(part)) {
-                contentParts.push({ type: 'text', text: part.text });
-            } else if (hasInlineData(part) && part.inlineData.mimeType.startsWith('image/')) {
-                    contentParts.push({
-                        type: 'image',
-                        source: { type: 'base64', media_type: part.inlineData.mimeType, data: part.inlineData.data }
-                    });
+            if (hasText(part)) contentParts.push({ type: 'text', text: part.text });
+            else if (hasInlineData(part) && part.inlineData.mimeType.startsWith('image/')) {
+                contentParts.push({ type: 'image', source: { type: 'base64', media_type: part.inlineData.mimeType, data: part.inlineData.data } });
             }
         }
         if (contentParts.length > 0) messages = [{ role: 'user', content: contentParts }];
     } else {
-        const userContent = typeof promptOrParts === 'string' ? promptOrParts : String(promptOrParts);
-        messages = [{ role: 'user', content: userContent }];
+        messages = [{ role: 'user', content: typeof promptOrParts === 'string' ? promptOrParts : String(promptOrParts) }];
     }
-
     return { messages, systemPrompt };
 }
 
-// ============================================================================
-// Gemini Provider
-// ============================================================================
-
-/**
- * Sanitize Gemini contents array right before the API call.
- * Walks every content entry and strips embedded base64 image data from text Parts.
- * This is the single chokepoint that prevents token overflow from tool-generated
- * images, regardless of which mode (Deepthink, Contextual, etc.) produced the text.
- */
 function sanitizeContentsForApi(contents: any[]): any[] {
     if (!Array.isArray(contents)) return contents;
-    return contents.map((entry: any) => {
-        if (!entry?.parts || !Array.isArray(entry.parts)) return entry;
-        const sanitizedParts = entry.parts.map((part: any) => {
-            // Only sanitize text parts; leave inlineData and tool-call parts untouched
-            if (part && typeof part.text === 'string' && part.text.includes('<!-- EXECUTION_IMAGE_START -->')) {
-                return {
-                    ...part,
-                    text: part.text.replace(
-                        /\n?<!-- EXECUTION_IMAGE_START -->\s*(?:<!-- MIME_TYPE:\s*\S+\s*-->\s*)?[\s\S]*?<!-- EXECUTION_IMAGE_END -->\n?/g,
-                        '\n[Code-generated image omitted from prompt]\n'
-                    )
-                };
-            }
-            return part;
-        });
-        return { ...entry, parts: sanitizedParts };
+    return contents.map(entry => {
+        if (!Array.isArray(entry?.parts)) return entry;
+        return {
+            ...entry,
+            parts: entry.parts.map((part: any) => (
+                part && typeof part.text === 'string' && part.text.includes('<!-- EXECUTION_IMAGE_START -->')
+                    ? { ...part, text: part.text.replace(/\n?<!-- EXECUTION_IMAGE_START -->\s*(?:<!-- MIME_TYPE:\s*\S+\s*-->\s*)?[\s\S]*?<!-- EXECUTION_IMAGE_END -->\n?/g, '\n[Code-generated image omitted from prompt]\n') }
+                    : part
+            ))
+        };
     });
 }
 
-interface ParsedGoogleApiError {
-    code?: number;
-    status?: string;
-    message?: string;
-    rawMessage: string;
-}
-
-function parseGoogleApiError(error: any): ParsedGoogleApiError {
+function normalizeGoogleApiError(error: any, modelToUse: string): Error {
     const rawMessage = error instanceof Error ? error.message : String(error ?? 'Unknown error');
-    const parsedFromJson = (input: string): ParsedGoogleApiError | null => {
+    const tryParse = (s: string) => {
         try {
-            const payload = JSON.parse(input);
-            if (payload?.error) {
-                return {
-                    code: typeof payload.error.code === 'number' ? payload.error.code : undefined,
-                    status: typeof payload.error.status === 'string' ? payload.error.status : undefined,
-                    message: typeof payload.error.message === 'string' ? payload.error.message : undefined,
-                    rawMessage: input,
-                };
-            }
-        } catch {
-            // Fall through to alternate parsing strategies.
-        }
+            const p = JSON.parse(s);
+            if (p?.error) return { code: typeof p.error.code === 'number' ? p.error.code : undefined, status: typeof p.error.status === 'string' ? p.error.status : undefined, message: typeof p.error.message === 'string' ? p.error.message : undefined };
+        } catch {}
         return null;
     };
-
-    const direct = parsedFromJson(rawMessage);
-    if (direct) return direct;
-
-    const embeddedJsonMatch = rawMessage.match(/(\{[\s\S]*"error"[\s\S]*\})/);
-    if (embeddedJsonMatch) {
-        const embedded = parsedFromJson(embeddedJsonMatch[1]);
-        if (embedded) return embedded;
+    const parsed = tryParse(rawMessage) || (rawMessage.match(/(\{[\s\S]*"error"[\s\S]*\})/) ? tryParse(rawMessage.match(/(\{[\s\S]*"error"[\s\S]*\})/)![1]) : null);
+    const code = parsed?.code ?? (typeof error?.status === 'number' ? error.status : undefined);
+    const status = parsed?.status ? ` ${parsed.status}` : '';
+    let message = `Gemini API error (${code ?? 'unknown'}${status}) while using ${modelToUse}: ${parsed?.message || rawMessage || 'Request failed.'}`;
+    if (code === 500 || code === 503 || parsed?.status === 'INTERNAL' || parsed?.status === 'UNAVAILABLE' || parsed?.status === 'DEADLINE_EXCEEDED') {
+        message += ' This is a provider-side failure. Retry the run, and if it repeats switch to a stable non-preview Gemini model.';
     }
-
-    return {
-        code: typeof error?.status === 'number' ? error.status : undefined,
-        rawMessage,
-    };
-}
-
-function isTransientGoogleApiError(error: ParsedGoogleApiError): boolean {
-    return error.code === 500
-        || error.code === 503
-        || error.status === 'INTERNAL'
-        || error.status === 'UNAVAILABLE'
-        || error.status === 'DEADLINE_EXCEEDED';
-}
-
-function normalizeGoogleApiError(error: any, modelToUse: string): Error {
-    const parsed = parseGoogleApiError(error);
-    const code = parsed.code ?? (typeof error?.status === 'number' ? error.status : undefined);
-    const status = parsed.status ? ` ${parsed.status}` : '';
-    const detail = parsed.message || parsed.rawMessage || 'Request failed.';
-    let message = `Gemini API error (${code ?? 'unknown'}${status}) while using ${modelToUse}: ${detail}`;
-
-    if (isTransientGoogleApiError(parsed)) {
-        message += ' This is a provider-side failure.';
-        message += ' Retry the run, and if it repeats switch to a stable non-preview Gemini model.';
-    }
-
-    const normalized = new Error(message);
-    (normalized as any).cause = error;
-    (normalized as any).status = code;
-    (normalized as any).providerStatus = parsed.status;
-    (normalized as any).rawProviderMessage = parsed.rawMessage;
-    return normalized;
+    const norm: any = new Error(message);
+    norm.cause = error;
+    norm.status = code;
+    norm.providerStatus = parsed?.status;
+    norm.rawProviderMessage = rawMessage;
+    return norm;
 }
 
 class GoogleAIProvider implements AIProvider {
-    private client: GoogleGenAI | null = null;
-    private apiKey: string = '';
+    private initialized = false;
+    private apiKey = '';
 
     initialize(apiKey: string): boolean {
-        try {
-            this.apiKey = apiKey;
-            this.client = new GoogleGenAI({ apiKey });
-            return true;
-        } catch (e) {
-            console.error("Failed to initialize Google AI:", e);
-            return false;
-        }
+        this.apiKey = apiKey || '__SERVER_ENV__';
+        this.initialized = Boolean(this.apiKey);
+        return this.initialized;
     }
 
     async listModels(): Promise<string[]> {
-        if (!this.apiKey) return [];
+        if (!this.initialized) return [];
         try {
-            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${this.apiKey}`);
-            if (!res.ok) {
-                throw new Error(`Failed to list models: ${res.statusText}`);
+            const headers: Record<string, string> = { Accept: 'application/json' };
+            if (this.apiKey && this.apiKey !== '__SERVER_ENV__') {
+                headers['x-gemini-api-key'] = this.apiKey;
             }
+            const res = await fetch(`${getGeminiApiBaseURL()}/models`, { headers });
+            if (!res.ok) throw new Error(`Failed to list models: ${res.statusText}`);
             const data = await res.json();
-            const rawModels = data.models || [];
-
-            // Standard suffixes for chat/text models (excludes robotics, image, tts, customtools, etc.)
-            const allowedSuffixes = [
-                '-pro',
-                '-flash',
-                '-flash-lite',
-                '-pro-preview',
-                '-flash-preview',
-                '-flash-lite-preview',
-                '-it' // gemma
-            ];
-
-            const isDatedSnapshot = (modelId: string): boolean => {
-                if (modelId.length < 4) return false;
-                const lastPart = modelId.slice(-4);
-                if (lastPart[0] !== '-') return false;
-                const d1 = lastPart[1];
-                const d2 = lastPart[2];
-                const d3 = lastPart[3];
-                return d1 >= '0' && d1 <= '9' && d2 >= '0' && d2 <= '9' && d3 >= '0' && d3 <= '9';
-            };
-
-            const filteredModels = rawModels
-                .filter((model: any) => {
-                    const modelId = model.name.replace(/^models\//, '');
-                    const isGeminiOrGemma = modelId.startsWith('gemini-') || modelId.startsWith('gemma-');
-                    const supportsGenerate = model.supportedGenerationMethods?.includes('generateContent');
-
-                    const isNotDatedSnapshot = !isDatedSnapshot(modelId);
-                    const matchesAllowedSuffix = allowedSuffixes.some(suffix => modelId.endsWith(suffix));
-
-                    return isGeminiOrGemma && supportsGenerate && isNotDatedSnapshot && matchesAllowedSuffix;
-                })
-                .map((model: any) => model.name.replace(/^models\//, ''));
-
-            return filteredModels;
+            return Array.isArray(data?.models) ? data.models : [];
         } catch (e) {
             console.error("Failed to fetch Gemini models:", e);
             return [];
@@ -475,196 +262,129 @@ class GoogleAIProvider implements AIProvider {
         promptOrParts: string | Part[] | StructuredMessage[],
         modelToUse: string,
         systemInstruction?: string,
-        isJsonOutput: boolean = false,
+        isJsonOutput = false,
         thinkingConfig?: any,
         requestMeta?: AIProviderRequestOptions
     ): Promise<GenerateContentResponse> {
-        if (!this.client) throw new Error("Google AI client not initialized.");
+        if (!this.initialized) throw new Error("Google AI client not initialized.");
 
-        // Handle structured messages properly for Gemini
         let contents: any;
         if (Array.isArray(promptOrParts) && promptOrParts.length > 0 && typeof promptOrParts[0] === 'object' && 'role' in promptOrParts[0] && 'parts' in promptOrParts[0]) {
             contents = promptOrParts;
         } else if (isStructuredMessages(promptOrParts)) {
-            // Gemini supports multi-turn conversations via contents array
-            // Convert structured messages to Gemini's format
-            const geminiContents: any[] = [];
-
-            for (const msg of promptOrParts) {
-                // Convert all messages to plain text (thought signatures disabled)
-                if (msg.role === 'system') {
-                    // System messages go to user role in Gemini
-                    geminiContents.push({
-                        role: 'user',
-                        parts: [{ text: String(msg.content) }]
-                    });
-                } else if (msg.role === 'assistant') {
-                    // Assistant messages go to model role
-                    // If rawParts are present (tool-calling turn), pass them directly
-                    // This preserves inlineData images, function calls/responses,
-                    // and thought_signature.
-                    if (msg.rawParts && msg.rawParts.length > 0) {
-                        geminiContents.push({
-                            role: 'model',
-                            parts: msg.rawParts
-                        });
-                    } else {
-                        geminiContents.push({
-                            role: 'model',
-                            parts: [{ text: String(msg.content) }]
-                        });
-                    }
-                } else if (msg.role === 'user') {
-                    geminiContents.push({
-                        role: 'user',
-                        parts: [{ text: String(msg.content) }]
-                    });
-                }
-            }
-
-            // Gemini requires alternating user/model messages
-            // If we have consecutive messages of same role, combine them
             const normalizedContents: any[] = [];
-            for (let i = 0; i < geminiContents.length; i++) {
-                const current = geminiContents[i];
-                if (normalizedContents.length === 0) {
-                    normalizedContents.push(current);
-                } else {
-                    const last = normalizedContents[normalizedContents.length - 1];
-                    if (last.role === current.role) {
-                        // Combine consecutive messages of same role
-                        last.parts.push(...current.parts);
-                    } else {
-                        normalizedContents.push(current);
-                    }
-                }
+            for (const msg of promptOrParts) {
+                const role = msg.role === 'assistant' ? 'model' : 'user';
+                const parts = msg.role === 'assistant' && msg.rawParts?.length ? msg.rawParts : [{ text: String(msg.content) }];
+                const last = normalizedContents[normalizedContents.length - 1];
+                if (last?.role === role) last.parts.push(...parts);
+                else normalizedContents.push({ role, parts: [...parts] });
             }
-
             contents = normalizedContents;
         } else {
-            // Legacy: single message
-            contents = [{
-                role: 'user',
-                parts: typeof promptOrParts === 'string' ? [{ text: promptOrParts }] : promptOrParts
-            }];
-        }
-
-        const config: any = { maxOutputTokens: 65536 };
-        if (systemInstruction) config.systemInstruction = systemInstruction;
-        if (isJsonOutput) config.responseMimeType = "application/json";
-        if (requestMeta?.abortSignal) config.abortSignal = requestMeta.abortSignal;
-
-        const selectedLevel = (thinkingConfig?.thinkingLevel || globalState.thinkingLevel || 'high').toLowerCase();
-        let level = ThinkingLevel.HIGH;
-        if (selectedLevel === 'low') level = ThinkingLevel.LOW;
-        else if (selectedLevel === 'medium') level = ThinkingLevel.MEDIUM;
-        else if (selectedLevel === 'minimal') level = ThinkingLevel.MINIMAL;
-        else if (selectedLevel === 'high') level = ThinkingLevel.HIGH;
-
-        if (!modelToUse.toLowerCase().startsWith('gemma-')) {
-            config.thinkingConfig = {
-                thinkingLevel: level,
-                includeThoughts: true,
-            };
-        }
-
-        if (thinkingConfig?.tools && thinkingConfig.tools.length > 0) {
-            const toolsToPass = thinkingConfig.tools.filter(
-                (t: any) => !(t.functionDeclarations?.length === 1 && t.functionDeclarations[0].name === "internal_reasoning_continuation")
-            );
-
-            if (toolsToPass.length > 0) {
-                config.tools = [...toolsToPass];
-            }
+            contents = [{ role: 'user', parts: typeof promptOrParts === 'string' ? [{ text: promptOrParts }] : promptOrParts }];
         }
 
         const sanitizedContents = sanitizeContentsForApi(contents);
-
-        const consumeGeminiStream = async (activeConfig: any): Promise<GenerateContentResponse> => {
-            const stream = await this.client!.models.generateContentStream({
-                model: modelToUse,
-                contents: sanitizedContents,
-                config: activeConfig,
-            });
-
-            const accumulatedParts: any[] = [];
-            let lastChunk: any = null;
-
-            for await (const chunk of stream) {
-                requestMeta?.onChunkActivity?.();
-                lastChunk = chunk;
-                const chunkParts = chunk?.candidates?.[0]?.content?.parts;
-                if (Array.isArray(chunkParts) && chunkParts.length > 0) {
-                    appendStreamedGeminiParts(accumulatedParts, chunkParts);
-                } else if (typeof chunk?.text === 'string' && chunk.text.length > 0) {
-                    appendStreamedGeminiParts(accumulatedParts, [{ text: chunk.text }]);
-                }
-            }
-
-            const combinedText = accumulatedParts
-                .filter(p => typeof p?.text === 'string' && !p.thought)
-                .map(p => p.text)
-                .join('');
-
-            return {
-                ...(lastChunk || {}),
-                text: combinedText,
-                candidates: [
-                    {
-                        ...(lastChunk?.candidates?.[0] || {}),
-                        content: {
-                            role: 'model',
-                            parts: accumulatedParts,
-                        },
-                    },
-                ],
-                response: {
-                    text: () => combinedText,
-                    candidates: [
-                        {
-                            content: {
-                                role: 'model',
-                                parts: accumulatedParts,
-                            },
-                        },
-                    ],
-                },
-            } as any;
-        };
+        const selectedLevel = (thinkingConfig?.thinkingLevel || globalState.thinkingLevel || 'high').toLowerCase();
 
         try {
-            return await consumeGeminiStream(config);
-        } catch (error: any) {
-            const rawMsg = String(error?.message || error || '').toLowerCase();
-            if (
-                config.thinkingConfig &&
-                (rawMsg.includes('thinking') || rawMsg.includes('includethoughts') || rawMsg.includes('thinking_config'))
-            ) {
-                try {
-                    const fallbackConfig = { ...config };
-                    delete fallbackConfig.thinkingConfig;
-                    return await consumeGeminiStream(fallbackConfig);
-                } catch (fallbackError: any) {
-                    throw normalizeGoogleApiError(fallbackError, modelToUse);
+            const response = await fetch(`${getGeminiApiBaseURL()}/generate-stream`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(this.apiKey && this.apiKey !== '__SERVER_ENV__' ? { 'x-gemini-api-key': this.apiKey } : {}),
+                },
+                body: JSON.stringify({
+                    model: modelToUse,
+                    contents: sanitizedContents,
+                    systemInstruction,
+                    isJsonOutput,
+                    thinkingConfig: {
+                        ...thinkingConfig,
+                        thinkingLevel: selectedLevel,
+                    },
+                }),
+                signal: requestMeta?.abortSignal,
+            });
+
+            if (!response.ok) {
+                const errPayload = await response.json().catch(() => ({}));
+                const err: any = new Error(errPayload?.error?.message || `HTTP ${response.status}`);
+                err.status = errPayload?.error?.status ?? response.status;
+                err.providerStatus = errPayload?.error?.providerStatus;
+                throw err;
+            }
+
+            if (!response.body) {
+                throw new Error('Empty response stream from server.');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            const accumulatedParts: any[] = [];
+            let lastCandidate: any = null;
+            let buffer = '';
+
+            const processLine = (line: string) => {
+                const trimmed = line.trim();
+                if (!trimmed) return;
+                const event = JSON.parse(trimmed);
+                if (event.type === 'error') {
+                    const err: any = new Error(event.error?.message || 'Gemini stream error');
+                    err.status = event.error?.status;
+                    err.providerStatus = event.error?.providerStatus;
+                    throw err;
+                }
+                if (event.type === 'chunk') {
+                    requestMeta?.onChunkActivity?.();
+                    if (event.candidate) lastCandidate = event.candidate;
+                    if (Array.isArray(event.parts) && event.parts.length > 0) {
+                        appendStreamedGeminiParts(accumulatedParts, event.parts);
+                    } else if (typeof event.text === 'string' && event.text.length > 0) {
+                        appendStreamedGeminiParts(accumulatedParts, [{ text: event.text }]);
+                    }
+                }
+            };
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                let newlineIdx = buffer.indexOf('\n');
+                while (newlineIdx !== -1) {
+                    const line = buffer.slice(0, newlineIdx);
+                    buffer = buffer.slice(newlineIdx + 1);
+                    processLine(line);
+                    newlineIdx = buffer.indexOf('\n');
                 }
             }
+            buffer += decoder.decode();
+            if (buffer.trim()) {
+                for (const line of buffer.split('\n')) {
+                    processLine(line);
+                }
+            }
+
+            const combinedText = accumulatedParts.filter(p => typeof p?.text === 'string' && !p.thought).map(p => p.text).join('');
+            const hasFunctionCalls = accumulatedParts.some(p => !!p?.functionCall?.name);
+            if (!combinedText.trim() && !hasFunctionCalls) {
+                throw new Error('Empty response received from model.');
+            }
+            const candidateContent = { role: 'model', parts: accumulatedParts };
+            return {
+                text: combinedText,
+                candidates: [{ ...(lastCandidate || {}), content: candidateContent }],
+                response: { text: () => combinedText, candidates: [{ content: candidateContent }] },
+            } as any;
+        } catch (error: any) {
             throw normalizeGoogleApiError(error, modelToUse);
         }
     }
 
-    isInitialized(): boolean {
-        return this.client !== null;
-    }
-
-    getProviderName(): string {
-        return 'gemini';
-    }
-
+    isInitialized(): boolean { return this.initialized; }
+    getProviderName(): string { return 'gemini'; }
 }
-
-// ============================================================================
-// OpenAI Provider
-// ============================================================================
 
 class OpenAIProvider implements AIProvider {
     private client: OpenAI | null = null;
@@ -683,12 +403,8 @@ class OpenAIProvider implements AIProvider {
         if (!this.client) return [];
         try {
             const response = await this.client.models.list();
-            if (!response || !response.data) return [];
-
             const allowedPrefixes = ['gpt-', 'o1-', 'o3-', 'chatgpt-'];
-            return response.data
-                .map((m: any) => m.id)
-                .filter((id: string) => allowedPrefixes.some(prefix => id.startsWith(prefix)) || id === 'o1');
+            return (response?.data || []).map((m: any) => m.id).filter((id: string) => allowedPrefixes.some(p => id.startsWith(p)) || id === 'o1');
         } catch (e) {
             console.error("Failed to fetch OpenAI models:", e);
             return [];
@@ -699,52 +415,34 @@ class OpenAIProvider implements AIProvider {
         promptOrParts: string | Part[] | StructuredMessage[],
         modelToUse: string,
         systemInstruction?: string,
-        isJsonOutput: boolean = false,
-        _thinkingConfig?: any,
+        isJsonOutput = false,
+        thinkingConfig?: any,
         requestMeta?: AIProviderRequestOptions
     ): Promise<GenerateContentResponse> {
         if (!this.client) throw new Error("OpenAI client not initialized.");
-
-        const messages = buildChatMessages(promptOrParts, systemInstruction, true);
-        const effortLevel = (_thinkingConfig?.thinkingLevel || globalState.thinkingLevel || 'high').toLowerCase();
-
         const requestOptions: any = {
             model: modelToUse,
-            messages,
-            reasoning_effort: effortLevel,
+            messages: buildChatMessages(promptOrParts, systemInstruction, true),
+            reasoning_effort: (thinkingConfig?.thinkingLevel || globalState.thinkingLevel || 'high').toLowerCase(),
             stream: true,
+            ...(isJsonOutput ? { response_format: { type: "json_object" } } : {})
         };
-
-        if (isJsonOutput) requestOptions.response_format = { type: "json_object" };
-
-        const stream = await this.client.chat.completions.create(
-            requestOptions,
-            requestMeta?.abortSignal ? { signal: requestMeta.abortSignal } : undefined
-        ) as any;
-
+        const stream = await this.client.chat.completions.create(requestOptions, requestMeta?.abortSignal ? { signal: requestMeta.abortSignal } : undefined) as any;
         let fullText = '';
         for await (const chunk of stream) {
             requestMeta?.onChunkActivity?.();
-            const delta = chunk?.choices?.[0]?.delta;
-            if (typeof delta?.content === 'string') {
-                fullText += delta.content;
-            }
+            const delta = chunk?.choices?.[0]?.delta?.content;
+            if (typeof delta === 'string') fullText += delta;
+        }
+        if (!fullText.trim()) {
+            throw new Error('Empty response received from model.');
         }
         return wrapAsGeminiResponse(fullText);
     }
 
-    isInitialized(): boolean {
-        return this.client !== null;
-    }
-
-    getProviderName(): string {
-        return 'openai';
-    }
+    isInitialized(): boolean { return this.client !== null; }
+    getProviderName(): string { return 'openai'; }
 }
-
-// ============================================================================
-// OpenAI-Compatible Provider
-// ============================================================================
 
 interface OpenAICompatibleInitialization {
     baseURL: string;
@@ -758,55 +456,17 @@ interface OpenAICompatibleInitialization {
     };
 }
 
-function normalizeOpenAICompatibleEndpoint(endpoint: string): string {
-    const normalized = endpoint.trim().replace(/\/+$/, '');
-    const parsed = new URL(normalized);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        throw new Error('Endpoint URL must use http:// or https://.');
-    }
-    return normalized;
-}
-
 function parseOpenAICompatibleModel(model: any): DiscoveredModel | null {
     if (!model || typeof model.id !== 'string' || !model.id.trim()) return null;
-
     const inputModalities = model.architecture?.input_modalities ?? model.modalities?.input;
-    const supportsImageInput = Array.isArray(inputModalities)
-        ? inputModalities.includes('image')
-        : undefined;
-    const supportsTools = typeof model.supports_tools === 'boolean'
-        ? model.supports_tools
-        : typeof model.tool_call === 'boolean'
-            ? model.tool_call
-            : typeof model.capabilities?.tools === 'boolean'
-                ? model.capabilities.tools
-                : undefined;
-    const supportsStructuredOutputs = typeof model.supports_structured_outputs === 'boolean'
-        ? model.supports_structured_outputs
-        : typeof model.structured_output === 'boolean'
-            ? model.structured_output
-            : typeof model.capabilities?.structured_outputs === 'boolean'
-                ? model.capabilities.structured_outputs
-                : undefined;
-    const supportsReasoning = typeof model.reasoning === 'boolean'
-        ? model.reasoning
-        : typeof model.capabilities?.reasoning === 'boolean'
-            ? model.capabilities.reasoning
-            : typeof model.supports_reasoning === 'boolean'
-                ? model.supports_reasoning
-                : undefined;
-    const reasoningOptions = Array.isArray(model.reasoning_options)
-        ? model.reasoning_options.find((opt: any) => Array.isArray(opt.options))?.options
-        : undefined;
-
     return {
         id: model.id.trim(),
         displayName: typeof model.name === 'string' ? model.name : undefined,
-        supportsImageInput,
-        supportsTools,
-        supportsStructuredOutputs,
-        supportsReasoning,
-        reasoningOptions,
+        supportsImageInput: Array.isArray(inputModalities) ? inputModalities.includes('image') : undefined,
+        supportsTools: [model.supports_tools, model.tool_call, model.capabilities?.tools].find(v => typeof v === 'boolean'),
+        supportsStructuredOutputs: [model.supports_structured_outputs, model.structured_output, model.capabilities?.structured_outputs].find(v => typeof v === 'boolean'),
+        supportsReasoning: [model.reasoning, model.capabilities?.reasoning, model.supports_reasoning].find(v => typeof v === 'boolean'),
+        reasoningOptions: Array.isArray(model.reasoning_options) ? model.reasoning_options.find((opt: any) => Array.isArray(opt.options))?.options : undefined,
     };
 }
 
@@ -820,7 +480,10 @@ class OpenAICompatibleProvider implements AIProvider {
     initialize(configString: string): boolean {
         try {
             const config = JSON.parse(configString) as OpenAICompatibleInitialization;
-            this.endpointUrl = normalizeOpenAICompatibleEndpoint(config.baseURL);
+            const normalized = config.baseURL.trim().replace(/\/+$/, '');
+            const parsed = new URL(normalized);
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Endpoint URL must use http:// or https://.');
+            this.endpointUrl = normalized;
             this.apiKey = config.apiKey?.trim() || '';
             this.requestHeaders = config.headers ?? {};
             this.capabilities = config.capabilities ?? {};
@@ -828,13 +491,8 @@ class OpenAICompatibleProvider implements AIProvider {
                 name: 'openaiCompatible',
                 baseURL: getOpenAICompatibleProxyBaseURL(),
                 ...(this.apiKey ? { apiKey: this.apiKey } : {}),
-                headers: {
-                    ...this.requestHeaders,
-                    [OPENAI_COMPATIBLE_ENDPOINT_HEADER]: this.endpointUrl,
-                },
-                ...(typeof this.capabilities.supportsStructuredOutputs === 'boolean'
-                    ? { supportsStructuredOutputs: this.capabilities.supportsStructuredOutputs }
-                    : {}),
+                headers: { ...this.requestHeaders, [OPENAI_COMPATIBLE_ENDPOINT_HEADER]: this.endpointUrl },
+                ...(typeof this.capabilities.supportsStructuredOutputs === 'boolean' ? { supportsStructuredOutputs: this.capabilities.supportsStructuredOutputs } : {}),
             });
             return true;
         } catch (error) {
@@ -844,51 +502,34 @@ class OpenAICompatibleProvider implements AIProvider {
         }
     }
 
-    private getModelsRequestHeaders(): HeadersInit {
-        return {
-            Accept: 'application/json',
-            ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
-            ...this.requestHeaders,
-            [OPENAI_COMPATIBLE_ENDPOINT_HEADER]: this.endpointUrl,
-        };
-    }
-
     async listModels(): Promise<DiscoveredModel[]> {
         if (!this.endpointUrl) return [];
-
         try {
             const response = await fetch(`${getOpenAICompatibleProxyBaseURL()}/models`, {
-                headers: this.getModelsRequestHeaders(),
+                headers: {
+                    Accept: 'application/json',
+                    ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+                    ...this.requestHeaders,
+                    [OPENAI_COMPATIBLE_ENDPOINT_HEADER]: this.endpointUrl,
+                },
             });
-            if (!response.ok) {
-                throw new Error(`Model discovery returned HTTP ${response.status}.`);
-            }
-
+            if (!response.ok) throw new Error(`Model discovery returned HTTP ${response.status}.`);
             const payload = await response.json();
-            const rawList = Array.isArray(payload)
-                ? payload
-                : Array.isArray(payload?.data)
-                    ? payload.data
-                    : Array.isArray(payload?.models)
-                        ? payload.models
-                        : [];
-            const models = rawList
-                .map(parseOpenAICompatibleModel)
-                .filter(Boolean) as DiscoveredModel[];
-
+            const rawList = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+            const models = rawList.map(parseOpenAICompatibleModel).filter(Boolean) as DiscoveredModel[];
             if (models.length > 0) {
                 const advisoryModels = await getModelsDevModels(this.endpointUrl);
-                const advisoryById = new Map(advisoryModels.map(model => [model.id, model]));
+                const advisoryById = new Map(advisoryModels.map(m => [m.id, m]));
                 return models.map(model => {
-                    const advisory = advisoryById.get(model.id);
+                    const adv = advisoryById.get(model.id);
                     return {
                         ...model,
-                        displayName: model.displayName || advisory?.name,
-                        supportsImageInput: model.supportsImageInput ?? advisory?.modalities?.input?.includes('image'),
-                        supportsTools: model.supportsTools ?? advisory?.tool_call,
-                        supportsStructuredOutputs: model.supportsStructuredOutputs ?? advisory?.structured_output,
-                        supportsReasoning: model.supportsReasoning ?? advisory?.reasoning,
-                        reasoningOptions: model.reasoningOptions ?? (advisory ? extractReasoningEffortOptions(advisory) ?? undefined : undefined),
+                        displayName: model.displayName || adv?.name,
+                        supportsImageInput: model.supportsImageInput ?? adv?.modalities?.input?.includes('image'),
+                        supportsTools: model.supportsTools ?? adv?.tool_call,
+                        supportsStructuredOutputs: model.supportsStructuredOutputs ?? adv?.structured_output,
+                        supportsReasoning: model.supportsReasoning ?? adv?.reasoning,
+                        reasoningOptions: model.reasoningOptions ?? (adv ? extractReasoningEffortOptions(adv) ?? undefined : undefined),
                     };
                 });
             }
@@ -896,19 +537,15 @@ class OpenAICompatibleProvider implements AIProvider {
             console.warn('OpenAI-compatible endpoint model discovery failed:', error);
         }
 
-        // A known provider in Models.dev may still have useful metadata when its live /models
-        // endpoint is unavailable. Unknown custom endpoints return [] so they use only user models.
         const advisoryModels = await getModelsDevModels(this.endpointUrl);
-        return advisoryModels.map(model => ({
-            id: model.id,
-            displayName: model.name,
-            supportsImageInput: model.modalities?.input?.includes('image'),
-            supportsTools: typeof model.tool_call === 'boolean' ? model.tool_call : undefined,
-            supportsStructuredOutputs: typeof model.structured_output === 'boolean'
-                ? model.structured_output
-                : undefined,
-            supportsReasoning: typeof model.reasoning === 'boolean' ? model.reasoning : undefined,
-            reasoningOptions: extractReasoningEffortOptions(model) ?? undefined,
+        return advisoryModels.map(m => ({
+            id: m.id,
+            displayName: m.name,
+            supportsImageInput: m.modalities?.input?.includes('image'),
+            supportsTools: typeof m.tool_call === 'boolean' ? m.tool_call : undefined,
+            supportsStructuredOutputs: typeof m.structured_output === 'boolean' ? m.structured_output : undefined,
+            supportsReasoning: typeof m.reasoning === 'boolean' ? m.reasoning : undefined,
+            reasoningOptions: extractReasoningEffortOptions(m) ?? undefined,
         }));
     }
 
@@ -916,33 +553,20 @@ class OpenAICompatibleProvider implements AIProvider {
         promptOrParts: string | Part[] | StructuredMessage[],
         modelToUse: string,
         systemInstruction?: string,
-        isJsonOutput: boolean = false,
+        isJsonOutput = false,
         thinkingConfig?: ThinkingConfig,
         requestMeta?: AIProviderRequestOptions
     ): Promise<GenerateContentResponse> {
-        if (!this.client) {
-            throw new Error('Error: OpenAI-compatible endpoint is not initialized. Check the endpoint URL or API compatibility.');
-        }
-
+        if (!this.client) throw new Error('Error: OpenAI-compatible endpoint is not initialized. Check the endpoint URL or API compatibility.');
         try {
             const { messages, instructions } = buildLanguageModelPrompt(promptOrParts, systemInstruction);
             const request: any = {
                 model: this.client.chatModel(modelToUse),
                 messages,
                 ...(requestMeta?.abortSignal ? { abortSignal: requestMeta.abortSignal } : {}),
-            };
-
-            if (instructions) request.instructions = instructions;
-
-            if (isJsonOutput) {
-                request.output = Output.json();
-            }
-
-            const effortLevel = (thinkingConfig?.thinkingLevel || globalState.thinkingLevel || 'high').toLowerCase();
-            request.providerOptions = {
-                openaiCompatible: {
-                    reasoningEffort: effortLevel,
-                },
+                ...(instructions ? { instructions } : {}),
+                ...(isJsonOutput ? { output: Output.json() } : {}),
+                providerOptions: { openaiCompatible: { reasoningEffort: (thinkingConfig?.thinkingLevel || globalState.thinkingLevel || 'high').toLowerCase() } },
             };
 
             const streamResult = streamText(request);
@@ -950,35 +574,25 @@ class OpenAICompatibleProvider implements AIProvider {
             for await (const part of streamResult.fullStream as any) {
                 requestMeta?.onChunkActivity?.();
                 if (part?.type === 'text-delta') {
-                    const delta = typeof part.textDelta === 'string'
-                        ? part.textDelta
-                        : typeof part.text === 'string'
-                            ? part.text
-                            : '';
-                    streamedText += delta;
+                    streamedText += typeof part.textDelta === 'string' ? part.textDelta : typeof part.text === 'string' ? part.text : '';
                 } else if (part?.type === 'error' && part.error) {
                     throw part.error;
                 }
             }
 
             let text = streamedText;
-            if (!text) {
-                try {
-                    text = await streamResult.text;
-                } catch {
-                    // Fallback if streamResult.text is unavailable
-                }
-            }
+            if (!text) { try { text = await streamResult.text; } catch {} }
             if (!text && isJsonOutput) {
                 try {
                     const out = await (streamResult as any).output;
-                    if (out !== undefined) {
-                        text = JSON.stringify(out);
-                    }
+                    if (out !== undefined) text = JSON.stringify(out);
                 } catch {
-                    const fallbackResult = await generateText(request);
-                    text = fallbackResult.text || (fallbackResult.output !== undefined ? JSON.stringify(fallbackResult.output) : '');
+                    const fb = await generateText(request);
+                    text = fb.text || (fb.output !== undefined ? JSON.stringify(fb.output) : '');
                 }
+            }
+            if (!text || !text.trim()) {
+                throw new Error('Empty response received from model.');
             }
             return wrapAsGeminiResponse(text);
         } catch (error) {
@@ -986,18 +600,9 @@ class OpenAICompatibleProvider implements AIProvider {
         }
     }
 
-    isInitialized(): boolean {
-        return this.client !== null;
-    }
-
-    getProviderName(): string {
-        return 'openai-compatible';
-    }
+    isInitialized(): boolean { return this.client !== null; }
+    getProviderName(): string { return 'openai-compatible'; }
 }
-
-// ============================================================================
-// Anthropic Provider
-// ============================================================================
 
 class AnthropicProvider implements AIProvider {
     private client: Anthropic | null = null;
@@ -1016,10 +621,7 @@ class AnthropicProvider implements AIProvider {
         if (!this.client) return [];
         try {
             const response = await this.client.models.list({ limit: 1000 });
-            if (!response || !response.data) return [];
-            return response.data
-                .map((m: any) => m.id)
-                .filter((id: string) => id.startsWith('claude-'));
+            return (response?.data || []).map((m: any) => m.id).filter((id: string) => id.startsWith('claude-'));
         } catch (e) {
             console.error("Failed to fetch Anthropic models:", e);
             return [];
@@ -1030,45 +632,34 @@ class AnthropicProvider implements AIProvider {
         promptOrParts: string | Part[] | StructuredMessage[],
         modelToUse: string,
         systemInstruction?: string,
-        isJsonOutput: boolean = false,
-        _thinkingConfig?: any,
+        isJsonOutput = false,
+        thinkingConfig?: any,
         requestMeta?: AIProviderRequestOptions
     ): Promise<GenerateContentResponse> {
         if (!this.client) throw new Error("Anthropic client not initialized.");
-
         const { messages, systemPrompt } = buildAnthropicMessages(promptOrParts, systemInstruction);
-        const level = (_thinkingConfig?.thinkingLevel || globalState.thinkingLevel || 'high').toLowerCase();
-
+        const jsonRule = 'You must respond with valid JSON only. Do not include any text outside the JSON structure.';
         const requestOptions: any = {
             model: modelToUse,
             max_tokens: 16384,
             messages,
             thinking: { type: 'adaptive' },
-            effort: level,
+            effort: (thinkingConfig?.thinkingLevel || globalState.thinkingLevel || 'high').toLowerCase(),
             stream: true,
+            ...(isJsonOutput ? { system: systemPrompt ? `${systemPrompt}\n\n${jsonRule}` : jsonRule } : systemPrompt ? { system: systemPrompt } : {})
         };
 
-        if (systemPrompt) requestOptions.system = systemPrompt;
-
-        // Anthropic has no native JSON mode — inject instruction into system prompt
-        if (isJsonOutput && systemPrompt) {
-            requestOptions.system = `${systemPrompt}\n\nYou must respond with valid JSON only. Do not include any text outside the JSON structure.`;
-        } else if (isJsonOutput) {
-            requestOptions.system = 'You must respond with valid JSON only. Do not include any text outside the JSON structure.';
-        }
-
         const consumeAnthropicStream = async (opts: any): Promise<GenerateContentResponse> => {
-            const stream = await this.client!.messages.create(
-                opts,
-                requestMeta?.abortSignal ? { signal: requestMeta.abortSignal } : undefined
-            ) as any;
-
+            const stream = await this.client!.messages.create(opts, requestMeta?.abortSignal ? { signal: requestMeta.abortSignal } : undefined) as any;
             let textContent = '';
             for await (const event of stream) {
                 requestMeta?.onChunkActivity?.();
                 if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
                     textContent += event.delta.text;
                 }
+            }
+            if (!textContent.trim()) {
+                throw new Error('Empty response received from model.');
             }
             return wrapAsGeminiResponse(textContent);
         };
@@ -1087,42 +678,19 @@ class AnthropicProvider implements AIProvider {
         }
     }
 
-    isInitialized(): boolean {
-        return this.client !== null;
-    }
-
-    getProviderName(): string {
-        return 'anthropic';
-    }
+    isInitialized(): boolean { return this.client !== null; }
+    getProviderName(): string { return 'anthropic'; }
 }
-
-// ============================================================================
-// Local Models Provider
-// ============================================================================
 
 class LocalModelsProvider implements AIProvider {
     private client: OpenAI | null = null;
-    private endpointUrl: string = '';
+    private endpointUrl = '';
 
     initialize(configString: string): boolean {
         try {
-            // Parse the config string which contains endpoint URL
-            // Format: "endpoint_url|model1,model2,model3"
             const [endpoint] = configString.split('|');
-
-            // Ensure the endpoint has the /v1 suffix for OpenAI compatibility
-            // LM Studio and similar tools expect this format
-            this.endpointUrl = endpoint.endsWith('/v1')
-                ? endpoint
-                : endpoint.endsWith('/')
-                    ? endpoint + 'v1'
-                    : endpoint + '/v1';
-
-            this.client = new OpenAI({
-                apiKey: 'not-needed', // Local models typically don't need API keys
-                baseURL: this.endpointUrl,
-                dangerouslyAllowBrowser: true
-            });
+            this.endpointUrl = endpoint.endsWith('/v1') ? endpoint : endpoint.endsWith('/') ? `${endpoint}v1` : `${endpoint}/v1`;
+            this.client = new OpenAI({ apiKey: 'not-needed', baseURL: this.endpointUrl, dangerouslyAllowBrowser: true });
             return true;
         } catch (e) {
             console.error("Failed to initialize Local Models:", e);
@@ -1134,69 +702,38 @@ class LocalModelsProvider implements AIProvider {
         promptOrParts: string | Part[] | StructuredMessage[],
         modelToUse: string,
         systemInstruction?: string,
-        isJsonOutput: boolean = false,
+        isJsonOutput = false,
         _thinkingConfig?: any,
         requestMeta?: AIProviderRequestOptions
     ): Promise<GenerateContentResponse> {
         if (!this.client) throw new Error("Local Models client not initialized.");
-
-        // For local models, we don't rely on response_format. We inject the instruction.
-        let effectiveSystemInstruction = systemInstruction;
-        if (isJsonOutput) {
-            effectiveSystemInstruction = (effectiveSystemInstruction || '') +
-                '\n\nIMPORTANT: You must respond with valid JSON only, no other text.';
-        }
-
-        const messages = buildChatMessages(promptOrParts, effectiveSystemInstruction, true);
-        const requestOptions: any = {
-            model: modelToUse,
-            messages,
-            stream: true,
-        };
-
+        const sys = isJsonOutput ? `${systemInstruction || ''}\n\nIMPORTANT: You must respond with valid JSON only, no other text.` : systemInstruction;
         const stream = await this.client.chat.completions.create(
-            requestOptions,
+            { model: modelToUse, messages: buildChatMessages(promptOrParts, sys, true), stream: true },
             requestMeta?.abortSignal ? { signal: requestMeta.abortSignal } : undefined
         ) as any;
-
         let fullText = '';
         for await (const chunk of stream) {
             requestMeta?.onChunkActivity?.();
-            const delta = chunk?.choices?.[0]?.delta;
-            if (typeof delta?.content === 'string') {
-                fullText += delta.content;
-            }
+            const delta = chunk?.choices?.[0]?.delta?.content;
+            if (typeof delta === 'string') fullText += delta;
+        }
+        if (!fullText.trim()) {
+            throw new Error('Empty response received from model.');
         }
         return wrapAsGeminiResponse(fullText);
     }
 
-    isInitialized(): boolean {
-        return this.client !== null;
-    }
-
-    getProviderName(): string {
-        return 'local';
-    }
+    isInitialized(): boolean { return this.client !== null; }
+    getProviderName(): string { return 'local'; }
 }
-
-// ============================================================================
-// Provider Factory
-// ============================================================================
 
 export function createAIProvider(provider: string): AIProvider {
     switch (provider) {
-        case 'gemini':
-        case 'google':
-            return new GoogleAIProvider();
-        case 'openai':
-            return new OpenAIProvider();
-        case 'openai-compatible':
-            return new OpenAICompatibleProvider();
-        case 'anthropic':
-            return new AnthropicProvider();
-        case 'local':
-            return new LocalModelsProvider();
-        default:
-            return new GoogleAIProvider();
+        case 'openai': return new OpenAIProvider();
+        case 'openai-compatible': return new OpenAICompatibleProvider();
+        case 'anthropic': return new AnthropicProvider();
+        case 'local': return new LocalModelsProvider();
+        default: return new GoogleAIProvider();
     }
 }

@@ -1,185 +1,33 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * Deepthink Core - the fixed iterative Deepthink implementation.
- */
-
-import { GenerateContentResponse, Part } from "@google/genai";
 import { nanoid } from 'nanoid';
-import { ThinkingConfig } from '../../Routing/AIProvider';
+import { GenerateContentResponse, Part, ThinkingConfig } from '../../Routing/AIProvider';
 import { CustomizablePromptsDeepthink } from '../prompts';
-import { type ProximityTurn } from './proximity';
 import {
     DeepthinkPipelineOrchestrator,
     PipelineStopRequestedError as OrchestratorStopRequestedError,
     extractJsonString,
 } from './pipelineOrchestrator';
 import { parsePromptToGeminiParts } from './contextBuilders';
-import { CURRENT_STATE_VERSION, type VersionedState } from '../../Core/StateSerializer/StateVersion';
 import { globalState } from '../../Core/State';
 import { isTerminalInferenceError } from '../../Core/ProviderError';
 import type { CallAIOptions } from '../../Routing';
 import type {
     DeepthinkRunConfig,
-    BsrGlobalUpdateRecord,
-    BsrLedgerEntry,
-    DosOutput,
-    HeartbeatBlock,
-    ModuleRoundSnapshot,
+    DeepthinkPipelineState,
 } from './types';
 
-export type { DeepthinkRunConfig } from './types';
-
-type AgentStatus = 'pending' | 'processing' | 'completed' | 'error' | 'cancelled';
-
-export interface DeepthinkSolutionCritiqueData {
-    id: string;
-    mainStrategyId: string;
-    critiqueResponse?: string;
-    critiqueResponseDisplay?: string;
-    status: AgentStatus;
-    error?: string;
-    globalIteration?: number;
-    branchIteration?: number;
-}
-
-export interface DeepthinkBranchIteration {
-    iterationNumber: number;
-    globalIteration?: number;
-    branchIteration?: number;
-    critique: string;
-    critiqueDisplay?: string;
-    correctedSolution: string;
-    correctedSolutionDisplay?: string;
-    correctedSolutionExecutionTraceText?: string;
-    critiqueExecutionTraceText?: string;
-    timestamp: number;
-    label?: string;
-}
-
-export interface DeepthinkMainStrategyData {
-    id: string;
-    strategyText: string;
-    solutionAttempt?: string;
-    solutionAttemptDisplay?: string;
-    solutionAttemptFinal?: string;
-    solutionAttemptExecutionTraceText?: string;
-    solutionCritique?: string;
-    solutionCritiqueDisplay?: string;
-    solutionCritiqueFinal?: string;
-    solutionCritiqueExecutionTraceText?: string;
-    solutionCritiqueStatus?: AgentStatus;
-    refinedSolution?: string;
-    refinedSolutionDisplay?: string;
-    refinedSolutionFinal?: string;
-    refinedSolutionExecutionTraceText?: string;
-    correctionStatus?: AgentStatus | 'skipped';
-    status: AgentStatus;
-    error?: string;
-    branchIterationCount?: number;
-    iterationHistory?: {
-        iterations: DeepthinkBranchIteration[];
-        status: 'idle' | 'processing' | 'completed' | 'error';
-    };
-    memoryBank?: string;
-}
-
-export interface DeepthinkModuleData {
-    id: string;
-    moduleText: string;
-    testerAttempt?: string;
-    testerAttemptDisplay?: string;
-    testerAttemptFinal?: string;
-    testerAttemptExecutionTraceText?: string;
-    testerStatus: AgentStatus;
-    testerVerdict?: 'VALIDATED' | 'REJECTED' | 'INCONCLUSIVE';
-    targetBranchIds?: string[];
-    roundNumber?: number;
-    globalIteration?: number;
-}
-
-interface DeepthinkMemoryBankAgentData {
-    mainStrategyId: string;
-    memoryBank?: string;
-    globalIteration: number;
-}
-
-export interface DeepthinkPipelineState {
-    id: string;
-    challenge: string;
-    status: 'idle' | 'processing' | 'completed' | 'error' | 'stopping' | 'stopped' | 'cancelled';
-    error?: string;
-    activeTabId: string;
-    activeStrategyTab?: number;
-    isStopRequested?: boolean;
-    strategyGenerationHistory?: ProximityTurn[];
-    initialStrategies: DeepthinkMainStrategyData[];
-    modulesGenerationHistory?: ProximityTurn[];
-    modules: DeepthinkModuleData[];
-    modulesHistory?: DeepthinkModuleData[][];
-    moduleRounds?: ModuleRoundSnapshot[];
-    modulesGenStatus?: AgentStatus;
-    knowledgePacket?: string;
-    solutionCritiques: DeepthinkSolutionCritiqueData[];
-    solutionCritiquesStatus?: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled';
-    memoryBankAgents?: DeepthinkMemoryBankAgentData[];
-    modulesExplorerComplete?: boolean;
-    finalJudgedBestSolution?: string;
-    finalJudgingResponseText?: string;
-    finalJudgingExecutionTraceText?: string;
-    finalJudgingStatus?: AgentStatus;
-    finalJudgingError?: string;
-    strategySpecificKnowledgePackets?: Record<string, string>;
-    liveEvents?: DeepthinkLiveEvent[];
-    currentIteration?: number;
-    heartbeatNo?: number;
-    prunedBranches?: any[];
-    /** Immutable settings and prompts that produced this run. */
-    runConfig?: DeepthinkRunConfig;
-    /** Current committed repository baseline used for read-only agent views. */
-    repositoryRevision?: string;
-    /** BSR Global Update Records & Decision tracking */
-    bsrRecords?: BsrGlobalUpdateRecord[];
-    branchLedgers?: Record<string, BsrLedgerEntry[]>;
-    /** DOS synthesis outputs */
-    dosOutputs?: Array<{
-        callType: 'heartbeat' | 'step_i' | 'step_ii';
-        iteration: number;
-        output: DosOutput;
-    }>;
-    heartbeats?: HeartbeatBlock[];
-}
-
-export interface DeepthinkLiveEvent {
-    id: string;
-    timestamp: number;
-    agentName: string;
-    stepDescription: string;
-    eventType: 'info' | 'agent_start' | 'agent_complete' | 'agent_error' | 'agent_retry';
-    systemInstruction?: string;
-    prompt?: string;
-    response?: string;
-    executionTraceText?: string;
-    error?: string;
-    attempt?: number;
-    modelName?: string;
-    codeExecutionEnabled?: boolean;
-    executionId?: string;
-    executionGroupId?: string;
-    executionGroupName?: string;
-}
-
-class PipelineStopRequestedError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = "PipelineStopRequestedError";
-    }
-}
+export type {
+    DeepthinkRunConfig,
+    DeepthinkSolutionCritiqueData,
+    DeepthinkBranchIteration,
+    DeepthinkMainStrategyData,
+    DeepthinkModuleData,
+    DeepthinkPipelineState,
+    DeepthinkLiveEvent,
+} from './types';
 
 let activeDeepthinkPipeline: DeepthinkPipelineState | null = null;
 let setActiveDeepthinkPipeline: ((pipeline: DeepthinkPipelineState | null) => void) | null = null;
-let render: () => void = () => { };
+let render: () => void = () => {};
 
 export interface DeepthinkCoreDeps {
     callAI: (
@@ -203,7 +51,7 @@ export interface DeepthinkCoreDeps {
     getIsolateBranchesEnabled: () => boolean;
     getDeepthinkCodeExecutionEnabled: () => boolean;
     updateControlsState: (newState: any) => void;
-    getSelectedThinkingLevel?: () => 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | string;
+    getSelectedThinkingLevel?: () => string;
     getCustomPromptsDeepthinkState: () => CustomizablePromptsDeepthink;
     getBsrNoiseLevel?: () => number;
     getBsrPressureFloor?: () => number;
@@ -216,23 +64,12 @@ export interface DeepthinkCoreDeps {
 let deps: DeepthinkCoreDeps = null!;
 
 function captureRunConfig(): DeepthinkRunConfig {
-    const rawI = (deps as any).getI?.() ?? (deps.getDeepthinkDepth ? deps.getDeepthinkDepth() : 10);
-    const rawJ = (deps as any).getJ?.() ?? 4;
-    const rawK = (deps as any).getK?.() ?? 4;
-
-    const i = Math.round(rawI || 10);
-    const j = Math.round(rawJ || 4);
-    const k = Math.round(rawK || 4);
-
     const model = deps.getSelectedModel();
-    if (!model || !model.trim()) {
-        throw new Error('No AI model selected for Deepthink execution.');
-    }
-
+    if (!model?.trim()) throw new Error('No AI model selected for Deepthink execution.');
     return {
-        i,
-        j,
-        k,
+        i: Math.round(deps.getI?.() ?? (deps.getDeepthinkDepth ? deps.getDeepthinkDepth() : 10) ?? 10),
+        j: Math.round(deps.getJ?.() ?? 4),
+        k: Math.round(deps.getK?.() ?? 4),
         strategiesCount: deps.getSelectedStrategiesCount(),
         strategyProximityLoops: deps.getStrategyProximityLoops(),
         modulesCount: deps.getSelectedModulesCount(),
@@ -266,17 +103,15 @@ export function getActiveDeepthinkPipeline() {
 
 export function setActiveDeepthinkPipelineForImport(pipeline: DeepthinkPipelineState | null) {
     activeDeepthinkPipeline = pipeline;
-    if (setActiveDeepthinkPipeline) setActiveDeepthinkPipeline(pipeline);
+    setActiveDeepthinkPipeline?.(pipeline);
 }
 
 export function prunePipelineForExport(pipeline: DeepthinkPipelineState): DeepthinkPipelineState {
     const cloned = JSON.parse(JSON.stringify(pipeline));
-
-    const directFiles: any[] = (cloned as any).directContextFiles || (globalState.directContextFiles || []);
-    const imageFiles = directFiles.filter((f: any) => f.mimeType && f.mimeType.startsWith('image/'));
+    const directFiles: any[] = cloned.directContextFiles || globalState.directContextFiles || [];
+    const imageFiles = directFiles.filter((f: any) => f.mimeType?.startsWith('image/'));
 
     let imgIndex = 0;
-    // Replace inline base64 image blocks in challenge with file references
     if (typeof cloned.challenge === 'string') {
         cloned.challenge = cloned.challenge.replace(
             /<!-- EXECUTION_IMAGE_START -->\s*<!-- MIME_TYPE:\s*([^\s]+)\s*-->\s*([\s\S]*?)<!-- EXECUTION_IMAGE_END -->/g,
@@ -288,7 +123,6 @@ export function prunePipelineForExport(pipeline: DeepthinkPipelineState): Deepth
         );
     }
 
-    // Prune base64 from live events
     if (Array.isArray(cloned.liveEvents)) {
         for (const ev of cloned.liveEvents) {
             if (typeof ev.prompt === 'string') {
@@ -300,21 +134,15 @@ export function prunePipelineForExport(pipeline: DeepthinkPipelineState): Deepth
         }
     }
 
-    if (cloned.status === 'processing' || cloned.status === 'stopping') {
-        cloned.status = 'stopped';
-    }
+    if (cloned.status === 'processing' || cloned.status === 'stopping') cloned.status = 'stopped';
     cloned.isStopRequested = false;
-
     return cloned;
 }
 
 export async function saveLatestDeepthinkState(pipeline: DeepthinkPipelineState): Promise<void> {
-    if (!pipeline || !pipeline.id) return;
-
+    if (!pipeline?.id) return;
     try {
-        const initialIdeaInput = document.getElementById('initial-idea') as HTMLTextAreaElement;
-        const initialIdea = initialIdeaInput?.value || pipeline.challenge || '';
-
+        const initialIdea = (document.getElementById('initial-idea') as HTMLTextAreaElement)?.value || pipeline.challenge || '';
         const referencedDirectFiles = (globalState.directContextFiles || []).map(file => ({
             name: file.name,
             mimeType: file.mimeType,
@@ -326,41 +154,36 @@ export async function saveLatestDeepthinkState(pipeline: DeepthinkPipelineState)
         const pruned = prunePipelineForExport(pipeline);
         (pruned as any).directContextFiles = referencedDirectFiles;
 
-        const config: VersionedState = {
-            _version: CURRENT_STATE_VERSION,
+        const config = {
+            _version: '2.0.0',
             _exportedAt: new Date().toISOString(),
             _mode: 'deepthink',
             data: {
                 currentMode: 'deepthink',
                 initialIdea,
-                selectedModel: pipeline.runConfig?.model || (deps?.getSelectedModel ? deps.getSelectedModel() : ''),
-                modeState: {
-                    pipeline: pruned,
-                    activeTabId: pruned.activeTabId || 'live',
-                },
+                selectedModel: pipeline.runConfig?.model || deps?.getSelectedModel?.() || '',
+                modeState: { pipeline: pruned, activeTabId: pruned.activeTabId || 'live' },
                 customPrompts: {
-                    deepthink: deps?.getCustomPromptsDeepthinkState ? deps.getCustomPromptsDeepthinkState() : globalState.customPromptsDeepthinkState,
+                    deepthink: deps?.getCustomPromptsDeepthinkState?.() ?? globalState.customPromptsDeepthinkState,
                     contextual: globalState.customPromptsContextualState,
                     adaptiveDeepthink: globalState.customPromptsAdaptiveDeepthinkState,
                 },
                 modelParameters: {
-                    strategiesCount: pipeline.runConfig?.strategiesCount ?? (deps?.getSelectedStrategiesCount ? deps.getSelectedStrategiesCount() : 3),
-                    strategyProximityLoops: pipeline.runConfig?.strategyProximityLoops ?? (deps?.getStrategyProximityLoops ? deps.getStrategyProximityLoops() : 1),
-                    modulesCount: pipeline.runConfig?.modulesCount ?? (deps?.getSelectedModulesCount ? deps.getSelectedModulesCount() : 4),
-                    modulesImpactReviewLoops: pipeline.runConfig?.modulesImpactReviewLoops ?? (deps?.getModulesImpactReviewLoops ? deps.getModulesImpactReviewLoops() : 1),
-                    deepthinkDepth: pipeline.runConfig?.i ?? (deps?.getDeepthinkDepth ? deps.getDeepthinkDepth() : 10),
-                    isolateBranches: pipeline.runConfig?.isolateBranches ?? (deps?.getIsolateBranchesEnabled ? deps.getIsolateBranchesEnabled() : false),
-                    deepthinkCodeExecutionEnabled: pipeline.runConfig?.deepthinkCodeExecutionEnabled ?? (deps?.getDeepthinkCodeExecutionEnabled ? deps.getDeepthinkCodeExecutionEnabled() : false),
-                    thinkingLevel: pipeline.runConfig?.thinkingLevel ?? (deps?.getSelectedThinkingLevel ? deps.getSelectedThinkingLevel() : 'high'),
+                    strategiesCount: pipeline.runConfig?.strategiesCount ?? deps?.getSelectedStrategiesCount?.() ?? 3,
+                    strategyProximityLoops: pipeline.runConfig?.strategyProximityLoops ?? deps?.getStrategyProximityLoops?.() ?? 1,
+                    modulesCount: pipeline.runConfig?.modulesCount ?? deps?.getSelectedModulesCount?.() ?? 4,
+                    modulesImpactReviewLoops: pipeline.runConfig?.modulesImpactReviewLoops ?? deps?.getModulesImpactReviewLoops?.() ?? 1,
+                    deepthinkDepth: pipeline.runConfig?.i ?? deps?.getDeepthinkDepth?.() ?? 10,
+                    isolateBranches: pipeline.runConfig?.isolateBranches ?? deps?.getIsolateBranchesEnabled?.() ?? false,
+                    deepthinkCodeExecutionEnabled: pipeline.runConfig?.deepthinkCodeExecutionEnabled ?? deps?.getDeepthinkCodeExecutionEnabled?.() ?? false,
+                    thinkingLevel: pipeline.runConfig?.thinkingLevel ?? deps?.getSelectedThinkingLevel?.() ?? 'high',
                 },
                 directContextFiles: referencedDirectFiles,
             } as any,
         };
 
         const rt = await import('../../Core/SandboxToolRuntime');
-        if (rt?.saveSandboxLatestGz) {
-            await rt.saveSandboxLatestGz(pipeline.id, config);
-        }
+        await rt?.saveSandboxLatestGz?.(pipeline.id, config);
     } catch (err) {
         console.warn('Notice: could not update latest.gz snapshot:', err);
     }
@@ -372,50 +195,34 @@ let activeOrchestrator: DeepthinkPipelineOrchestrator | null = null;
 
 export function resetInFlightPipelineExecution(pipeline: DeepthinkPipelineState): void {
     if (!pipeline) return;
-
-    // 1. liveEvents: discard in-flight uncompleted agent events
     if (Array.isArray(pipeline.liveEvents)) {
-        const completedExecutionIds = new Set<string>();
+        const completedIds = new Set<string>();
         for (const ev of pipeline.liveEvents) {
-            if (ev.eventType === 'agent_complete' || ev.eventType === 'agent_error') {
-                if (ev.executionId) completedExecutionIds.add(ev.executionId);
+            if ((ev.eventType === 'agent_complete' || ev.eventType === 'agent_error') && ev.executionId) {
+                completedIds.add(ev.executionId);
             }
         }
-        pipeline.liveEvents = pipeline.liveEvents.filter(ev => {
-            if (ev.eventType === 'info') return true;
-            if (ev.eventType === 'agent_complete' || ev.eventType === 'agent_error') return true;
-            if (ev.eventType === 'agent_start' || ev.eventType === 'agent_retry') {
-                return ev.executionId ? completedExecutionIds.has(ev.executionId) : false;
-            }
-            return true;
-        });
+        pipeline.liveEvents = pipeline.liveEvents.filter(ev =>
+            ev.eventType === 'info' || ev.eventType === 'agent_complete' || ev.eventType === 'agent_error' ||
+            ((ev.eventType === 'agent_start' || ev.eventType === 'agent_retry') ? Boolean(ev.executionId && completedIds.has(ev.executionId)) : true)
+        );
     }
-
-    // 2. initialStrategies: reset any transient 'processing' status to clean checkpoint
     if (Array.isArray(pipeline.initialStrategies)) {
         for (const branch of pipeline.initialStrategies) {
-            if (branch.status === 'processing') {
-                branch.status = branch.solutionAttempt ? 'completed' : 'pending';
-            }
-            if (branch.correctionStatus === 'processing') {
-                branch.correctionStatus = 'pending';
-            }
-            if (branch.solutionCritiqueStatus === 'processing') {
-                branch.solutionCritiqueStatus = branch.solutionCritique ? 'completed' : 'pending';
-            }
+            if (branch.status === 'processing') branch.status = branch.solutionAttempt ? 'completed' : 'pending';
+            if (branch.correctionStatus === 'processing') branch.correctionStatus = 'pending';
+            if (branch.solutionCritiqueStatus === 'processing') branch.solutionCritiqueStatus = branch.solutionCritique ? 'completed' : 'pending';
         }
     }
+    if (pipeline.finalJudgingStatus === 'processing') pipeline.finalJudgingStatus = 'pending';
+    if (pipeline.solutionCritiquesStatus === 'processing') pipeline.solutionCritiquesStatus = 'pending';
+    if (pipeline.modulesGenStatus === 'processing') pipeline.modulesGenStatus = 'pending';
+}
 
-    // 3. reset any pipeline-level transient statuses
-    if ((pipeline as any).finalJudgingStatus === 'processing') {
-        (pipeline as any).finalJudgingStatus = 'pending';
-    }
-    if (pipeline.solutionCritiquesStatus === 'processing') {
-        pipeline.solutionCritiquesStatus = 'pending';
-    }
-    if ((pipeline as any).modulesGenStatus === 'processing') {
-        (pipeline as any).modulesGenStatus = 'pending';
-    }
+function notifyPipelineEvents(): void {
+    window.dispatchEvent(new CustomEvent('deepthinkPipelineUpdated'));
+    window.dispatchEvent(new CustomEvent('deepthinkPipelineStateChanged'));
+    window.dispatchEvent(new CustomEvent('controlsStateUpdated'));
 }
 
 export function stopDeepthinkAnalysisProcess(): void {
@@ -423,57 +230,101 @@ export function stopDeepthinkAnalysisProcess(): void {
         activeDeepthinkPipeline.isStopRequested = true;
         activeDeepthinkPipeline.status = 'stopped';
     }
-    if (activeOrchestrator) {
-        activeOrchestrator.stop();
-    }
+    activeOrchestrator?.stop();
     if (activeDeepthinkPipeline) {
         resetInFlightPipelineExecution(activeDeepthinkPipeline);
         void saveLatestDeepthinkState(activeDeepthinkPipeline);
     }
     deps.updateControlsState({ isGenerating: false });
     render();
-    window.dispatchEvent(new CustomEvent('deepthinkPipelineUpdated'));
-    window.dispatchEvent(new CustomEvent('deepthinkPipelineStateChanged'));
-    window.dispatchEvent(new CustomEvent('controlsStateUpdated'));
+    notifyPipelineEvents();
 }
 
 export async function queueSaveLatestDeepthinkState(pipeline: DeepthinkPipelineState): Promise<void> {
-    if (!pipeline || !pipeline.id) return;
-
+    if (!pipeline?.id) return;
     if (isSavingLatestGz) {
         pendingLatestGzPipeline = pipeline;
         return;
     }
-
     isSavingLatestGz = true;
     try {
         await saveLatestDeepthinkState(pipeline);
     } finally {
         isSavingLatestGz = false;
         if (pendingLatestGzPipeline) {
-            const nextPipeline = pendingLatestGzPipeline;
+            const next = pendingLatestGzPipeline;
             pendingLatestGzPipeline = null;
-            void queueSaveLatestDeepthinkState(nextPipeline);
+            void queueSaveLatestDeepthinkState(next);
         }
+    }
+}
+
+async function executeOrchestrator(pipeline: DeepthinkPipelineState): Promise<void> {
+    const orchestrator = new DeepthinkPipelineOrchestrator(pipeline as any, {
+        callAI: async (args) => {
+            const parts = parsePromptToGeminiParts(args.prompt) as any;
+            const response = await deps.callAI(
+                parts,
+                args.model,
+                args.systemInstruction,
+                Boolean(args.responseSchema),
+                args.thinkingConfig ? { thinkingLevel: args.thinkingConfig.thinkingLevel as any } : undefined,
+                {
+                    abortSignal: args.abortSignal,
+                    retryDelaysMs: args.retryDelaysMs,
+                    silenceTimeoutMs: args.silenceTimeoutMs,
+                    label: args.stepDescription || `${args.agentKind || 'agent'}:${args.model}`,
+                    onRetry: args.onRetry,
+                }
+            );
+            return response.text || '';
+        },
+        parseJsonStrict: <T>(text: string): T => JSON.parse(extractJsonString(text)) as T,
+        onLiveEvent: () => { render(); void queueSaveLatestDeepthinkState(pipeline); },
+        onStateChange: () => { render(); void queueSaveLatestDeepthinkState(pipeline); },
+    });
+    activeOrchestrator = orchestrator;
+
+    try {
+        await orchestrator.run();
+        pipeline.status = 'completed';
+        await saveLatestDeepthinkState(pipeline);
+    } catch (error: any) {
+        if (
+            error instanceof OrchestratorStopRequestedError ||
+            error?.name === 'PipelineStopRequestedError' ||
+            isTerminalInferenceError(error)
+        ) {
+            pipeline.status = 'stopped';
+            pipeline.isStopRequested = false;
+            resetInFlightPipelineExecution(pipeline);
+            await saveLatestDeepthinkState(pipeline);
+        } else {
+            pipeline.status = 'error';
+            pipeline.error = error.message || String(error);
+            await saveLatestDeepthinkState(pipeline);
+        }
+    } finally {
+        if (activeOrchestrator === orchestrator) activeOrchestrator = null;
+        deps.updateControlsState({ isGenerating: false });
+        render();
+        notifyPipelineEvents();
     }
 }
 
 export async function startDeepthinkAnalysisProcess(challengeText: string, directContextFiles: any[] = []) {
     const runConfig = captureRunConfig();
     const customPrompts = deps.getCustomPromptsDeepthinkState();
-
     let fullChallengeText = challengeText;
 
     if (directContextFiles.length > 0) {
         const textFiles = directContextFiles.filter(file => file.mimeType.startsWith('text/') || file.mimeType === 'application/json');
         const imageFiles = directContextFiles.filter(file => file.mimeType.startsWith('image/'));
-
         if (textFiles.length > 0) {
             const decoder = new TextDecoder();
             const contents = textFiles.map(file => {
                 try {
-                    const binary = atob(file.base64);
-                    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+                    const bytes = Uint8Array.from(atob(file.base64), char => char.charCodeAt(0));
                     return `\n\n--- ${file.name || 'uploaded text file'} ---\n${decoder.decode(bytes)}\n--- end file ---`;
                 } catch {
                     return `\n\n--- ${file.name || 'uploaded text file'} ---\n[Unable to decode file]\n--- end file ---`;
@@ -481,12 +332,8 @@ export async function startDeepthinkAnalysisProcess(challengeText: string, direc
             });
             fullChallengeText += `\n\nDirect context files:${contents.join('')}`;
         }
-
         if (imageFiles.length > 0) {
-            const imageBlocks = imageFiles.map(file =>
-                `<!-- EXECUTION_IMAGE_START -->\n<!-- MIME_TYPE: ${file.mimeType} -->\n${file.base64}\n<!-- EXECUTION_IMAGE_END -->`
-            );
-            fullChallengeText += `\n\n${imageBlocks.join('\n\n')}`;
+            fullChallengeText += `\n\n${imageFiles.map(file => `<!-- EXECUTION_IMAGE_START -->\n<!-- MIME_TYPE: ${file.mimeType} -->\n${file.base64}\n<!-- EXECUTION_IMAGE_END -->`).join('\n\n')}`;
         }
     }
 
@@ -522,29 +369,22 @@ export async function startDeepthinkAnalysisProcess(challengeText: string, direc
         })),
     } as any;
 
-    if (setActiveDeepthinkPipeline) setActiveDeepthinkPipeline(activeDeepthinkPipeline);
+    setActiveDeepthinkPipeline?.(activeDeepthinkPipeline);
     deps.updateControlsState({ isGenerating: true });
     render();
 
     const pipeline = activeDeepthinkPipeline!;
-
-    // Seed directContextFiles into the results repository filesystem under user_uploaded/
     if (directContextFiles.length > 0) {
         try {
             const rt = await import('../../Core/SandboxToolRuntime');
-            if (rt?.ensureDeepthinkResultsRepository) {
-                await rt.ensureDeepthinkResultsRepository(pipeline.id);
-            }
+            await rt?.ensureDeepthinkResultsRepository?.(pipeline.id);
             if (rt?.snapshotDeepthinkResultsRepository) {
                 const seedContextFiles: any[] = directContextFiles.map(file => {
                     const relativePath = `user_uploaded/${file.name || 'unnamed_file'}`;
                     (file as any).relativePath = relativePath;
-                    if (file.mimeType.startsWith('image/')) {
-                        return { path: relativePath, base64: file.base64 };
-                    }
+                    if (file.mimeType.startsWith('image/')) return { path: relativePath, base64: file.base64 };
                     try {
-                        const binary = atob(file.base64);
-                        const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+                        const bytes = Uint8Array.from(atob(file.base64), char => char.charCodeAt(0));
                         return { path: relativePath, content: new TextDecoder().decode(bytes) };
                     } catch {
                         return { path: relativePath, content: file.base64 };
@@ -557,73 +397,8 @@ export async function startDeepthinkAnalysisProcess(challengeText: string, direc
         }
     }
 
-    // Immediately create latest.gz on disk inside the run repository
     await saveLatestDeepthinkState(pipeline);
-
-    const orchestrator = new DeepthinkPipelineOrchestrator(activeDeepthinkPipeline as any, {
-        callAI: async (args) => {
-            const parts = parsePromptToGeminiParts(args.prompt) as any;
-            const response = await deps.callAI(
-                parts,
-                args.model,
-                args.systemInstruction,
-                Boolean(args.responseSchema),
-                args.thinkingConfig ? { thinkingLevel: args.thinkingConfig.thinkingLevel as any } : undefined,
-                {
-                    abortSignal: args.abortSignal,
-                    retryDelaysMs: args.retryDelaysMs,
-                    silenceTimeoutMs: args.silenceTimeoutMs,
-                    label: args.stepDescription || `${args.agentKind || 'agent'}:${args.model}`,
-                    onRetry: args.onRetry,
-                }
-            );
-            return response.text || '';
-        },
-        parseJsonStrict: <T>(text: string): T => {
-            const extracted = extractJsonString(text);
-            return JSON.parse(extracted) as T;
-        },
-        onLiveEvent: () => {
-            render();
-            void queueSaveLatestDeepthinkState(activeDeepthinkPipeline!);
-        },
-        onStateChange: () => {
-            render();
-            void queueSaveLatestDeepthinkState(activeDeepthinkPipeline!);
-        },
-    });
-    activeOrchestrator = orchestrator;
-
-    try {
-        await orchestrator.run();
-        pipeline.status = 'completed';
-        await saveLatestDeepthinkState(pipeline);
-    } catch (error: any) {
-        if (
-            error instanceof PipelineStopRequestedError ||
-            error instanceof OrchestratorStopRequestedError ||
-            error?.name === 'PipelineStopRequestedError' ||
-            isTerminalInferenceError(error)
-        ) {
-            pipeline.status = 'stopped';
-            pipeline.isStopRequested = false;
-            resetInFlightPipelineExecution(pipeline);
-            await saveLatestDeepthinkState(pipeline);
-        } else {
-            pipeline.status = 'error';
-            pipeline.error = error.message || String(error);
-            await saveLatestDeepthinkState(pipeline);
-        }
-    } finally {
-        if (activeOrchestrator === orchestrator) {
-            activeOrchestrator = null;
-        }
-        deps.updateControlsState({ isGenerating: false });
-        render();
-        window.dispatchEvent(new CustomEvent('deepthinkPipelineUpdated'));
-        window.dispatchEvent(new CustomEvent('deepthinkPipelineStateChanged'));
-        window.dispatchEvent(new CustomEvent('controlsStateUpdated'));
-    }
+    await executeOrchestrator(pipeline);
 }
 
 export async function resumeDeepthinkAnalysisProcess() {
@@ -631,81 +406,14 @@ export async function resumeDeepthinkAnalysisProcess() {
         alert('No paused Deepthink pipeline found to resume.');
         return;
     }
-
     const pipeline = activeDeepthinkPipeline;
     pipeline.status = 'processing';
     pipeline.isStopRequested = false;
     delete pipeline.error;
 
-    if (setActiveDeepthinkPipeline) setActiveDeepthinkPipeline(pipeline);
+    setActiveDeepthinkPipeline?.(pipeline);
     deps.updateControlsState({ isGenerating: true });
     render();
-    window.dispatchEvent(new CustomEvent('deepthinkPipelineUpdated'));
-    window.dispatchEvent(new CustomEvent('deepthinkPipelineStateChanged'));
-    window.dispatchEvent(new CustomEvent('controlsStateUpdated'));
-
-    const orchestrator = new DeepthinkPipelineOrchestrator(pipeline as any, {
-        callAI: async (args) => {
-            const parts = parsePromptToGeminiParts(args.prompt) as any;
-            const response = await deps.callAI(
-                parts,
-                args.model,
-                args.systemInstruction,
-                Boolean(args.responseSchema),
-                args.thinkingConfig ? { thinkingLevel: args.thinkingConfig.thinkingLevel as any } : undefined,
-                {
-                    abortSignal: args.abortSignal,
-                    retryDelaysMs: args.retryDelaysMs,
-                    silenceTimeoutMs: args.silenceTimeoutMs,
-                    label: args.stepDescription || `${args.agentKind || 'agent'}:${args.model}`,
-                    onRetry: args.onRetry,
-                }
-            );
-            return response.text || '';
-        },
-        parseJsonStrict: <T>(text: string): T => {
-            const extracted = extractJsonString(text);
-            return JSON.parse(extracted) as T;
-        },
-        onLiveEvent: () => {
-            render();
-            void queueSaveLatestDeepthinkState(pipeline);
-        },
-        onStateChange: () => {
-            render();
-            void queueSaveLatestDeepthinkState(pipeline);
-        },
-    });
-    activeOrchestrator = orchestrator;
-
-    try {
-        await orchestrator.run();
-        pipeline.status = 'completed';
-        await saveLatestDeepthinkState(pipeline);
-    } catch (error: any) {
-        if (
-            error instanceof PipelineStopRequestedError ||
-            error instanceof OrchestratorStopRequestedError ||
-            error?.name === 'PipelineStopRequestedError' ||
-            isTerminalInferenceError(error)
-        ) {
-            pipeline.status = 'stopped';
-            pipeline.isStopRequested = false;
-            resetInFlightPipelineExecution(pipeline);
-            await saveLatestDeepthinkState(pipeline);
-        } else {
-            pipeline.status = 'error';
-            pipeline.error = error.message || String(error);
-            await saveLatestDeepthinkState(pipeline);
-        }
-    } finally {
-        if (activeOrchestrator === orchestrator) {
-            activeOrchestrator = null;
-        }
-        deps.updateControlsState({ isGenerating: false });
-        render();
-        window.dispatchEvent(new CustomEvent('deepthinkPipelineUpdated'));
-        window.dispatchEvent(new CustomEvent('deepthinkPipelineStateChanged'));
-        window.dispatchEvent(new CustomEvent('controlsStateUpdated'));
-    }
+    notifyPipelineEvents();
+    await executeOrchestrator(pipeline);
 }

@@ -1,34 +1,15 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * ConfigManager - Configuration export/import using the new StateSerializer infrastructure.
- * 
- * Features:
- * - MessagePack binary serialization (faster, smaller)
- * - Gzip compression (70-90% size reduction)
- * - Automatic state sanitization (resets processing states)
- * - Strict versioned state imports
- */
-
+import { encode, decode } from '@msgpack/msgpack';
 import { globalState } from './State';
+import type { ApplicationMode } from './Types';
+import { activateTab, updateUIAfterModeChange } from './AppRouter';
 import {
-    getModeHandler,
-    sanitizeState,
-    serialize,
-    deserialize,
-    downloadBlob,
-    getFileExtension,
-    formatBytes,
-    estimateSerializedSize,
-    CURRENT_STATE_VERSION,
-    type VersionedState,
-    type ExportedConfig,
-    isVersionedState,
-    type SerializationOptions,
-} from './StateSerializer';
-
-import { updateUIAfterModeChange } from './AppRouter';
+    ensureAdaptiveDeepthinkInitialized,
+    ensureContextualInitialized,
+    ensureDeepthinkInitialized,
+    getLoadedAdaptiveDeepthinkModule,
+    getLoadedContextualModule,
+    getLoadedDeepthinkModule
+} from './ModeLoader';
 import { createDefaultCustomPromptsDeepthink } from '../Deepthink/prompts';
 import { createDefaultCustomPromptsContextual } from '../Contextual/ContextualPrompts';
 import { createDefaultCustomPromptsAdaptiveDeepthink } from '../AdaptiveDeepthink/AdaptiveDeepthinkPrompt';
@@ -45,41 +26,220 @@ import {
 } from '../Routing';
 import { updateControlsState } from '../UI/Controls';
 
-// DOM Elements Helpers
-const getInitialIdeaInput = () => document.getElementById('initial-idea') as HTMLTextAreaElement;
+const CURRENT_STATE_VERSION = 4;
 
-/**
- * Export format options.
- */
-type ExportFormat = 'auto' | 'json' | 'msgpack';
+interface ExportedConfig {
+    currentMode: ApplicationMode;
+    initialIdea: string;
+    selectedModel: string;
+    modeState: unknown;
+    embeddedStates?: Record<string, unknown>;
+    customPrompts: {
+        deepthink?: unknown;
+        contextual?: unknown;
+        adaptiveDeepthink?: unknown;
+    };
+    modelParameters: {
+        strategiesCount: number;
+        strategyProximityLoops: number;
+        modulesCount: number;
+        modulesImpactReviewLoops: number;
+        deepthinkDepth: number;
+        isolateBranches: boolean;
+        deepthinkCodeExecutionEnabled: boolean;
+        thinkingLevel: string;
+    };
+    directContextFiles?: unknown[];
+}
 
-/**
- * Export configuration to a file.
- * 
- * @param format Export format: 'auto' (msgpack+gzip), 'json' (human-readable), 'msgpack' (binary)
- */
-export async function exportConfiguration(format: ExportFormat = 'auto'): Promise<void> {
+interface VersionedState {
+    _version: number;
+    _exportedAt: string;
+    _mode: ApplicationMode;
+    data: ExportedConfig;
+}
+
+interface SerializationOptions {
+    format: 'json' | 'msgpack';
+    compress: boolean;
+    prettyPrint?: boolean;
+}
+
+interface ModeStateHandler<TState = any> {
+    getFullState(): TState | null;
+    restoreState(state: TState | null): void;
+    renderAfterImport(): void;
+}
+
+const STATUS_RESET_MAP: Record<string, string> = {
+    processing: 'pending',
+    retrying: 'pending',
+    running: 'stopped',
+    stopping: 'stopped',
+    orchestrating: 'idle',
+    processing_workers: 'idle',
+    orchestrating_retrying: 'idle',
+};
+
+const BOOLEAN_RESET_PATTERNS = [/^is.*Running$/, /^is.*Processing$/, /^isStopRequested$/, /^isGenerating$/];
+const NON_SERIALIZABLE_FIELDS = new Set([
+    'abortController', 'tabButtonElement', 'contentElement', 'stopButtonElement', 'uiRoot', 'root', 'containerElement'
+]);
+
+function sanitizeRecursive(obj: unknown, seen = new WeakMap()): unknown {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (seen.has(obj as object)) return seen.get(obj as object);
+    if (obj instanceof Date) return new Date(obj.getTime());
+    if (Array.isArray(obj)) {
+        const arr: unknown[] = [];
+        seen.set(obj, arr);
+        for (const item of obj) arr.push(sanitizeRecursive(item, seen));
+        return arr;
+    }
+    const result: Record<string, unknown> = {};
+    seen.set(obj as object, result);
+    for (const [key, value] of Object.entries(obj)) {
+        if (NON_SERIALIZABLE_FIELDS.has(key) || typeof value === 'function' || value instanceof Element) continue;
+        if ((key.endsWith('Status') || key.endsWith('status')) && typeof value === 'string') {
+            result[key] = STATUS_RESET_MAP[value] ?? value;
+        } else if (typeof value === 'boolean' && BOOLEAN_RESET_PATTERNS.some(p => p.test(key))) {
+            result[key] = false;
+        } else {
+            result[key] = sanitizeRecursive(value, seen);
+        }
+    }
+    return result;
+}
+
+let pendingDeepthinkState: any = null;
+let pendingAdaptiveState: any = null;
+let pendingContextualState: any = null;
+
+const modeHandlers: Record<ApplicationMode, ModeStateHandler> = {
+    deepthink: {
+        getFullState() {
+            const pipeline = getLoadedDeepthinkModule()?.getActiveDeepthinkPipeline();
+            return pipeline ? { pipeline, activeTabId: pipeline.activeTabId || 'strategic-solver' } : null;
+        },
+        restoreState(state) {
+            if (state?.pipeline) {
+                if (state.pipeline.status !== 'completed' && state.pipeline.status !== 'error') state.pipeline.status = 'stopped';
+                state.pipeline.isStopRequested = false;
+            }
+            pendingDeepthinkState = state;
+        },
+        renderAfterImport() {
+            void ensureDeepthinkInitialized().then(async mod => {
+                const state = pendingDeepthinkState;
+                pendingDeepthinkState = null;
+                if (!state?.pipeline) {
+                    mod.setActiveDeepthinkPipelineForImport(null);
+                    ['deepthinkPipelineUpdated', 'deepthinkPipelineStateChanged', 'controlsStateUpdated'].forEach(ev => window.dispatchEvent(new CustomEvent(ev)));
+                    return;
+                }
+                if (state.pipeline.status !== 'completed' && state.pipeline.status !== 'error') state.pipeline.status = 'stopped';
+                state.pipeline.isStopRequested = false;
+                try {
+                    const files = state.pipeline.directContextFiles || globalState.directContextFiles || [];
+                    for (const file of files) {
+                        if (!file.base64) {
+                            const targetPath = file.relativePath || `user_uploaded/${file.name}`;
+                            let res = await fetch(`/api/sandbox/workspace/file?repositoryId=${encodeURIComponent(state.pipeline.id)}&path=${encodeURIComponent(targetPath)}&scope=repository`);
+                            if (!res.ok && targetPath.startsWith('direct_context/')) {
+                                res = await fetch(`/api/sandbox/workspace/file?repositoryId=${encodeURIComponent(state.pipeline.id)}&path=${encodeURIComponent(targetPath.replace('direct_context/', 'user_uploaded/'))}&scope=repository`);
+                            }
+                            if (res.ok) {
+                                const bytes = new Uint8Array(await res.arrayBuffer());
+                                let binary = '';
+                                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                                file.base64 = btoa(binary);
+                            }
+                        }
+                    }
+                    globalState.directContextFiles = files;
+                    if (typeof state.pipeline.challenge === 'string') {
+                        state.pipeline.challenge = state.pipeline.challenge.replace(
+                            /<!-- EXECUTION_IMAGE_REF:\s*([^\s|]+)\s*\|\s*MIME_TYPE:\s*([^\s]+)\s*-->/g,
+                            (match: string, refPath: string, mime: string) => {
+                                const cleanName = refPath.replace(/^(user_uploaded|direct_context)\//, '');
+                                const matched = files.find((f: any) => f.relativePath === refPath || f.name === cleanName);
+                                return matched?.base64 ? `<!-- EXECUTION_IMAGE_START -->\n<!-- MIME_TYPE: ${mime} -->\n${matched.base64}\n<!-- EXECUTION_IMAGE_END -->` : match;
+                            }
+                        );
+                    }
+                } catch {}
+                mod.setActiveDeepthinkPipelineForImport(state.pipeline);
+                mod.renderActiveDeepthinkPipeline();
+                if (state.activeTabId) activateTab(state.activeTabId);
+                ['deepthinkPipelineUpdated', 'deepthinkPipelineStateChanged', 'controlsStateUpdated'].forEach(ev => window.dispatchEvent(new CustomEvent(ev)));
+            });
+        }
+    },
+    'adaptive-deepthink': {
+        getFullState: () => getLoadedAdaptiveDeepthinkModule()?.getAdaptiveDeepthinkState() ?? null,
+        restoreState: state => { pendingAdaptiveState = state; },
+        renderAfterImport() {
+            void ensureAdaptiveDeepthinkInitialized().then(mod => {
+                if (pendingAdaptiveState) {
+                    mod.setAdaptiveDeepthinkStateForImport(pendingAdaptiveState);
+                    pendingAdaptiveState = null;
+                }
+                mod.renderAdaptiveDeepthinkMode();
+            });
+        }
+    },
+    contextual: {
+        getFullState: () => getLoadedContextualModule()?.getContextualState() ?? null,
+        restoreState: state => { pendingContextualState = state; },
+        renderAfterImport() {
+            void ensureContextualInitialized().then(mod => {
+                if (pendingContextualState) {
+                    mod.setContextualStateForImport(pendingContextualState);
+                    pendingContextualState = null;
+                }
+                mod.renderContextualMode();
+            });
+        }
+    }
+};
+
+async function pipeCompression(data: Uint8Array, mode: 'compress' | 'decompress'): Promise<Uint8Array> {
+    const StreamCtor = mode === 'compress' ? globalThis.CompressionStream : globalThis.DecompressionStream;
+    if (typeof StreamCtor === 'undefined') return data;
+    const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    const stream = new Blob([buffer]).stream().pipeThrough(new StreamCtor('gzip'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function serialize(data: unknown, options: SerializationOptions): Promise<Blob> {
+    let encoded = options.format === 'msgpack'
+        ? encode(data)
+        : new TextEncoder().encode(options.prettyPrint ? JSON.stringify(data, null, 2) : JSON.stringify(data));
+    if (options.compress) {
+        try { encoded = await pipeCompression(encoded, 'compress'); } catch {}
+    }
+    const buffer = encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength) as ArrayBuffer;
+    const type = options.compress ? 'application/gzip' : (options.format === 'msgpack' ? 'application/msgpack' : 'application/json');
+    return new Blob([buffer], { type });
+}
+
+async function deserialize<T = unknown>(blob: Blob): Promise<T> {
+    let data = new Uint8Array(await blob.arrayBuffer());
+    if (data[0] === 0x1f && data[1] === 0x8b) {
+        data = await pipeCompression(data, 'decompress');
+    }
+    return (data[0] === 0x7b || data[0] === 0x5b)
+        ? JSON.parse(new TextDecoder().decode(data)) as T
+        : decode(data) as T;
+}
+
+export async function exportConfiguration(format: 'auto' | 'json' | 'msgpack' = 'auto'): Promise<void> {
     if (globalState.isGenerating) {
         alert("Cannot export configuration while generation is in progress.");
         return;
     }
-
-    const initialIdeaInput = getInitialIdeaInput();
-    const handler = getModeHandler(globalState.currentMode);
-
-    // Get mode-specific state via handler
-    const modeState = handler?.getFullState() ?? null;
-
-    // Get embedded state if handler supports it
-    let embeddedStates: Record<string, unknown> | undefined;
-    if (handler && 'getEmbeddedState' in handler && typeof handler.getEmbeddedState === 'function') {
-        const embedded = await handler.getEmbeddedState();
-        if (embedded) {
-            embeddedStates = { [`${globalState.currentMode}Embedded`]: embedded };
-        }
-    }
-
-    // Build the versioned config
+    const initialIdeaInput = document.getElementById('initial-idea') as HTMLTextAreaElement | null;
+    const handler = modeHandlers[globalState.currentMode];
     const config: VersionedState = {
         _version: CURRENT_STATE_VERSION,
         _exportedAt: new Date().toISOString(),
@@ -88,8 +248,7 @@ export async function exportConfiguration(format: ExportFormat = 'auto'): Promis
             currentMode: globalState.currentMode,
             initialIdea: initialIdeaInput?.value ?? '',
             selectedModel: getSelectedModel(),
-            modeState,
-            embeddedStates,
+            modeState: handler?.getFullState() ?? null,
             customPrompts: {
                 deepthink: globalState.customPromptsDeepthinkState,
                 contextual: globalState.customPromptsContextualState,
@@ -108,197 +267,73 @@ export async function exportConfiguration(format: ExportFormat = 'auto'): Promis
             directContextFiles: globalState.directContextFiles || [],
         },
     };
-
-    // Determine serialization options based on format
     const options: SerializationOptions = {
         format: format === 'json' ? 'json' : 'msgpack',
-        compress: format !== 'json', // Compress unless explicitly JSON
+        compress: format !== 'json',
         prettyPrint: format === 'json',
     };
-
-    // Show estimated size for large exports
-    const estimatedSize = estimateSerializedSize(config);
-    if (estimatedSize > 10 * 1024 * 1024) { // >10MB
-        console.log(`Exporting large configuration (~${formatBytes(estimatedSize)}), this may take a moment...`);
-    }
-
-    // Serialize and download
     const blob = await serialize(config, options);
     const timestamp = new Date().toISOString().replace(/[:]/g, '-').split('.')[0];
-    const extension = getFileExtension(options);
-    const filename = `iterative-studio-config-${timestamp}.${extension}`;
-
-    downloadBlob(blob, filename);
-
-    console.log(`Configuration exported: ${filename} (${formatBytes(blob.size)})`);
+    const ext = `${options.format === 'msgpack' ? 'msgpack' : 'json'}${options.compress ? '.gz' : ''}`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `iterative-studio-config-${timestamp}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
-/**
- * Handle importing a configuration file.
- */
 export async function handleImportConfiguration(event: Event): Promise<void> {
     if (globalState.isGenerating) {
         alert("Cannot import configuration while generation is in progress.");
         return;
     }
-
-    const fileInputTarget = event.target as HTMLInputElement;
-    if (!fileInputTarget.files || fileInputTarget.files.length === 0) {
-        return;
-    }
-
-    const file = fileInputTarget.files[0];
-
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
     try {
-        // Deserialize the file (auto-detects format and compression)
-        const rawConfig = await deserialize<unknown>(file);
-
-        if (!isVersionedState(rawConfig)) {
+        const raw = await deserialize<any>(file);
+        if (!raw || typeof raw !== 'object' || typeof raw._version !== 'number' || !('data' in raw)) {
             throw new Error('Unsupported configuration file. Import a versioned Iterative Studio export.');
         }
-        if (rawConfig._version !== CURRENT_STATE_VERSION) {
-            throw new Error(`Unsupported configuration version ${rawConfig._version}. Expected version ${CURRENT_STATE_VERSION}.`);
+        if (raw._version !== CURRENT_STATE_VERSION) {
+            throw new Error(`Unsupported configuration version ${raw._version}. Expected version ${CURRENT_STATE_VERSION}.`);
         }
-        const versionedConfig = rawConfig;
+        const { data } = raw as VersionedState;
+        globalState.currentMode = data.currentMode;
+        const modeRadio = document.querySelector(`input[name="app-mode"][value="${globalState.currentMode}"]`) as HTMLInputElement | null;
+        if (modeRadio) modeRadio.checked = true;
+        const initialIdeaInput = document.getElementById('initial-idea') as HTMLTextAreaElement | null;
+        if (initialIdeaInput) initialIdeaInput.value = data.initialIdea || '';
+        globalState.directContextFiles = globalState.currentMode === 'deepthink' && Array.isArray(data.directContextFiles) ? (data.directContextFiles as any) : [];
+        updateUIAfterModeChange();
+        (window as any).reinitializeSidebarControls?.();
 
-        // Apply the configuration
-        await applyConfiguration(versionedConfig);
+        const prompts = data.customPrompts || {};
+        globalState.customPromptsDeepthinkState = JSON.parse(JSON.stringify(prompts.deepthink || createDefaultCustomPromptsDeepthink()));
+        globalState.customPromptsAdaptiveDeepthinkState = JSON.parse(JSON.stringify(prompts.adaptiveDeepthink || createDefaultCustomPromptsAdaptiveDeepthink()));
+        globalState.customPromptsContextualState = JSON.parse(JSON.stringify(prompts.contextual || createDefaultCustomPromptsContextual()));
 
-        console.log(`Configuration imported successfully from ${file.name}`);
+        setTimeout(() => {
+            const modelConfig = routingManager.getModelConfigManager();
+            for (const [k, v] of Object.entries(data.modelParameters || {})) {
+                if (v !== undefined) modelConfig.updateParameter(k as any, v);
+            }
+            routingManager.getModelSelectionUI()?.syncUIWithParameters();
+            routingManager.getDeepthinkConfigController().emitFullStateUpdate();
+        }, 150);
+
+        const handler = modeHandlers[data.currentMode];
+        if (handler && data.modeState) {
+            handler.restoreState(sanitizeRecursive(data.modeState));
+            handler.renderAfterImport();
+        }
+        updateControlsState();
     } catch (error) {
-        console.error('Failed to import configuration:', error);
         alert(`Failed to import configuration: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
-        // Reset the file input
-        fileInputTarget.value = '';
+        input.value = '';
     }
-}
-
-/**
- * Apply an imported configuration to the application state.
- */
-async function applyConfiguration(config: VersionedState): Promise<void> {
-    const { data } = config;
-
-    // 1. Restore global mode
-    globalState.currentMode = data.currentMode;
-    const modeRadio = document.querySelector(`input[name="app-mode"][value="${globalState.currentMode}"]`) as HTMLInputElement;
-    if (modeRadio) {
-        modeRadio.checked = true;
-    }
-
-    // 2. Restore initial idea
-    const initialIdeaInput = getInitialIdeaInput();
-    if (initialIdeaInput) {
-        initialIdeaInput.value = data.initialIdea || '';
-    }
-
-    // 3. Clear problem images for non-deepthink modes, or restore them if provided
-    if (globalState.currentMode !== 'deepthink') {
-        globalState.directContextFiles = [];
-    } else if (Array.isArray((data as any).directContextFiles)) {
-        globalState.directContextFiles = (data as any).directContextFiles;
-    }
-
-    // 4. Update UI for mode change
-    updateUIAfterModeChange();
-
-    // 5. Reinitialize sidebar controls
-    if ((window as any).reinitializeSidebarControls) {
-        (window as any).reinitializeSidebarControls();
-    }
-
-    // 6. Restore custom prompts
-    restoreCustomPrompts(data.customPrompts);
-
-    // 7. Restore model parameters (with delay for UI readiness)
-    setTimeout(() => {
-        restoreModelParameters(data.modelParameters);
-    }, 150);
-
-    // 8. Restore mode-specific state via handler
-    const handler = getModeHandler(data.currentMode);
-    if (handler && data.modeState) {
-        const sanitizedState = sanitizeState(data.modeState);
-        handler.restoreState(sanitizedState);
-
-        // Restore embedded state if available
-        if (data.embeddedStates && 'restoreEmbeddedState' in handler && typeof handler.restoreEmbeddedState === 'function') {
-            const embeddedKey = `${data.currentMode}Embedded`;
-            if (data.embeddedStates[embeddedKey]) {
-                await handler.restoreEmbeddedState(data.embeddedStates[embeddedKey]);
-            }
-        }
-
-        // Render after state restoration
-        handler.renderAfterImport();
-    }
-
-    // 9. Update controls state
-    updateControlsState();
-}
-
-/**
- * Restore custom prompts from imported configuration.
- */
-function restoreCustomPrompts(prompts: ExportedConfig['customPrompts']): void {
-    // Configuration map for restoring prompts
-    // Maps the prompt key from export -> global state property -> default value generator
-    const promptConfigs = [
-
-        {
-            key: 'deepthink' as const,
-            target: 'customPromptsDeepthinkState' as const,
-            getDefault: createDefaultCustomPromptsDeepthink
-        },
-        {
-            key: 'adaptiveDeepthink' as const,
-            target: 'customPromptsAdaptiveDeepthinkState' as const,
-            getDefault: createDefaultCustomPromptsAdaptiveDeepthink
-        },
-        {
-            key: 'contextual' as const,
-            target: 'customPromptsContextualState' as const,
-            getDefault: createDefaultCustomPromptsContextual
-        }
-    ];
-
-    // Iterate and restore
-    promptConfigs.forEach(({ key, target, getDefault }) => {
-        const value = prompts[key] || getDefault();
-        // Deep copy to ensure we don't hold references to export object or defaults
-        globalState[target] = JSON.parse(JSON.stringify(value));
-    });
-}
-
-/**
- * Restore model parameters from imported configuration.
- */
-function restoreModelParameters(params: ExportedConfig['modelParameters']): void {
-    const modelConfig = routingManager.getModelConfigManager();
-
-    const modelParameterKeys: Array<keyof ExportedConfig['modelParameters']> = [
-        'strategiesCount',
-        'strategyProximityLoops',
-        'modulesCount',
-        'modulesImpactReviewLoops',
-        'deepthinkDepth',
-        'isolateBranches',
-        'deepthinkCodeExecutionEnabled',
-        'thinkingLevel',
-    ];
-
-    for (const key of modelParameterKeys) {
-        const value = params[key];
-        if (value !== undefined) {
-            modelConfig.updateParameter(key as any, value);
-        }
-    }
-
-    // Sync UI with restored parameters
-    const modelSelectionUI = routingManager.getModelSelectionUI();
-    if (modelSelectionUI) {
-        modelSelectionUI.syncUIWithParameters();
-    }
-    routingManager.getDeepthinkConfigController().emitFullStateUpdate();
 }

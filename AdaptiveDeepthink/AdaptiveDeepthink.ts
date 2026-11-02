@@ -1,21 +1,11 @@
-/** Adaptive Deepthink state, graph lifecycle, and shared Deepthink projection. */
-
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { nanoid } from 'nanoid';
-import { AdaptiveMessage, ResponseSegment, SystemBlock } from './AdaptiveTypes';
 import { messageContentToText, resolveProviderForModel } from '../Core/LangGraphToolRuntime';
-import {
-    describeProviderError,
-    isTerminalInferenceError,
-    isUserAbortError,
-} from '../Core/ProviderError';
+import { describeProviderError, isTerminalInferenceError, isUserAbortError } from '../Core/ProviderError';
 import { globalState } from '../Core/State';
 import type { DeepthinkPipelineState } from '../Deepthink/core/deepthinkCore';
 import { setActiveDeepthinkPipelineForImport } from '../Deepthink/ui/Deepthink';
-import {
-    callAI,
-    getSelectedModel,
-} from '../Routing';
+import { callAI, getSelectedModel } from '../Routing';
 import { updateControlsState } from '../UI/Controls';
 import {
     createAdaptiveDeepthinkState,
@@ -35,6 +25,25 @@ import {
     type AdaptiveDeepthinkGraphState,
     type AdaptiveDeepthinkToolResultArtifact,
 } from './AdaptiveDeepthinkToolGraph';
+
+export type ResponseSegment =
+    | { kind: 'text'; text: string }
+    | { kind: 'tool'; tool: { type: string; rawType?: string; args?: any } };
+
+export type SystemBlock =
+    | { kind: 'error'; message: string }
+    | { kind: 'tool_result'; tool: string; result: string; toolCall?: { type: string; rawType?: string; args?: any } };
+
+export interface AdaptiveMessage {
+    id: string;
+    role: 'agent' | 'system' | 'user';
+    sender?: string;
+    content: string;
+    timestamp: number;
+    status?: 'success' | 'error' | 'processing';
+    segments?: ResponseSegment[];
+    blocks?: SystemBlock[];
+}
 
 export interface AdaptiveDeepthinkStoreState {
     id: string;
@@ -85,9 +94,7 @@ export function updateAdaptiveDeepthinkStrategyTab(strategyIndex: number) {
     notifyAdaptiveDeepthinkListeners();
 }
 
-function newMsgId(prefix = 'msg'): string {
-    return `${prefix}-${nanoid(8)}`;
-}
+const newMsgId = (prefix = 'msg') => `${prefix}-${nanoid(8)}`;
 
 function formatToolCallDisplay(toolCall: AdaptiveDeepthinkToolCall): string {
     switch (toolCall.type) {
@@ -103,33 +110,25 @@ function formatToolCallDisplay(toolCall: AdaptiveDeepthinkToolCall): string {
     }
 }
 
-function extractThinkingContent(content: AIMessage['content']): string {
-    if (!Array.isArray(content)) return '';
-    return content
-        .filter((part): part is { text: string; thought: true } =>
-            !!part && typeof part === 'object' && 'thought' in part && part.thought === true && 'text' in part && typeof part.text === 'string'
-        )
-        .map(part => part.text)
-        .join('\n')
-        .trim();
-}
-
 function buildAgentMessage(message: AIMessage): AdaptiveMessage | null {
     const segments: ResponseSegment[] = [];
-    const thinking = extractThinkingContent(message.content);
+    const thinking = Array.isArray(message.content)
+        ? message.content
+            .filter((p): p is { text: string; thought: true } => !!p && typeof p === 'object' && 'thought' in p && p.thought === true && 'text' in p && typeof p.text === 'string')
+            .map(p => p.text).join('\n').trim()
+        : '';
     const narrative = messageContentToText(message.content);
-    // Show thinking content as the orchestrator's reasoning process
     if (thinking) segments.push({ kind: 'text', text: thinking });
     if (narrative) segments.push({ kind: 'text', text: narrative });
-    for (const invocation of message.tool_calls ?? []) {
-        const toolCall = normalizeAdaptiveDeepthinkToolCall(invocation.name, invocation.args);
-        segments.push({ kind: 'tool', tool: { type: toolCall ? formatToolCallDisplay(toolCall) : invocation.name, rawType: invocation.name, args: invocation.args } });
+    for (const inv of message.tool_calls ?? []) {
+        const tc = normalizeAdaptiveDeepthinkToolCall(inv.name, inv.args);
+        segments.push({ kind: 'tool', tool: { type: tc ? formatToolCallDisplay(tc) : inv.name, rawType: inv.name, args: inv.args } });
     }
     if (!segments.length) return null;
     return {
         id: newMsgId('agent'),
         role: 'agent',
-        content: segments.filter(segment => segment.kind === 'text').map(segment => segment.text).join('\n').trim(),
+        content: segments.filter(s => s.kind === 'text').map(s => s.text).join('\n').trim(),
         timestamp: Date.now(),
         status: 'success',
         segments,
@@ -169,7 +168,7 @@ function createInitialDeepthinkPipelineState(id: string, question: string): Deep
         modulesGenStatus: 'pending',
         solutionCritiquesStatus: 'pending',
         liveEvents: [],
-    };
+    } as unknown as DeepthinkPipelineState;
 }
 
 function createDeepthinkPrompts(prompts: CustomizablePromptsAdaptiveDeepthink): AdaptiveDeepthinkToolPrompts {
@@ -183,10 +182,11 @@ function createDeepthinkPrompts(prompts: CustomizablePromptsAdaptiveDeepthink): 
     };
 }
 
-function sandboxEnabled(): boolean {
-    return globalState.virtualEnvironmentEnabled
-        || globalState.directContextFiles.length > 0
-        || globalState.filesystemContextFiles.length > 0;
+function extractJsonSlice(raw: string): string {
+    const trimmed = raw.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '');
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    return start !== -1 && end !== -1 && start < end ? trimmed.slice(start, end + 1) : trimmed;
 }
 
 function createToolExecutionContext(
@@ -196,41 +196,16 @@ function createToolExecutionContext(
     return {
         pipeline,
         callAI: callAI as any,
-        cleanOutputByType: (raw: string, type?: string) => {
-            if (type === 'json') {
-                try {
-                    const trimmed = raw.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '');
-                    const start = trimmed.indexOf('{');
-                    const end = trimmed.lastIndexOf('}');
-                    if (start !== -1 && end !== -1 && start < end) {
-                        return trimmed.slice(start, end + 1);
-                    }
-                    return trimmed;
-                } catch {
-                    return raw;
-                }
-            }
-            return raw;
-        },
+        cleanOutputByType: (raw: string, type?: string) => type === 'json' ? extractJsonSlice(raw) : raw,
         parseJsonSafe: (raw: string) => {
-            try {
-                return JSON.parse(raw);
-            } catch {
-                try {
-                    const trimmed = raw.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '');
-                    const start = trimmed.indexOf('{');
-                    const end = trimmed.lastIndexOf('}');
-                    if (start !== -1 && end !== -1 && start < end) {
-                        return JSON.parse(trimmed.slice(start, end + 1));
-                    }
-                } catch {}
-                return null;
+            try { return JSON.parse(raw); } catch {
+                try { return JSON.parse(extractJsonSlice(raw)); } catch { return null; }
             }
         },
         getSelectedModel,
         getModelFor: role => customPrompts[ROLE_MODEL_MAP[role]] || getSelectedModel(),
-        sandboxEnabled: sandboxEnabled(),
-        notifyUpdate: () => notifyAdaptiveDeepthinkListeners(),
+        sandboxEnabled: globalState.virtualEnvironmentEnabled || globalState.directContextFiles.length > 0 || globalState.filesystemContextFiles.length > 0,
+        notifyUpdate: notifyAdaptiveDeepthinkListeners,
         abortSignal: abortController?.signal,
     };
 }
@@ -239,11 +214,7 @@ async function syncGraphState(graphState: AdaptiveDeepthinkGraphState, processed
     if (!activeAdaptiveDeepthinkState) return;
     const nextMessages = [...activeAdaptiveDeepthinkState.messages];
     for (const message of graphState.messages.slice(processedMessages)) {
-        const mapped = message instanceof AIMessage
-            ? buildAgentMessage(message)
-            : message instanceof ToolMessage
-                ? buildSystemMessage(message)
-                : null;
+        const mapped = message instanceof AIMessage ? buildAgentMessage(message) : message instanceof ToolMessage ? buildSystemMessage(message) : null;
         if (mapped) nextMessages.push(mapped);
     }
     activeAdaptiveDeepthinkState.messages = nextMessages;
@@ -293,24 +264,14 @@ async function runAdaptiveDeepthinkGraph(question: string, customPrompts: Custom
             abortSignal: abortController?.signal,
             createExecutionContext: () => createToolExecutionContext(pipeline, customPrompts),
         });
-        const directTextContext = getDirectTextContext();
-        const challengeText = `Core Challenge:\n${question}${directTextContext}`;
+        const challengeText = `Core Challenge:\n${question}${getDirectTextContext()}`;
         const { providerName } = resolveProviderForModel(customPrompts.model_main || getSelectedModel());
         const initialMessage = images.length === 0
             ? new HumanMessage(challengeText)
             : new HumanMessage({
                 content: providerName === 'openai-compatible'
-                    ? [
-                        ...images.map(img => ({
-                            type: 'image_url',
-                            image_url: { url: `data:${img.mimeType};base64,${img.base64}` }
-                        })),
-                        { type: 'text', text: challengeText }
-                    ]
-                    : [
-                        ...images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } })),
-                        { text: challengeText }
-                    ]
+                    ? [...images.map(img => ({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.base64}` } })), { type: 'text', text: challengeText }]
+                    : [...images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64 } })), { text: challengeText }]
             });
         const stream = await graph.stream({
             messages: [initialMessage],
@@ -318,8 +279,6 @@ async function runAdaptiveDeepthinkGraph(question: string, customPrompts: Custom
             shouldExit: false,
         }, {
             streamMode: 'values',
-            // There is intentionally no pass-count limit. This is only a
-            // runaway graph safety ceiling, not an iteration policy.
             recursionLimit: 10_000,
             signal: abortController?.signal,
         });
@@ -341,7 +300,9 @@ async function runAdaptiveDeepthinkGraph(question: string, customPrompts: Custom
         if (submitted) pipeline.status = 'completed';
         notifyAdaptiveDeepthinkListeners();
     } catch (error) {
-        if ((!isAbortError(error) || isTerminalInferenceError(error)) && !abortController?.signal.aborted && activeAdaptiveDeepthinkState) {
+        const userAborted = abortController?.signal.aborted && isAbortError(error) && !isTerminalInferenceError(error);
+        if (!userAborted && activeAdaptiveDeepthinkState) {
+            abortController?.abort();
             const message = error instanceof Error ? error.message : describeProviderError(error);
             activeAdaptiveDeepthinkState.messages.push({ id: newMsgId('system'), role: 'system', content: message, timestamp: Date.now(), status: 'error', blocks: [{ kind: 'error', message }] });
             activeAdaptiveDeepthinkState.coreState.status = 'error';
@@ -389,23 +350,30 @@ function restoreMap<T>(value: unknown): Map<string, T> {
     return new Map();
 }
 
-function normalizeImportedAdaptiveState(state: AdaptiveDeepthinkStoreState): AdaptiveDeepthinkStoreState {
-    const question = state.coreState?.question || '';
-    const coreState = state.coreState ?? createAdaptiveDeepthinkState(question);
-    coreState.strategies = restoreMap(coreState.strategies);
-    coreState.modules = restoreMap(coreState.modules);
-    coreState.moduleTestings = restoreMap(coreState.moduleTestings);
-    coreState.executions = restoreMap(coreState.executions);
-    coreState.passes = new Map(Array.from(restoreMap<AdaptivePassRecord>(coreState.passes).entries()).map(([key, value]) => [Number(key), value]));
-    coreState.artifacts = restoreMap(coreState.artifacts);
-    const pipeline = state.deepthinkPipelineState ?? createInitialDeepthinkPipelineState(coreState.id, question);
-    syncAdaptiveDeepthinkPipeline(coreState, pipeline);
-    return { ...state, coreState, messages: Array.isArray(state.messages) ? state.messages : [], deepthinkPipelineState: pipeline, navigationState: state.navigationState ?? { currentTab: pipeline.activeTabId || 'strategic-solver' }, isProcessing: false };
-}
-
 export function setAdaptiveDeepthinkStateForImport(state: AdaptiveDeepthinkStoreState | null) {
-    activeAdaptiveDeepthinkState = state ? normalizeImportedAdaptiveState(state) : null;
-    if (activeAdaptiveDeepthinkState) setActiveDeepthinkPipelineForImport(activeAdaptiveDeepthinkState.deepthinkPipelineState);
+    if (!state) {
+        activeAdaptiveDeepthinkState = null;
+    } else {
+        const question = state.coreState?.question || '';
+        const coreState = state.coreState ?? createAdaptiveDeepthinkState(question);
+        coreState.strategies = restoreMap(coreState.strategies);
+        coreState.modules = restoreMap(coreState.modules);
+        coreState.moduleTestings = restoreMap(coreState.moduleTestings);
+        coreState.executions = restoreMap(coreState.executions);
+        coreState.passes = new Map(Array.from(restoreMap<AdaptivePassRecord>(coreState.passes).entries()).map(([key, value]) => [Number(key), value]));
+        coreState.artifacts = restoreMap(coreState.artifacts);
+        const pipeline = state.deepthinkPipelineState ?? createInitialDeepthinkPipelineState(coreState.id, question);
+        syncAdaptiveDeepthinkPipeline(coreState, pipeline);
+        activeAdaptiveDeepthinkState = {
+            ...state,
+            coreState,
+            messages: Array.isArray(state.messages) ? state.messages : [],
+            deepthinkPipelineState: pipeline,
+            navigationState: state.navigationState ?? { currentTab: pipeline.activeTabId || 'strategic-solver' },
+            isProcessing: false
+        };
+        setActiveDeepthinkPipelineForImport(pipeline);
+    }
     globalState.isAdaptiveDeepthinkRunning = false;
     notifyAdaptiveDeepthinkListeners();
 }

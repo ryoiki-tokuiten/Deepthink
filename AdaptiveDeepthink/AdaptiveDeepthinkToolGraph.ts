@@ -209,15 +209,7 @@ async function executeToolsNode(state: AdaptiveDeepthinkGraphState, options: Ada
     const toolMessages: ToolMessage[] = [];
 
     for (const invocation of lastMessage.tool_calls) {
-        let result: ToolExecutionResult;
-        try {
-            result = await executeToolCall(workingState, invocation.name, invocation.args, options);
-        } catch (error) {
-            if (isTerminalInferenceError(error) || isUserAbortError(error) || options.abortSignal?.aborted) {
-                throw error;
-            }
-            result = { content: `[TOOL_ERROR: ${error instanceof Error ? error.message : 'Unknown tool error'}]`, status: 'error', artifact: artifact(invocation.name) };
-        }
+        const result = await executeToolCall(workingState, invocation.name, invocation.args, options);
         workingState = { ...workingState, ...result.statePatch };
         toolMessages.push(new ToolMessage({
             name: invocation.name,
@@ -251,11 +243,13 @@ export function createAdaptiveDeepthinkGraph(options: AdaptiveDeepthinkGraphOpti
     const agentNode = async (state: AdaptiveDeepthinkGraphState) => {
         const systemPrompt = buildAdaptiveDeepthinkSystemPrompt(state, options.systemPrompt);
         const messages = messagesForOrchestrator(state);
+        const sandboxEnabled = options.createExecutionContext({ type: 'submit_final_output', response: '' }).sandboxEnabled;
+        const activeTools = sandboxEnabled ? tools : tools.filter(t => t.function.name !== 'virtual_environment');
         const response = await invokeToolCallingAgentTurn(
             provider,
             messages,
             systemPrompt,
-            tools,
+            activeTools,
             {
                 modelName,
                 abortSignal: options.abortSignal,

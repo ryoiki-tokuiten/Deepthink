@@ -6,6 +6,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+bun.lock
 
 node_modules
 dist
@@ -24,3 +25,9 @@ Results
 *.sln
 *.sw?
 .env
+
+# AI Studio artifacts & uploaded media
+.aistudio/
+public/assets/aistudio/
+assets/aistudio/
+

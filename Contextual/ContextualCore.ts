@@ -42,6 +42,7 @@ export interface ContextualState {
     iterationCount: number;
     isProcessing: boolean;
     isRunning: boolean;
+    error?: string | null;
     messages: ContextualMessage[];
     contentHistory: ContentHistoryEntry[];
 }
@@ -101,6 +102,7 @@ function createInitialContextualState(initialUserRequest: string): ContextualSta
         iterationCount: 0,
         isProcessing: false,
         isRunning: false,
+        error: null,
         messages: [],
         contentHistory: []
     };
@@ -530,7 +532,8 @@ async function runContextualLoop() {
             mainGeneratorMessages.push(new HumanMessage("Now implement the next iteration of the solution based on the critique and the strategies you just generated above. Ensure you fully resolve the issues raised in the critique."));
 
         } catch (error) {
-            if (!abortController?.signal.aborted) {
+            const isUserStopped = abortController?.signal.aborted && (error instanceof Error && error.message === 'Process stopped by user');
+            if (!isUserStopped) {
                 const errMsg = error instanceof Error ? error.message : describeProviderError(error);
                 const errorMsg: ContextualMessage = {
                     id: newMessageId('system'),
@@ -542,9 +545,11 @@ async function runContextualLoop() {
                     blocks: [{ kind: 'error', message: errMsg }]
                 };
                 if (activeContextualState) {
+                    activeContextualState.error = errMsg;
                     activeContextualState.messages.push(errorMsg);
                 }
             }
+            abortController?.abort();
             globalState.isContextualRunning = false;
             if (activeContextualState) {
                 activeContextualState.isRunning = false;
@@ -590,7 +595,7 @@ async function callContextualAgent(
     };
 
     if (sandboxEnabled) {
-        return await runContextualSandboxToolAgent({
+        const sandboxResult = await runContextualSandboxToolAgent({
             agentName,
             sessionId: getContextualSandboxSessionId(agentName),
             messages,
@@ -600,6 +605,10 @@ async function callContextualAgent(
             abortSignal: abortController?.signal,
             onRetry: handleRetry,
         });
+        if (!sandboxResult || !(sandboxResult.finalText || sandboxResult.text || '').trim()) {
+            throw new Error(`${agentName} returned an empty response.`);
+        }
+        return sandboxResult;
     }
 
     // Fallback: convert BaseMessage[] to StructuredMessage[] for standard callAI
@@ -626,11 +635,14 @@ async function callContextualAgent(
         }
     );
 
-    const text = result.text || '';
+    const text = (result.text || '').trim();
+    if (!text) {
+        throw new Error(`${agentName} returned an empty response.`);
+    }
     return {
-        text,
-        promptText: text,
-        finalText: text,
+        text: result.text || text,
+        promptText: result.text || text,
+        finalText: result.text || text,
         geminiContent: undefined
     };
 }

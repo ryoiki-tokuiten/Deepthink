@@ -6,25 +6,9 @@
  * loops, pass compaction, saved branch immutability, and branch rollback.
  */
 
-import { Part, GenerateContentResponse } from '@google/genai';
+import { Part, GenerateContentResponse } from '../Routing/AIProvider';
 import { HumanMessage } from '@langchain/core/messages';
 import { nanoid } from 'nanoid';
-import {
-    correctedSolutionsAgent,
-    executeStrategiesAgent,
-    generateModulesAgent,
-    generateStrategiesAgent,
-    modulesImpactReviewAgent,
-    solutionCritiqueAgent,
-    strategiesProximityAgent,
-    testModulesAgent,
-    type AgentExecutionContext,
-} from '../Deepthink/core/agents';
-import {
-    normalizeProximityHistory,
-    refineWithProximity,
-    type ProximityTurn,
-} from '../Deepthink/core/proximity';
 import type {
     DeepthinkModuleData,
     DeepthinkLiveEvent,
@@ -32,6 +16,222 @@ import type {
     DeepthinkPipelineState,
     DeepthinkSolutionCritiqueData,
 } from '../Deepthink/core/deepthinkCore';
+import type { ProximityTurn } from '../Deepthink/core/types';
+
+export interface AgentExecutionContext {
+    callAI: any;
+    cleanOutputByType: (raw: string, type?: string) => string;
+    parseJsonSafe: (raw: string, context: string) => any;
+    getSelectedModel: () => string;
+    runPrompt: (args: {
+        promptText: string;
+        isJson: boolean;
+        images: Array<{ base64: string; mimeType: string }>;
+        systemPrompt?: string;
+    }) => Promise<string>;
+}
+
+function normalizeProximityHistory(history?: ProximityTurn[]): ProximityTurn[] {
+    return Array.isArray(history) ? history.filter(Boolean) : [];
+}
+
+async function refineWithProximity<T>(options: {
+    loops: number;
+    history: ProximityTurn[];
+    version?: number;
+    generate: (conversationHistory: string, revision: boolean) => Promise<{ candidates: T[]; output: string }>;
+    review: (candidates: T[], conversationHistory: string, round: number) => Promise<string>;
+    onHistory?: (history: ProximityTurn[]) => void;
+}): Promise<{ candidates: T[]; history: ProximityTurn[] }> {
+    const history = [...normalizeProximityHistory(options.history)];
+    const formatHistory = () =>
+        history.map(t => `<Turn role="${t.role}" turn="${t.turnNumber}">\n${t.content}\n</Turn>`).join('\n\n');
+    const maxLoops = Math.max(0, Math.floor(options.loops || 0));
+    let turnNumber = history.length + 1;
+    let current = await options.generate(formatHistory(), false);
+    history.push({ role: 'generator', content: current.output, turnNumber: turnNumber++, version: options.version });
+    options.onHistory?.([...history]);
+    for (let round = 1; round <= maxLoops; round++) {
+        const reviewText = await options.review(current.candidates, formatHistory(), round);
+        history.push({ role: 'proximity', content: reviewText, turnNumber: turnNumber++, version: options.version });
+        options.onHistory?.([...history]);
+        current = await options.generate(formatHistory(), true);
+        history.push({ role: 'generator', content: current.output, turnNumber: turnNumber++, version: options.version });
+        options.onHistory?.([...history]);
+    }
+    return { candidates: current.candidates, history };
+}
+
+async function generateStrategiesAgent(
+    question: string,
+    count: number,
+    specialContext: string,
+    _systemPrompt: string,
+    ctx: AgentExecutionContext,
+    images: Array<{ base64: string; mimeType: string }> = []
+): Promise<{ success: boolean; data?: { strategies: string[] }; error?: string }> {
+    const promptText = `# Core Challenge\n${question}\n\nRequested Number of Strategies: ${count}\n\n${specialContext}\n\nImmediate Role: Strategy Generator`;
+    const raw = await ctx.runPrompt({ promptText, isJson: true, images });
+    const parsed = ctx.parseJsonSafe(raw, 'StrategyGenerator');
+    const strategies = Array.isArray(parsed?.strategies) ? parsed.strategies.map(String) : [];
+    return strategies.length ? { success: true, data: { strategies } } : { success: false, error: 'Failed to parse strategies JSON' };
+}
+
+async function strategiesProximityAgent(
+    question: string,
+    candidates: string[],
+    conversationHistory: string,
+    specialContext: string,
+    _systemPrompt: string,
+    ctx: AgentExecutionContext,
+    images: Array<{ base64: string; mimeType: string }> = []
+): Promise<{ success: boolean; data?: { review: string }; error?: string }> {
+    const promptText = [
+        `# Core Challenge\n${question}`,
+        `Current Candidate Strategies:\n${candidates.map((c, i) => `### Strategy ${i + 1}\n${c}`).join('\n\n')}`,
+        conversationHistory,
+        specialContext,
+        'Immediate Role: Strategy Proximity Reviewer',
+    ].filter(Boolean).join('\n\n');
+    const review = await ctx.runPrompt({ promptText, isJson: false, images });
+    return { success: true, data: { review } };
+}
+
+async function generateModulesAgent(
+    question: string,
+    count: number,
+    specialContext: string,
+    _systemPrompt: string,
+    ctx: AgentExecutionContext,
+    images: Array<{ base64: string; mimeType: string }> = [],
+    _critiqueDriven = true
+): Promise<{ success: boolean; data?: { modules: string[] }; error?: string }> {
+    const promptText = `# Core Challenge\n${question}\n\nRequested Number of Modules: ${count}\n\n${specialContext}\n\nImmediate Role: Modules Generator`;
+    const raw = await ctx.runPrompt({ promptText, isJson: true, images });
+    const parsed = ctx.parseJsonSafe(raw, 'ModulesGenerator');
+    const modules = Array.isArray(parsed?.modules)
+        ? parsed.modules.map((m: any) => typeof m === 'string' ? m : String(m?.module ?? m?.text ?? JSON.stringify(m)))
+        : [];
+    return modules.length ? { success: true, data: { modules } } : { success: false, error: 'Failed to parse modules JSON' };
+}
+
+async function modulesImpactReviewAgent(
+    question: string,
+    candidates: string[],
+    conversationHistory: string,
+    specialContext: string,
+    _systemPrompt: string,
+    ctx: AgentExecutionContext,
+    images: Array<{ base64: string; mimeType: string }> = []
+): Promise<{ success: boolean; data?: { review: string }; error?: string }> {
+    const promptText = [
+        `# Core Challenge\n${question}`,
+        `Current Candidate Modules:\n${candidates.map((c, i) => `### Module ${i + 1}\n${c}`).join('\n\n')}`,
+        conversationHistory,
+        specialContext,
+        'Immediate Role: Modules Impact Reviewer',
+    ].filter(Boolean).join('\n\n');
+    const review = await ctx.runPrompt({ promptText, isJson: false, images });
+    return { success: true, data: { review } };
+}
+
+async function testModulesAgent(
+    question: string,
+    moduleIds: string[],
+    modulesMap: Map<string, { text: string }>,
+    specialContext: string,
+    _systemPrompt: string,
+    ctx: AgentExecutionContext,
+    images: Array<{ base64: string; mimeType: string }> = []
+): Promise<{ success: boolean; data?: { results: Array<{ id: string; moduleText: string; testing: string; success: boolean; error?: string }> }; error?: string }> {
+    const results = await Promise.all(moduleIds.map(async id => {
+        const mod = modulesMap.get(id);
+        if (!mod) return { id, moduleText: '', testing: '', success: false, error: 'Module not found' };
+        const promptText = [`# Core Challenge\n${question}`, `<AssignedModule id="${id}">\n${mod.text}\n</AssignedModule>`, specialContext].filter(Boolean).join('\n\n');
+        const testing = await ctx.runPrompt({ promptText, isJson: false, images });
+        return { id, moduleText: mod.text, testing, success: true };
+    }));
+    return { success: true, data: { results } };
+}
+
+async function executeStrategiesAgent(
+    question: string,
+    requests: Array<{ strategyId: string; moduleIds: string[] }>,
+    strategyMap: Map<string, { text: string }>,
+    testMap: Map<string, { module: string; testing: string }>,
+    specialContext: string,
+    _systemPrompt: string,
+    ctx: AgentExecutionContext,
+    images: Array<{ base64: string; mimeType: string }> = []
+): Promise<{ success: boolean; data?: { results: Array<{ strategyId: string; execution: string; success: boolean; error?: string }> }; error?: string }> {
+    const results = await Promise.all(requests.map(async req => {
+        const strat = strategyMap.get(req.strategyId);
+        if (!strat) return { strategyId: req.strategyId, execution: '', success: false, error: 'Strategy not found' };
+        const modBlocks = req.moduleIds.map((mId, idx) => {
+            const t = testMap.get(mId);
+            return t ? `<Module ${idx + 1}>\nModule: ${t.module}\nModules Testing: ${t.testing}\n</Module ${idx + 1}>` : '';
+        }).filter(Boolean).join('\n\n');
+        const promptText = [
+            `# Core Challenge\n${question}`,
+            `<AssignedStrategy id="${req.strategyId}">\n${strat.text}\n</AssignedStrategy>`,
+            modBlocks ? `<Full Information Packet>\n${modBlocks}\n</Full Information Packet>` : '',
+            specialContext,
+        ].filter(Boolean).join('\n\n');
+        const execution = await ctx.runPrompt({ promptText, isJson: false, images });
+        return { strategyId: req.strategyId, execution, success: true };
+    }));
+    return { success: true, data: { results } };
+}
+
+async function solutionCritiqueAgent(
+    question: string,
+    executionIds: string[],
+    executionMap: Map<string, { strategy: string; execution: string }>,
+    specialContext: string,
+    _systemPrompt: string,
+    ctx: AgentExecutionContext,
+    images: Array<{ base64: string; mimeType: string }> = []
+): Promise<{ success: boolean; data?: { results: Array<{ executionId: string; critique: string; success: boolean; error?: string }> }; error?: string }> {
+    const results = await Promise.all(executionIds.map(async execId => {
+        const item = executionMap.get(execId);
+        if (!item) return { executionId: execId, critique: '', success: false, error: 'Execution not found' };
+        const promptText = [
+            `# Core Challenge\n${question}`,
+            `<Strategy>\n${item.strategy}\n</Strategy>`,
+            `<SolutionAttempt>\n${item.execution}\n</SolutionAttempt>`,
+            specialContext,
+        ].filter(Boolean).join('\n\n');
+        const critique = await ctx.runPrompt({ promptText, isJson: false, images });
+        return { executionId: execId, critique, success: true };
+    }));
+    return { success: true, data: { results } };
+}
+
+async function correctedSolutionsAgent(
+    question: string,
+    executionIds: string[],
+    executionMap: Map<string, { strategy: string; execution: string }>,
+    critiqueMap: Map<string, { critique: string; modulePacket?: string }>,
+    _systemPrompt: string,
+    ctx: AgentExecutionContext,
+    images: Array<{ base64: string; mimeType: string }> = []
+): Promise<{ success: boolean; data?: { results: Array<{ executionId: string; correctedSolution: string; success: boolean; error?: string }> }; error?: string }> {
+    const results = await Promise.all(executionIds.map(async execId => {
+        const item = executionMap.get(execId);
+        const crit = critiqueMap.get(execId);
+        if (!item || !crit) return { executionId: execId, correctedSolution: '', success: false, error: 'Execution or critique not found' };
+        const promptText = [
+            `# Core Challenge\n${question}`,
+            `<Strategy>\n${item.strategy}\n</Strategy>`,
+            `<SolutionAttempt>\n${item.execution}\n</SolutionAttempt>`,
+            `<SolutionCritique>\n${crit.critique}\n</SolutionCritique>`,
+            crit.modulePacket || '',
+        ].filter(Boolean).join('\n\n');
+        const correctedSolution = await ctx.runPrompt({ promptText, isJson: false, images });
+        return { executionId: execId, correctedSolution, success: true };
+    }));
+    return { success: true, data: { results } };
+}
 import {
     ensureDeepthinkResultsRepository,
     expandInlineReferenceMarkers,
@@ -325,10 +525,19 @@ function syncAgentContext(
                 if (context.abortSignal?.aborted) throw new Error('Adaptive Deepthink process was stopped.');
 
                 if (!context.sandboxEnabled) {
+                    const nonSandboxSystemPrompt = [
+                        systemPrompt,
+                        '',
+                        '<Runtime Tool Availability>',
+                        'deepthinkCodeExecutionEnabled = false. Sandbox terminal execution and tool calling (sandbox_exec, shared_workspace, final_output) are DISABLED for this run.',
+                        'Do NOT attempt to call sandbox_exec, shared_workspace, final_output, or any other tool or function.',
+                        'Output your complete final response directly as normal text/markdown (or raw JSON when your role requires JSON).',
+                        '</Runtime Tool Availability>',
+                    ].join('\n');
                     const response = await context.callAI(
                         [...images.map(image => ({ inlineData: { mimeType: image.mimeType, data: image.base64 } })), { text: promptText }],
                         modelName,
-                        systemPrompt,
+                        nonSandboxSystemPrompt,
                         isJson,
                         undefined,
                         {
@@ -355,6 +564,9 @@ function syncAgentContext(
                         }
                     );
                     const output = context.cleanOutputByType(response.text || '', isJson ? 'json' : undefined);
+                    if (!output || !output.trim()) {
+                        throw new Error(`Empty response received from ${agentName}.`);
+                    }
                     const outputPath = nextArtifactPath(state, artifactOutputPath(state, strategyId, role));
                     recordArtifact(state, outputPath, output);
                     recordArtifact(state, outputPath.replace(/\.md$/, '.trace.json'), JSON.stringify({
@@ -408,6 +620,9 @@ function syncAgentContext(
                     ],
                 });
                 const output = isJson ? result.finalText : (result.promptText || result.finalText || result.text);
+                if (!output || !output.trim()) {
+                    throw new Error(`Empty response received from ${agentName}.`);
+                }
                 const outputPath = nextArtifactPath(state, artifactOutputPath(state, strategyId, role));
                 recordArtifact(state, outputPath, output);
                 recordArtifact(state, outputPath.replace(/\.md$/, '.trace.json'), result.executionTraceText || JSON.stringify({
@@ -573,7 +788,9 @@ async function executeWithRetry<T extends { success: boolean; error?: string }>(
             lastResponse = { success: false, error: errorMsg } as unknown as T;
         }
     }
-    return lastResponse || ({ success: false, error: 'Internal retry loop failed to complete' } as unknown as T);
+    const terminalErr = new Error(lastResponse?.error || `Agent ${agentRole} failed after ${maxRetries + 1} attempts.`) as Error & { isTerminalInferenceError?: boolean };
+    terminalErr.isTerminalInferenceError = true;
+    throw terminalErr;
 }
 
 async function generateStrategyBatch(
@@ -784,7 +1001,11 @@ async function testModules(
         );
         const error = firstError(response);
         const result = response.data?.results?.[0];
-        if (error || !result?.success) return { id, error: error || result?.error || 'Module test failed.' };
+        if (error || !result?.success || !result.testing?.trim()) {
+            const fatalErr = new Error(error || result?.error || `Module test for ${id} failed or returned empty output.`) as Error & { isTerminalInferenceError?: boolean };
+            fatalErr.isTerminalInferenceError = true;
+            throw fatalErr;
+        }
         state.moduleTestings.set(id, { moduleText: result.moduleText, testing: result.testing, passNumber: state.passNumber });
         recordArtifact(state, `${pathFor(state, id, 'modules-testing')}.md`, result.testing);
         return { id, testing: result.testing };
@@ -848,7 +1069,11 @@ async function executeOneStrategy(
     );
     const executionError = firstError(execution);
     const executionResult = execution.data?.results?.[0];
-    if (executionError || !executionResult?.success) return { strategyId: strategy.id, error: executionError || executionResult?.error || 'Execution failed.' };
+    if (executionError || !executionResult?.success || !executionResult.execution?.trim()) {
+        const fatalErr = new Error(executionError || executionResult?.error || `Execution for ${strategy.id} failed or returned empty content.`) as Error & { isTerminalInferenceError?: boolean };
+        fatalErr.isTerminalInferenceError = true;
+        throw fatalErr;
+    }
     recordArtifact(state, artifactOutputPath(state, strategy.id, 'execution'), executionResult.execution);
 
     const executionId = `P${state.passNumber}-${strategy.id}`;
@@ -869,7 +1094,11 @@ async function executeOneStrategy(
     );
     const critiqueError = firstError(critique);
     const critiqueResult = critique.data?.results?.[0];
-    if (critiqueError || !critiqueResult?.success) return { strategyId: strategy.id, error: critiqueError || critiqueResult?.error || 'Critique failed.' };
+    if (critiqueError || !critiqueResult?.success || !critiqueResult.critique?.trim()) {
+        const fatalErr = new Error(critiqueError || critiqueResult?.error || `Critique for ${strategy.id} failed or returned empty content.`) as Error & { isTerminalInferenceError?: boolean };
+        fatalErr.isTerminalInferenceError = true;
+        throw fatalErr;
+    }
     recordArtifact(state, artifactOutputPath(state, strategy.id, 'critique'), critiqueResult.critique);
 
     if (context.sandboxEnabled) {
@@ -902,7 +1131,11 @@ async function executeOneStrategy(
     );
     const correctionError = firstError(correction);
     const correctionResult = correction.data?.results?.[0];
-    if (correctionError || !correctionResult?.success) return { strategyId: strategy.id, error: correctionError || correctionResult?.error || 'Correction failed.' };
+    if (correctionError || !correctionResult?.success || !correctionResult.correctedSolution?.trim()) {
+        const fatalErr = new Error(correctionError || correctionResult?.error || `Correction for ${strategy.id} failed or returned empty content.`) as Error & { isTerminalInferenceError?: boolean };
+        fatalErr.isTerminalInferenceError = true;
+        throw fatalErr;
+    }
     recordArtifact(state, artifactOutputPath(state, strategy.id, 'correction'), correctionResult.correctedSolution);
 
     const record: AdaptiveExecutionRecord = {
@@ -1047,10 +1280,7 @@ export async function executeAdaptiveDeepthinkTool(
         syncAdaptiveDeepthinkPipeline(state, context.pipeline);
         return output;
     } catch (error) {
-        if (isTerminalInferenceError(error) || isUserAbortError(error) || context.abortSignal?.aborted) {
-            throw error;
-        }
-        return `[ERROR: ${describeProviderError(error)}]`;
+        throw error;
     }
 }
 

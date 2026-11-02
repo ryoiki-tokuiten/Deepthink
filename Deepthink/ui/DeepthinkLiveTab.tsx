@@ -3,17 +3,14 @@ import { DeepthinkPipelineState, DeepthinkLiveEvent } from '../core/deepthinkCor
 import { Icon as MIcon } from '../../UI/Icons';
 import { ActionButton } from '../../Styles/Components/ActionButton';
 import RenderMathMarkdown from '../../Styles/Components/RenderMathMarkdown';
-
-import { updateControlsState } from '../../UI/Controls';
-import { SandboxAgentActivity } from './SandboxAgentActivity';
-import '../styles/DeepthinkLiveTab.css';
+import { SandboxAgentActivity } from '../../Styles/Components/AgentActivity/AgentActivityPanel';
 
 interface DeepthinkLiveTabProps {
     process: DeepthinkPipelineState;
     hideStopButton?: boolean;
 }
 
-export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hideStopButton }) => {
+export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) => {
     const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
     const [selectedAgentName, setSelectedAgentName] = useState<string | null>(null);
     const [filterType, setFilterType] = useState<'all' | 'agents' | 'info' | 'errors'>('all');
@@ -22,34 +19,28 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
     const [isSystemInstructionExpanded, setIsSystemInstructionExpanded] = useState(false);
     const [responseViewMode, setResponseViewMode] = useState<'submitted' | 'activity'>('submitted');
     const [isUserSelected, setIsUserSelected] = useState(false);
-    const [, setForceUpdate] = useState(0);
 
     const terminalEndRef = useRef<HTMLDivElement>(null);
     const timerRef = useRef<NodeJS.Timeout | null>(null);
     const startTimeRef = useRef<number>(Date.now());
 
-    // A selection is intentional user state. Reset it only for a different
-    // Deepthink run, never just because another agent produces an event.
     useEffect(() => {
         setSelectedEventId(null);
         setSelectedAgentName(null);
         setIsUserSelected(false);
     }, [process.id]);
 
-    // Timer logic for execution duration
     useEffect(() => {
+        const formatDuration = (ms: number) => {
+            const totalSecs = Math.floor(ms / 1000);
+            const secs = (totalSecs % 60).toString().padStart(2, '0');
+            const mins = (Math.floor(totalSecs / 60) % 60).toString().padStart(2, '0');
+            return `${mins}:${secs}`;
+        };
+
         if (process.status === 'processing') {
-            const firstEvent = process.liveEvents?.[0];
-            const baseTime = firstEvent ? firstEvent.timestamp : Date.now();
-            startTimeRef.current = baseTime;
-
-            const updateTimer = () => {
-                const diff = Date.now() - startTimeRef.current;
-                const secs = Math.floor((diff / 1000) % 60);
-                const mins = Math.floor((diff / 1000 / 60) % 60);
-                setTimeElapsed(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
-            };
-
+            startTimeRef.current = process.liveEvents?.[0]?.timestamp ?? Date.now();
+            const updateTimer = () => setTimeElapsed(formatDuration(Date.now() - startTimeRef.current));
             updateTimer();
             timerRef.current = setInterval(updateTimer, 1000);
         } else {
@@ -57,229 +48,109 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                 clearInterval(timerRef.current);
                 timerRef.current = null;
             }
-
             const events = process.liveEvents || [];
-            if (events.length > 1) {
-                const diff = events[events.length - 1].timestamp - events[0].timestamp;
-                const totalSecs = Math.floor(diff / 1000);
-                const secs = totalSecs % 60;
-                const mins = Math.floor(totalSecs / 60) % 60;
-                setTimeElapsed(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
-            } else {
-                setTimeElapsed('00:00');
-            }
+            setTimeElapsed(events.length > 1 ? formatDuration(events[events.length - 1].timestamp - events[0].timestamp) : '00:00');
         }
-
-        return () => {
-            if (timerRef.current) clearInterval(timerRef.current);
-        };
+        return () => { if (timerRef.current) clearInterval(timerRef.current); };
     }, [process.status, process.liveEvents?.length]);
 
-    // Global reset to auto-follow latest agent when Live tab is opened
     useEffect(() => {
-        const handleLiveTabOpened = () => {
-            setIsUserSelected(false);
-        };
+        const handleLiveTabOpened = () => setIsUserSelected(false);
         window.addEventListener('deepthinkLiveTabOpened', handleLiveTabOpened);
         return () => window.removeEventListener('deepthinkLiveTabOpened', handleLiveTabOpened);
     }, []);
 
-    // Auto scroll logic (always auto-scroll to bottom of terminal console on new event)
     useEffect(() => {
-        if (terminalEndRef.current) {
-            terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
-        }
+        terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [process.liveEvents?.length]);
 
     const events = process.liveEvents || [];
 
-    // Follow the latest agent unless the user has explicitly selected one
     useEffect(() => {
         if (isUserSelected) return;
-        const lastAgentEvent = [...events].reverse().find(event => (
-            !!event.agentName && (event.eventType === 'agent_start' || event.eventType === 'agent_complete' || event.eventType === 'agent_retry' || event.eventType === 'agent_error')
-        ));
+        const lastAgentEvent = [...events].reverse().find(ev =>
+            !!ev.agentName && (ev.eventType === 'agent_start' || ev.eventType === 'agent_complete' || ev.eventType === 'agent_retry' || ev.eventType === 'agent_error')
+        );
         if (!lastAgentEvent) return;
         setSelectedEventId(lastAgentEvent.id);
         setSelectedAgentName(lastAgentEvent.executionId || lastAgentEvent.agentName);
     }, [process.id, process.liveEvents?.length, isUserSelected]);
 
-    // Helper to determine agent category for color mapping
     const getAgentCategory = (agentName: string, stepDescription: string): string => {
-        const name = (agentName || '').toLowerCase();
-        const desc = (stepDescription || '').toLowerCase();
-
-        // BSR / Branch State Decision
-        if (name.includes('bsr') || desc.includes('bsr') || name.includes('branch state') || desc.includes('branch state')) {
-            return 'redteam'; // Distinct decision/evaluation color
-        }
-        // DOS / Global Synthesis
-        if (name.includes('dos') || desc.includes('dos') || name.includes('synthesis') || desc.includes('synthesis')) {
-            return 'critique'; // Synthesis
-        }
-        // Critique
-        if (name.includes('critique') || desc.includes('critique') || name.includes('critic') || desc.includes('critic')) {
-            return 'critique'; // Yellow
-        }
-        // Correction
-        if (name.includes('correction') || desc.includes('correction')) {
-            return 'correction'; // Green
-        }
-        // Memory Bank
-        if (name.includes('memory') || desc.includes('memory')) {
-            return 'strategy'; // Cyan/Purple
-        }
-        // Final Judge
-        if (name.includes('judge') || desc.includes('judge')) {
-            return 'strategy';
-        }
-        // Modules / Tester
-        if (
-            name.includes('modules') || desc.includes('modules') ||
-            name.includes('tester') || desc.includes('tester')
-        ) {
-            return 'modules'; // Blue
-        }
-        // Strategy / Execution / Attempt / Solver / Proximity
-        if (
-            name.includes('strategy') || desc.includes('strategy') || 
-            name.includes('attempt') || desc.includes('attempt') || 
-            name.includes('execution') || desc.includes('execution') ||
-            name.includes('solver') || desc.includes('solver') ||
-            name.includes('proximity') || desc.includes('proximity')
-        ) {
-            return 'strategy'; // Purple
-        }
+        const text = `${agentName || ''} ${stepDescription || ''}`.toLowerCase();
+        if (text.includes('bsr') || text.includes('branch state')) return 'redteam';
+        if (text.includes('dos') || text.includes('synthesis') || text.includes('critique') || text.includes('critic')) return 'critique';
+        if (text.includes('correction')) return 'correction';
+        if (text.includes('memory') || text.includes('judge')) return 'strategy';
+        if (text.includes('modules') || text.includes('tester')) return 'modules';
+        if (text.includes('strategy') || text.includes('attempt') || text.includes('execution') || text.includes('solver') || text.includes('proximity')) return 'strategy';
         return 'general';
     };
 
     const formatAgentName = (agentName: string, stepDescription: string): string => {
         if (!agentName) return '';
-        const name = agentName;
         const desc = stepDescription || '';
-        const lowerName = name.toLowerCase();
+        const lowerName = agentName.toLowerCase();
+        const meta = desc.match(/\(([^)]+)\)/)?.[1] || '';
+        const target = desc.match(/for\s+([a-zA-Z0-9_-]+)/i)?.[1] || '';
+        const withParts = (base: string, parts: string[]) => {
+            const filtered = parts.filter(Boolean);
+            return filtered.length > 0 ? `${base} (${filtered.join(', ')})` : base;
+        };
 
-        const metaMatch = desc.match(/\(([^)]+)\)/);
-        const meta = metaMatch ? metaMatch[1] : '';
-
-        const targetMatch = desc.match(/for\s+([a-zA-Z0-9_-]+)/i);
-        const target = targetMatch ? targetMatch[1] : '';
-
-        if (lowerName.includes('solution attempt')) {
-            const parts = [target, meta].filter(Boolean);
-            return parts.length > 0 ? `Initial Execution (${parts.join(', ')})` : 'Initial Execution';
-        }
-        if (lowerName.includes('solution correction')) {
-            const parts = [target, meta].filter(Boolean);
-            return parts.length > 0 ? `Correction Agent (${parts.join(', ')})` : 'Correction Agent';
-        }
+        if (lowerName.includes('solution attempt')) return withParts('Initial Execution', [target, meta]);
+        if (lowerName.includes('solution correction')) return withParts('Correction Agent', [target, meta]);
         if (lowerName.includes('final judge')) return 'Final Judge Agent';
-        
-        if (lowerName.includes('solution critique')) {
-            const parts = [target, meta].filter(Boolean);
-            return parts.length > 0 ? `Critique Agent (${parts.join(', ')})` : 'Critique Agent';
-        }
-
+        if (lowerName.includes('solution critique')) return withParts('Critique Agent', [target, meta]);
         if (lowerName.includes('dissected observations') || lowerName.includes('synthesis')) {
-            const isStepI = desc.toLowerCase().includes('step-i');
-            const prefix = isStepI ? 'step-i, For ' : 'For ';
+            const prefix = desc.toLowerCase().includes('step-i') ? 'step-i, For ' : 'For ';
             return meta ? `Dissected Observations Synthesis Agent (${prefix}${meta})` : 'Dissected Observations Synthesis Agent';
         }
-
-        if (lowerName.includes('branch state')) {
-            const parts = [target, meta].filter(Boolean);
-            return parts.length > 0 ? `Branch State Representation Agent (${parts.join(', ')})` : 'Branch State Representation Agent';
-        }
-
-        if (lowerName.includes('memory bank')) {
-            const parts = [target, meta].filter(Boolean);
-            return parts.length > 0 ? `Memory Bank Agent (${parts.join(', ')})` : 'Memory Bank Agent';
-        }
-
-        if (lowerName.includes('modules testing')) {
-            const mMatch = desc.match(/\b(m\d+)\b/i);
-            const mPart = mMatch ? mMatch[1] : '';
-            const parts = [mPart, meta].filter(Boolean);
-            return parts.length > 0 ? `Modules Testing Agent (${parts.join(', ')})` : 'Modules Testing Agent';
-        }
-        
-        if (lowerName.includes('modules generation') || lowerName.includes('modules generator')) {
-            return meta ? `Modules Generator Agent (${meta})` : 'Modules Generator Agent';
-        }
-
-        if (lowerName.includes('modules impact review') || lowerName.includes('modules impact reviewer')) {
-            return meta ? `Modules Impact Reviewer Agent (${meta})` : 'Modules Impact Reviewer Agent';
-        }
-
-        if (meta) {
-            return `${name} (${meta})`;
-        }
-
-        return name;
+        if (lowerName.includes('branch state')) return withParts('Branch State Representation Agent', [target, meta]);
+        if (lowerName.includes('memory bank')) return withParts('Memory Bank Agent', [target, meta]);
+        if (lowerName.includes('modules testing')) return withParts('Modules Testing Agent', [desc.match(/\b(m\d+)\b/i)?.[1] || '', meta]);
+        if (lowerName.includes('modules generation') || lowerName.includes('modules generator')) return withParts('Modules Generator Agent', [meta]);
+        if (lowerName.includes('modules impact review') || lowerName.includes('modules impact reviewer')) return withParts('Modules Impact Reviewer Agent', [meta]);
+        return meta ? `${agentName} (${meta})` : agentName;
     };
 
-    // Filtered events for the terminal log console
     const filteredEvents = events.filter(ev => {
         if (filterType === 'agents' && !['agent_start', 'agent_complete', 'agent_error', 'agent_retry'].includes(ev.eventType)) return false;
         if (filterType === 'info' && ev.eventType !== 'info') return false;
         if (filterType === 'errors' && ev.eventType !== 'agent_error') return false;
-
         if (searchQuery) {
-            const query = searchQuery.toLowerCase();
-            return (
-                ev.agentName.toLowerCase().includes(query) ||
-                ev.stepDescription.toLowerCase().includes(query) ||
-                (ev.prompt && ev.prompt.toLowerCase().includes(query)) ||
-                (ev.response && ev.response.toLowerCase().includes(query)) ||
-                (ev.error && ev.error.toLowerCase().includes(query))
-            );
+            const q = searchQuery.toLowerCase();
+            return ev.agentName.toLowerCase().includes(q) ||
+                ev.stepDescription.toLowerCase().includes(q) ||
+                !!ev.prompt?.toLowerCase().includes(q) ||
+                !!ev.response?.toLowerCase().includes(q) ||
+                !!ev.error?.toLowerCase().includes(q);
         }
         return true;
     });
 
-    // Unique agents list for the timeline: track all invocations across all phases and iterations
     const agentEventsMap = new Map<string, DeepthinkLiveEvent>();
     events.forEach(ev => {
-        if (ev.agentName) {
-            const key = ev.executionId || ev.agentName;
-            if (ev.eventType === 'agent_start' || ev.eventType === 'agent_complete' || ev.eventType === 'agent_error' || ev.eventType === 'agent_retry') {
-                agentEventsMap.set(key, ev);
-            }
+        if (ev.agentName && ['agent_start', 'agent_complete', 'agent_error', 'agent_retry'].includes(ev.eventType)) {
+            agentEventsMap.set(ev.executionId || ev.agentName, ev);
         }
     });
     const allTimelineAgents = Array.from(agentEventsMap.values());
 
-    // Follow a selected agent from start to completion, but never replace a
-    // deliberate selection with whichever agent happened to run most recently.
-    const selectedEventById = selectedEventId ? events.find(event => event.id === selectedEventId) : undefined;
-    let selectedEvent = selectedAgentName
-        ? agentEventsMap.get(selectedAgentName) || selectedEventById
-        : selectedEventById;
-
-    if (!selectedEvent && !selectedAgentName && allTimelineAgents.length > 0) {
-        const firstAgent = allTimelineAgents[0];
-        if (firstAgent && firstAgent.agentName) {
-            const key = firstAgent.executionId || firstAgent.agentName;
-            const latestAgentEvent = agentEventsMap.get(key);
-            if (latestAgentEvent) {
-                selectedEvent = latestAgentEvent;
-            }
-        }
+    const selectedEventById = selectedEventId ? events.find(ev => ev.id === selectedEventId) : undefined;
+    let selectedEvent = selectedAgentName ? agentEventsMap.get(selectedAgentName) || selectedEventById : selectedEventById;
+    if (!selectedEvent && !selectedAgentName && allTimelineAgents[0]?.agentName) {
+        selectedEvent = agentEventsMap.get(allTimelineAgents[0].executionId || allTimelineAgents[0].agentName);
     }
+    if (!selectedEvent) selectedEvent = events[events.length - 1];
 
-    if (!selectedEvent) {
-        selectedEvent = events[events.length - 1];
-    }
-    const selectedInvocationStart = selectedEvent?.executionId
-        ? events.find(event =>
-            event.executionId === selectedEvent?.executionId
-            && event.eventType === 'agent_start')
-        : undefined;
-    const selectedPromptEvent = selectedInvocationStart || selectedEvent;
+    const selectedPromptEvent = (selectedEvent?.executionId
+        ? events.find(ev => ev.executionId === selectedEvent?.executionId && ev.eventType === 'agent_start')
+        : undefined) || selectedEvent;
 
-    const selectEvent = (event: DeepthinkLiveEvent) => {
-        setSelectedEventId(event.id);
-        setSelectedAgentName(event.executionId || event.agentName || null);
+    const selectEvent = (ev: DeepthinkLiveEvent) => {
+        setSelectedEventId(ev.id);
+        setSelectedAgentName(ev.executionId || ev.agentName || null);
         setIsUserSelected(true);
     };
 
@@ -289,57 +160,27 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
 
     const responseViewToggle = selectedEvent?.executionTraceText && (
         <div className="response-view-toggle" aria-label="Response view">
-            <button
-                className={`response-toggle-option ${responseViewMode === 'submitted' ? 'active' : ''}`}
-                onClick={() => setResponseViewMode('submitted')}
-            >
-                Artifact
-            </button>
-            <button
-                className={`response-toggle-option ${responseViewMode === 'activity' ? 'active' : ''}`}
-                onClick={() => setResponseViewMode('activity')}
-            >
-                Agent Activity
-            </button>
+            <button className={`response-toggle-option ${responseViewMode === 'submitted' ? 'active' : ''}`} onClick={() => setResponseViewMode('submitted')}>Artifact</button>
+            <button className={`response-toggle-option ${responseViewMode === 'activity' ? 'active' : ''}`} onClick={() => setResponseViewMode('activity')}>Agent Activity</button>
         </div>
     );
 
     const renderTimelineNode = (agent: DeepthinkLiveEvent) => {
-        const isActive = selectedEvent ? (
-            (selectedEvent.executionId && selectedEvent.executionId === agent.executionId) ||
-            (!selectedEvent.executionId && selectedEvent.agentName === agent.agentName)
-        ) : false;
+        const isActive = selectedEvent
+            ? (selectedEvent.executionId && selectedEvent.executionId === agent.executionId) || (!selectedEvent.executionId && selectedEvent.agentName === agent.agentName)
+            : false;
         const category = getAgentCategory(agent.agentName, agent.stepDescription);
-        let statusClass = 'pending';
-        let statusIcon = 'hourglass_empty';
-
-        if (agent.eventType === 'agent_complete') {
-            statusClass = 'completed';
-            statusIcon = 'check';
-        } else if (agent.eventType === 'agent_start' || agent.eventType === 'agent_retry') {
-            statusClass = 'running';
-            statusIcon = 'sync';
-        } else if (agent.eventType === 'agent_error') {
-            statusClass = 'failed';
-            statusIcon = 'error';
-        }
+        const statusClass = agent.eventType === 'agent_complete' ? 'completed' : (agent.eventType === 'agent_start' || agent.eventType === 'agent_retry') ? 'running' : agent.eventType === 'agent_error' ? 'failed' : 'pending';
+        const statusIcon = agent.eventType === 'agent_complete' ? 'check' : (agent.eventType === 'agent_start' || agent.eventType === 'agent_retry') ? 'sync' : agent.eventType === 'agent_error' ? 'error' : 'hourglass_empty';
 
         return (
-            <div 
-                key={agent.id} 
-                className={`timeline-node ${statusClass} ${isActive ? 'active' : ''} category-${category}`}
-                onClick={() => selectEvent(agent)}
-            >
-                <div className="node-connector-line"></div>
-                <div className="node-icon-wrapper">
-                    <MIcon name={statusIcon} className="node-status-icon" />
-                </div>
+            <div key={agent.id} className={`timeline-node ${statusClass} ${isActive ? 'active' : ''} category-${category}`} onClick={() => selectEvent(agent)}>
+                <div className="node-connector-line" />
+                <div className="node-icon-wrapper"><MIcon name={statusIcon} className="node-status-icon" /></div>
                 <div className="node-content" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                     <div className="node-header">
                         <span className="node-name font-mono">{formatAgentName(agent.agentName, agent.stepDescription)}</span>
-                        <span className="node-time font-mono">
-                            {new Date(agent.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
+                        <span className="node-time font-mono">{new Date(agent.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                 </div>
             </div>
@@ -348,14 +189,12 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
 
     return (
         <div className="deepthink-live-container">
-            {/* Split Screen Workspace */}
             <div className="live-workspace" style={{ flexDirection: 'row-reverse' }}>
-                {/* Left Side: Agent Timeline */}
                 <div className="live-sidebar">
                     <div className="timeline-header-panel">
                         <div className="timeline-header-row-bottom">
                             <div className={`status-pill status-${process.status === 'stopped' ? 'error' : process.status} compact-status`}>
-                                <span className="pulse-indicator"></span>
+                                <span className="pulse-indicator" />
                                 <span className="status-text">{process.status.toUpperCase()}</span>
                             </div>
                             <div className="duration-pill font-mono">
@@ -378,56 +217,36 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                         ) : (
                             (() => {
                                 const sortedAgents = [...allTimelineAgents].sort((a, b) => a.timestamp - b.timestamp);
-                                const blocks: Array<
-                                    | { type: 'single'; agent: DeepthinkLiveEvent }
-                                    | { type: 'group'; id: string; name: string; agents: DeepthinkLiveEvent[] }
-                                > = [];
-                                
+                                const blocks: Array<{ type: 'single'; agent: DeepthinkLiveEvent } | { type: 'group'; id: string; name: string; agents: DeepthinkLiveEvent[] }> = [];
                                 sortedAgents.forEach(agent => {
                                     if (agent.executionGroupId) {
-                                        const existingGroup = blocks.find(b => b.type === 'group' && b.id === agent.executionGroupId);
-                                        if (existingGroup && existingGroup.type === 'group') {
-                                            existingGroup.agents.push(agent);
-                                        } else {
-                                            blocks.push({ type: 'group', id: agent.executionGroupId, name: agent.executionGroupName || 'Execution Loop', agents: [agent] });
-                                        }
+                                        const existing = blocks.find(b => b.type === 'group' && b.id === agent.executionGroupId);
+                                        if (existing && existing.type === 'group') existing.agents.push(agent);
+                                        else blocks.push({ type: 'group', id: agent.executionGroupId, name: agent.executionGroupName || 'Execution Loop', agents: [agent] });
                                     } else {
                                         blocks.push({ type: 'single', agent });
                                     }
                                 });
-
-                                // Check if we have multiple generic running agents to group into a "Parallel" block
-                                return blocks.map((block) => {
-                                    if (block.type === 'single') {
-                                        return renderTimelineNode(block.agent);
-                                    } else {
-                                        const isRunning = process.status !== 'stopped' && block.agents.some(a =>
-                                            a.eventType === 'agent_start' || a.eventType === 'agent_retry'
-                                        );
-                                        return (
-                                            <div key={block.id} className={`parallel-active-window ${isRunning ? 'running' : 'completed'}`}>
-                                                <div className="parallel-window-header">
-                                                    <MIcon name={isRunning ? "sync" : "check_circle"} className={isRunning ? "parallel-icon spin" : "parallel-icon"} style={{ fontSize: '1rem', animation: isRunning ? 'spin 4s linear infinite' : 'none' }} />
-                                                    <span>{block.name}</span>
-                                                </div>
-                                                <div className="parallel-window-body">
-                                                    {block.agents.map(renderTimelineNode)}
-                                                </div>
+                                return blocks.map(block => {
+                                    if (block.type === 'single') return renderTimelineNode(block.agent);
+                                    const isRunning = process.status !== 'stopped' && block.agents.some(a => a.eventType === 'agent_start' || a.eventType === 'agent_retry');
+                                    return (
+                                        <div key={block.id} className={`parallel-active-window ${isRunning ? 'running' : 'completed'}`}>
+                                            <div className="parallel-window-header">
+                                                <MIcon name={isRunning ? 'sync' : 'check_circle'} className={isRunning ? 'parallel-icon spin' : 'parallel-icon'} style={{ fontSize: '1rem', animation: isRunning ? 'spin 4s linear infinite' : 'none' }} />
+                                                <span>{block.name}</span>
                                             </div>
-                                        );
-                                    }
+                                            <div className="parallel-window-body">{block.agents.map(renderTimelineNode)}</div>
+                                        </div>
+                                    );
                                 });
                             })()
                         )}
                     </div>
-                    
                 </div>
 
-                {/* Right Side: Terminal Log & Prompt Inspector */}
                 <div className="live-main-content">
-                    {/* Top Right: Inspector */}
                     <div className="live-inspector-panel">
-
                         <div className="inspector-content">
                             {!selectedEvent ? (
                                 <div className="inspector-empty">
@@ -438,28 +257,18 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                                 <div className="inspector-info-card">
                                     <div className="section-header" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                            <span className="info-icon-badge">
-                                                <MIcon name="info" />
-                                            </span>
+                                            <span className="info-icon-badge"><MIcon name="info" /></span>
                                             <div>
-                                                <div className="card-title" style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent-blue, #00d2ff)' }}>
-                                                    Orchestration Event
-                                                </div>
+                                                <div className="card-title" style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent-blue, #00d2ff)' }}>Orchestration Event</div>
                                                 <div className="font-mono" style={{ fontSize: '0.75rem', color: 'var(--text-secondary-color, #888)' }}>
                                                     {selectedEvent.agentName || 'Pipeline Orchestrator'} &bull; {new Date(selectedEvent.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                 </div>
                                             </div>
                                         </div>
-                                        {selectedEvent.executionGroupName && (
-                                            <span className="config-badge model">
-                                                {selectedEvent.executionGroupName}
-                                            </span>
-                                        )}
+                                        {selectedEvent.executionGroupName && <span className="config-badge model">{selectedEvent.executionGroupName}</span>}
                                     </div>
                                     <div className="info-event-body custom-scrollbar">
-                                        <div className="info-event-message font-mono">
-                                            {selectedEvent.stepDescription}
-                                        </div>
+                                        <div className="info-event-message font-mono">{selectedEvent.stepDescription}</div>
                                         {selectedEvent.executionGroupId && (
                                             <div className="info-event-meta font-mono" style={{ marginTop: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary-color, #888)' }}>
                                                 <span style={{ fontWeight: 600 }}>Execution Group: </span>
@@ -470,24 +279,17 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                                 </div>
                             ) : (
                                 <div className="inspector-two-columns">
-                                    {/* Left Column: System & User Prompts */}
                                     <div className="inspector-column left-column" style={{ paddingRight: '0.75rem' }}>
                                         <div className="unified-prompt-panel">
                                             {selectedPromptEvent?.systemInstruction && (
                                                 <div className={`system-instruction-section ${isSystemInstructionExpanded ? 'expanded' : 'collapsed'}`}>
-                                                    <div 
-                                                        className="system-instruction-pill"
-                                                        onClick={() => setIsSystemInstructionExpanded(!isSystemInstructionExpanded)}
-                                                    >
-                                                        <MIcon name={isSystemInstructionExpanded ? "expand_less" : "expand_more"} />
+                                                    <div className="system-instruction-pill" onClick={() => setIsSystemInstructionExpanded(!isSystemInstructionExpanded)}>
+                                                        <MIcon name={isSystemInstructionExpanded ? 'expand_less' : 'expand_more'} />
                                                         <span>System Instruction</span>
                                                     </div>
                                                     {isSystemInstructionExpanded && (
                                                         <div className="system-prompt-wrapper custom-scrollbar">
-                                                            <RenderMathMarkdown 
-                                                                content={selectedPromptEvent.systemInstruction} 
-                                                                disableSandboxArtifactExpansion={true} 
-                                                            />
+                                                            <RenderMathMarkdown content={selectedPromptEvent.systemInstruction} disableSandboxArtifactExpansion={true} />
                                                         </div>
                                                     )}
                                                 </div>
@@ -496,20 +298,15 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                                             {selectedPromptEvent?.prompt && (
                                                 <div className="user-prompt-section">
                                                     <div className="section-header" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.5rem' }}>
-                                                        <span className="card-title">
-                                                            <MIcon name="description" /> User Prompt (Injected Context)
-                                                        </span>
+                                                        <span className="card-title"><MIcon name="description" /> User Prompt (Injected Context)</span>
                                                     </div>
                                                     <div className="prompt-editor-wrapper custom-scrollbar user-prompt-wrapper">
-                                                        <RenderMathMarkdown 
-                                                            content={selectedPromptEvent.prompt} 
-                                                            disableSandboxArtifactExpansion={true} 
-                                                        />
+                                                        <RenderMathMarkdown content={selectedPromptEvent.prompt} disableSandboxArtifactExpansion={true} />
                                                     </div>
                                                     <div className="full-prompt-action" style={{ paddingTop: '0.5rem', marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', display: 'flex' }}>
                                                         <ActionButton
                                                             type="copy"
-                                                            content={(selectedPromptEvent.systemInstruction ? selectedPromptEvent.systemInstruction + '\n\n' : '') + selectedPromptEvent.prompt}
+                                                            content={(selectedPromptEvent.systemInstruction ? `${selectedPromptEvent.systemInstruction}\n\n` : '') + selectedPromptEvent.prompt}
                                                             icon="content_copy"
                                                             text="Copy Full Prompt (System + User)"
                                                             className="full-width-copy-btn"
@@ -527,60 +324,29 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                                         </div>
                                     </div>
 
-                                    <div className="vertical-divider"></div>
+                                    <div className="vertical-divider" />
 
-                                    {/* Right Column: Model Response / Errors */}
                                     <div className="inspector-column right-column" style={{ paddingLeft: '0.75rem' }}>
                                         {selectedEvent.response && responseViewMode === 'activity' && selectedEvent.executionTraceText && (
-                                            <SandboxAgentActivity
-                                                executionTraceText={selectedEvent.executionTraceText}
-                                                headerExtra={responseViewToggle}
-                                            />
+                                            <SandboxAgentActivity executionTraceText={selectedEvent.executionTraceText} headerExtra={responseViewToggle} />
                                         )}
 
                                         {selectedEvent.response && (responseViewMode === 'submitted' || !selectedEvent.executionTraceText) && (
                                             <div className="borderless-card">
                                                 <div className="section-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.75rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border-color)', marginBottom: '0.5rem' }}>
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                        <span className="card-title">
-                                                            <MIcon name="smart_toy" /> Submitted Artifact
-                                                        </span>
+                                                        <span className="card-title"><MIcon name="smart_toy" /> Submitted Artifact</span>
                                                         <div className="code-actions response-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                                                             {responseViewToggle}
-                                                            {responseViewToggle && (
-                                                                <div className="action-button-divider" style={{ width: '1px', height: '18px', background: 'var(--border-color)', margin: '0 0.25rem' }} />
-                                                            )}
-                                                            <ActionButton
-                                                                type="copy"
-                                                                content={selectedEvent.response}
-                                                                icon="content_copy"
-                                                                text="Copy"
-                                                                title="Copy"
-                                                                className="copy-btn-action icon-only-action"
-                                                            />
-                                                            <ActionButton
-                                                                type="download"
-                                                                content={selectedEvent.response}
-                                                                filename="submitted-artifact.md"
-                                                                icon="download"
-                                                                text="Download"
-                                                                title="Download"
-                                                                className="download-btn-action icon-only-action"
-                                                            />
+                                                            {responseViewToggle && <div className="action-button-divider" style={{ width: '1px', height: '18px', background: 'var(--border-color)', margin: '0 0.25rem' }} />}
+                                                            <ActionButton type="copy" content={selectedEvent.response} icon="content_copy" text="Copy" title="Copy" className="copy-btn-action icon-only-action" />
+                                                            <ActionButton type="download" content={selectedEvent.response} filename="submitted-artifact.md" icon="download" text="Download" title="Download" className="download-btn-action icon-only-action" />
                                                         </div>
                                                     </div>
-                                                    {selectedEvent && (selectedEvent.modelName || selectedEvent.codeExecutionEnabled !== undefined) && (
+                                                    {(selectedEvent.modelName || selectedEvent.codeExecutionEnabled !== undefined) && (
                                                         <div className="selected-agent-config font-mono" style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                                                            {selectedEvent.modelName && (
-                                                                <span className="config-badge model" title="Model Name">
-                                                                    {selectedEvent.modelName}
-                                                                </span>
-                                                            )}
-                                                            {selectedEvent.codeExecutionEnabled !== undefined && (
-                                                                <span className="config-badge" title="Terminal permission">
-                                                                    Terminal: {selectedEvent.codeExecutionEnabled ? 'On' : 'Off'}
-                                                                </span>
-                                                            )}
+                                                            {selectedEvent.modelName && <span className="config-badge model" title="Model Name">{selectedEvent.modelName}</span>}
+                                                            {selectedEvent.codeExecutionEnabled !== undefined && <span className="config-badge" title="Terminal permission">Terminal: {selectedEvent.codeExecutionEnabled ? 'On' : 'Off'}</span>}
                                                         </div>
                                                     )}
                                                 </div>
@@ -593,9 +359,7 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                                         {(selectedEvent.error || selectedEvent.eventType === 'agent_error') && (
                                             <div className="borderless-card">
                                                 <div className="section-header">
-                                                    <span className="card-title" style={{ color: '#ff1744' }}>
-                                                        <MIcon name="report_problem" /> Error Log
-                                                    </span>
+                                                    <span className="card-title" style={{ color: '#ff1744' }}><MIcon name="report_problem" /> Error Log</span>
                                                 </div>
                                                 <div className="error-wrapper custom-scrollbar font-mono">
                                                     {selectedEvent.error || selectedEvent.stepDescription}
@@ -606,16 +370,11 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                                         {!selectedEvent.response && !selectedEvent.error && selectedEvent.eventType !== 'agent_error' && (
                                             <div className="borderless-card pending">
                                                 <div className="waiting-wrapper">
-                                                    {selectedEvent.eventType === 'agent_complete' ? (
-                                                        <span>Execution completed with no output artifact.</span>
-                                                    ) : process.status === 'stopped' ? (
-                                                        <span>Pipeline paused.</span>
-                                                    ) : (
-                                                        <>
-                                                            <MIcon name="sync" className="waiting-spinner" />
-                                                            <span>Agent is processing, waiting for response...</span>
-                                                        </>
-                                                    )}
+                                                    {selectedEvent.eventType === 'agent_complete'
+                                                        ? <span>Execution completed with no output artifact.</span>
+                                                        : process.status === 'stopped'
+                                                            ? <span>Pipeline paused.</span>
+                                                            : <><MIcon name="sync" className="waiting-spinner" /><span>Agent is processing, waiting for response...</span></>}
                                                 </div>
                                             </div>
                                         )}
@@ -625,36 +384,25 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                         </div>
                     </div>
 
-                    {/* Bottom Right: Terminal Log Console */}
                     <div className="live-terminal-panel">
                         <div className="terminal-header">
                             <div className="terminal-actions-left">
-                                <div className="terminal-dot red"></div>
-                                <div className="terminal-dot yellow"></div>
-                                <div className="terminal-dot green"></div>
+                                <div className="terminal-dot red" />
+                                <div className="terminal-dot yellow" />
+                                <div className="terminal-dot green" />
                                 <span className="terminal-title font-mono">deepthink-agent-console.log</span>
                             </div>
                             <div className="terminal-actions-right">
                                 <div className="console-filter-tabs">
                                     {(['all', 'agents', 'info', 'errors'] as const).map(type => (
-                                        <button 
-                                            key={type}
-                                            className={`tab-button console-tab-button tab-${type} ${filterType === type ? 'active' : ''}`}
-                                            onClick={() => setFilterType(type)}
-                                        >
+                                        <button key={type} className={`tab-button console-tab-button tab-${type} ${filterType === type ? 'active' : ''}`} onClick={() => setFilterType(type)}>
                                             {type.toUpperCase()}
                                         </button>
                                     ))}
                                 </div>
                                 <div className="search-box">
                                     <MIcon name="search" className="search-icon" />
-                                    <input 
-                                        type="text" 
-                                        placeholder="Search logs..." 
-                                        value={searchQuery}
-                                        onChange={e => setSearchQuery(e.target.value)}
-                                        className="search-input"
-                                    />
+                                    <input type="text" placeholder="Search logs..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="search-input" />
                                 </div>
                             </div>
                         </div>
@@ -663,38 +411,15 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                             {filteredEvents.length === 0 ? (
                                 <div className="terminal-row empty">Console is silent. Awaiting execution stream...</div>
                             ) : (
-                                filteredEvents.map((ev) => {
+                                filteredEvents.map(ev => {
                                     const category = getAgentCategory(ev.agentName, ev.stepDescription);
-                                    let lineClass = 'log-info';
-                                    let badge = '[INFO]';
-
-                                    if (ev.eventType === 'agent_start') {
-                                        lineClass = 'log-start';
-                                        badge = '[START]';
-                                    } else if (ev.eventType === 'agent_complete') {
-                                        lineClass = 'log-complete';
-                                        badge = '[DONE]';
-                                    } else if (ev.eventType === 'agent_error') {
-                                        lineClass = 'log-error';
-                                        badge = '[FAIL]';
-                                    } else if (ev.eventType === 'agent_retry') {
-                                        lineClass = 'log-retry';
-                                        badge = '[RETRY]';
-                                    }
-
+                                    const lineClass = ev.eventType === 'agent_start' ? 'log-start' : ev.eventType === 'agent_complete' ? 'log-complete' : ev.eventType === 'agent_error' ? 'log-error' : ev.eventType === 'agent_retry' ? 'log-retry' : 'log-info';
+                                    const badge = ev.eventType === 'agent_start' ? '[START]' : ev.eventType === 'agent_complete' ? '[DONE]' : ev.eventType === 'agent_error' ? '[FAIL]' : ev.eventType === 'agent_retry' ? '[RETRY]' : '[INFO]';
                                     return (
-                                        <div 
-                                            key={ev.id} 
-                                            className={`terminal-row ${lineClass} ${selectedEvent?.id === ev.id ? 'highlighted' : ''} category-${category}`}
-                                            onClick={() => selectEvent(ev)}
-                                        >
-                                            <span className="log-time">
-                                                {new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </span>
+                                        <div key={ev.id} className={`terminal-row ${lineClass} ${selectedEvent?.id === ev.id ? 'highlighted' : ''} category-${category}`} onClick={() => selectEvent(ev)}>
+                                            <span className="log-time">{new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                             <span className="log-badge">{badge}</span>
-                                            {ev.agentName && (
-                                                <span className="log-agent">[{formatAgentName(ev.agentName, ev.stepDescription)}]</span>
-                                            )}
+                                            {ev.agentName && <span className="log-agent">[{formatAgentName(ev.agentName, ev.stepDescription)}]</span>}
                                             <span className="log-message">{ev.stepDescription}</span>
                                         </div>
                                     );
@@ -703,7 +428,6 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process, hid
                             <div ref={terminalEndRef} />
                         </div>
                     </div>
-
                 </div>
             </div>
         </div>

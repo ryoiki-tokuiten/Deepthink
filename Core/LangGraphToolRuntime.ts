@@ -1,25 +1,12 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import type { ToolDefinition } from '@langchain/core/language_models/base';
 import { AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import { ChatAnthropic } from '@langchain/anthropic';
-import { type Content as GeminiContent, type Part as GeminiPart } from '@google/genai';
 import { ChatOpenAI } from '@langchain/openai';
 import { nanoid } from 'nanoid';
 import { getRoutingManager, callAI, type CallAIOptions } from '../Routing';
 import { getProviderType, type ProviderConfig, type ProviderType } from '../Routing/ProviderManager';
-import {
-    getOpenAICompatibleProxyBaseURL,
-    OPENAI_COMPATIBLE_ENDPOINT_HEADER,
-} from '../Routing/OpenAICompatibleProxy';
-import {
-    executeWithInferenceRetry,
-    normalizeOpenAICompatibleProviderError,
-    withSilenceWatchdog,
-} from './ProviderError';
+import { getOpenAICompatibleProxyBaseURL, OPENAI_COMPATIBLE_ENDPOINT_HEADER, type Content as GeminiContent, type Part as GeminiPart } from '../Routing/AIProvider';
+import { executeWithInferenceRetry, normalizeOpenAICompatibleProviderError, withSilenceWatchdog } from './ProviderError';
 
 export interface ToolCallingAgentOptions {
     modelName: string;
@@ -42,13 +29,10 @@ type ToolCallingChatModel = ChatAnthropic | ChatOpenAI;
 export function resolveProviderForModel(modelName: string): ResolvedProvider {
     const providerManager = getRoutingManager().getApiKeyManager().getProviderManager();
     const providerConfig = providerManager.getProviderConfigForModel(modelName);
-    if (!providerConfig) {
-        throw new Error(`No configured provider found for model: ${modelName}`);
-    }
+    if (!providerConfig) throw new Error(`No configured provider found for model: ${modelName}`);
 
     const providerType = getProviderType(providerConfig);
-    if (providerType === 'openai-compatible'
-        && providerManager.getToolCallingSupportForModel(modelName) === false) {
+    if (providerType === 'openai-compatible' && providerManager.getToolCallingSupportForModel(modelName) === false) {
         throw new Error(`Error: OpenAI-compatible model ${providerManager.getModelIdForSelection(modelName)} does not support tool calling.`);
     }
 
@@ -60,222 +44,86 @@ export function resolveProviderForModel(modelName: string): ResolvedProvider {
     };
 }
 
-function normalizeLocalEndpoint(endpoint: string): string {
-    if (endpoint.endsWith('/v1')) {
-        return endpoint;
-    }
-
-    if (endpoint.endsWith('/')) {
-        return `${endpoint}v1`;
-    }
-
-    return `${endpoint}/v1`;
-}
-
-function getAgentModelOptions(options: ToolCallingAgentOptions) {
-    return {
-        model: options.modelName
-    };
-}
-
-function createOpenAICompatibleAgentModel(
-    options: ToolCallingAgentOptions,
-    apiKey: string,
-    configuration: NonNullable<ConstructorParameters<typeof ChatOpenAI>[0]>['configuration']
-): ChatOpenAI {
-    return new ChatOpenAI({
-        ...getAgentModelOptions(options),
-        apiKey,
-        configuration
-    });
-}
-
 export function createToolCallingAgentModel(
     providerName: Exclude<ResolvedProvider['providerName'], 'gemini'>,
     providerConfig: ProviderConfig,
     options: ToolCallingAgentOptions,
     enableAnthropicThinking = true
 ): ToolCallingChatModel {
-    const commonOptions = getAgentModelOptions(options);
-    const browserSafeConfig = {
-        dangerouslyAllowBrowser: true
-    };
+    const model = options.modelName;
+    const browserSafeConfig = { dangerouslyAllowBrowser: true };
 
     switch (providerName) {
         case 'openai':
-            return createOpenAICompatibleAgentModel(options, providerConfig.apiKey!, browserSafeConfig);
-
-        case 'local':
-            return createOpenAICompatibleAgentModel(options, 'not-needed', {
-                ...browserSafeConfig,
-                baseURL: normalizeLocalEndpoint(providerConfig.apiKey!)
-            });
-
+            return new ChatOpenAI({ model, apiKey: providerConfig.apiKey!, configuration: browserSafeConfig });
+        case 'local': {
+            const ep = providerConfig.apiKey!;
+            const baseURL = ep.endsWith('/v1') ? ep : ep.endsWith('/') ? `${ep}v1` : `${ep}/v1`;
+            return new ChatOpenAI({ model, apiKey: 'not-needed', configuration: { ...browserSafeConfig, baseURL } });
+        }
         case 'openai-compatible':
-            if (!providerConfig.baseURL) {
-                throw new Error('Error: OpenAI-compatible endpoint URL is missing.');
-            }
-            return createOpenAICompatibleAgentModel(options, providerConfig.apiKey || 'not-needed', {
-                ...browserSafeConfig,
-                baseURL: getOpenAICompatibleProxyBaseURL(),
-                defaultHeaders: {
-                    [OPENAI_COMPATIBLE_ENDPOINT_HEADER]: providerConfig.baseURL,
+            if (!providerConfig.baseURL) throw new Error('Error: OpenAI-compatible endpoint URL is missing.');
+            return new ChatOpenAI({
+                model,
+                apiKey: providerConfig.apiKey || 'not-needed',
+                configuration: {
+                    ...browserSafeConfig,
+                    baseURL: getOpenAICompatibleProxyBaseURL(),
+                    defaultHeaders: { [OPENAI_COMPATIBLE_ENDPOINT_HEADER]: providerConfig.baseURL },
                 },
             });
-
         case 'anthropic':
             return new ChatAnthropic({
-                ...commonOptions,
+                model,
                 apiKey: providerConfig.apiKey!,
                 maxTokens: 16384,
-                ...(enableAnthropicThinking
-                    ? {
-                        thinking: {
-                            type: 'enabled',
-                            budget_tokens: 4096,
-                        },
-                    }
-                    : {}),
-                clientOptions: {
-                    dangerouslyAllowBrowser: true
-                }
+                ...(enableAnthropicThinking ? { thinking: { type: 'enabled', budget_tokens: 4096 } } : {}),
+                clientOptions: browserSafeConfig,
             });
-
         default:
             throw new Error(`Unsupported tool-calling provider: ${providerName}`);
     }
 }
 
-function cloneGeminiPart(part: GeminiPart): GeminiPart {
-    return JSON.parse(JSON.stringify(part)) as GeminiPart;
-}
-
-function isGeminiPart(value: unknown): value is GeminiPart {
-    return !!value && typeof value === 'object';
-}
-
-function pushGeminiContent(contents: GeminiContent[], role: 'user' | 'model', parts: GeminiPart[]) {
-    if (parts.length === 0) {
-        return;
-    }
-
-    const lastContent = contents[contents.length - 1];
-    if (lastContent?.role === role) {
-        lastContent.parts = [...(lastContent.parts ?? []), ...parts];
-        return;
-    }
-
-    contents.push({ role, parts });
-}
-
-function buildGeminiFunctionDeclarations(tools: ToolDefinition[]) {
-    return tools.map(tool => ({
-        name: tool.function.name,
-        description: tool.function.description,
-        parametersJsonSchema: tool.function.parameters
-    }));
-}
-
-function getGeminiToolResponse(message: ToolMessage) {
-    if (message.status === 'error') {
-        return { error: { details: messageContentToText(message.content) } };
-    }
-
-    return { result: messageContentToText(message.content) };
-}
+const cloneGeminiPart = (part: GeminiPart): GeminiPart => JSON.parse(JSON.stringify(part)) as GeminiPart;
 
 function getGeminiPartsFromMessage(message: BaseMessage): GeminiPart[] {
     if (message instanceof ToolMessage) {
-        if (!message.name) {
-            throw new Error('Gemini tool responses require the originating tool name.');
-        }
-
+        if (!message.name) throw new Error('Gemini tool responses require the originating tool name.');
+        const text = messageContentToText(message.content);
         return [{
             functionResponse: {
                 name: message.name,
-                response: getGeminiToolResponse(message),
+                response: message.status === 'error' ? { error: { details: text } } : { result: text },
                 ...(message.tool_call_id ? { id: message.tool_call_id } : {})
             }
         }];
     }
 
     const parts: GeminiPart[] = [];
-
     if (Array.isArray(message.content)) {
         for (const part of message.content) {
-            if (!isGeminiPart(part)) {
-                continue;
-            }
-
+            if (!part || typeof part !== 'object') continue;
             if ('thoughtSignature' in part || 'functionCall' in part || 'functionResponse' in part || 'thought' in part) {
-                parts.push(cloneGeminiPart(part));
+                parts.push(cloneGeminiPart(part as GeminiPart));
                 continue;
             }
-
-            if ('text' in part && typeof part.text === 'string') {
-                parts.push({ text: part.text });
-            }
-
-            if (
-                'inlineData' in part &&
-                part.inlineData &&
-                typeof part.inlineData === 'object' &&
-                'mimeType' in part.inlineData &&
-                'data' in part.inlineData
-            ) {
-                parts.push(cloneGeminiPart(part));
+            if ('text' in part && typeof part.text === 'string') parts.push({ text: part.text });
+            if ('inlineData' in part && part.inlineData && typeof part.inlineData === 'object' && 'mimeType' in part.inlineData && 'data' in part.inlineData) {
+                parts.push(cloneGeminiPart(part as GeminiPart));
             }
         }
     }
-
     if (parts.length === 0) {
         const text = messageContentToText(message.content);
-        if (text) {
-            parts.push({ text });
-        }
+        if (text) parts.push({ text });
     }
-
-    if (message instanceof AIMessage && message.tool_calls?.length && !parts.some(part => !!part.functionCall)) {
-        parts.push(...message.tool_calls.map(toolCall => ({
-            functionCall: {
-                id: toolCall.id,
-                name: toolCall.name,
-                args: toolCall.args ?? {}
-            }
+    if (message instanceof AIMessage && message.tool_calls?.length && !parts.some(p => !!p.functionCall)) {
+        parts.push(...message.tool_calls.map(tc => ({
+            functionCall: { id: tc.id, name: tc.name, args: tc.args ?? {} }
         })));
     }
-
     return parts;
-}
-
-function buildGeminiContents(messages: BaseMessage[]): GeminiContent[] {
-    const contents: GeminiContent[] = [];
-
-    for (const message of messages) {
-        pushGeminiContent(contents, message instanceof AIMessage ? 'model' : 'user', getGeminiPartsFromMessage(message));
-    }
-
-    return contents;
-}
-
-function createGeminiAiMessage(response: any): AIMessage {
-    const parts: GeminiPart[] = Array.isArray(response?.candidates?.[0]?.content?.parts)
-        ? response.candidates[0].content.parts.map((part: GeminiPart) => cloneGeminiPart(part))
-        : [];
-
-    const toolCalls = parts
-        .filter(part => !!part.functionCall?.name)
-        .map(part => ({
-            id: part.functionCall?.id ?? nanoid(8),
-            type: 'tool_call' as const,
-            name: part.functionCall!.name!,
-            args: part.functionCall?.args ?? {}
-        }));
-
-    return new AIMessage({
-        content: parts,
-        tool_calls: toolCalls.length > 0 ? toolCalls : undefined
-    });
 }
 
 export async function invokeGeminiToolAgentTurn(
@@ -285,7 +133,16 @@ export async function invokeGeminiToolAgentTurn(
     tools: ToolDefinition[],
     options: ToolCallingAgentOptions
 ): Promise<AIMessage> {
-    const contents = buildGeminiContents(messages);
+    const contents: GeminiContent[] = [];
+    for (const message of messages) {
+        const role = message instanceof AIMessage ? 'model' : 'user';
+        const parts = getGeminiPartsFromMessage(message);
+        if (!parts.length) continue;
+        const last = contents[contents.length - 1];
+        if (last?.role === role) last.parts = [...(last.parts ?? []), ...parts];
+        else contents.push({ role, parts });
+    }
+
     const callOptions: CallAIOptions = {
         abortSignal: options.abortSignal,
         retryDelaysMs: options.retryDelaysMs,
@@ -300,13 +157,30 @@ export async function invokeGeminiToolAgentTurn(
         false,
         {
             tools: [{
-                functionDeclarations: buildGeminiFunctionDeclarations(tools)
+                functionDeclarations: tools.map(t => ({
+                    name: t.function.name,
+                    description: t.function.description,
+                    parametersJsonSchema: t.function.parameters
+                }))
             }]
         },
         callOptions
     );
 
-    return createGeminiAiMessage(response);
+    const parts: GeminiPart[] = Array.isArray((response as any)?.candidates?.[0]?.content?.parts)
+        ? (response as any).candidates[0].content.parts.map((p: GeminiPart) => cloneGeminiPart(p))
+        : [];
+    const toolCalls = parts.filter(p => !!p.functionCall?.name).map(p => ({
+        id: p.functionCall?.id ?? nanoid(8),
+        type: 'tool_call' as const,
+        name: p.functionCall!.name!,
+        args: p.functionCall?.args ?? {}
+    }));
+    const aiMessage = new AIMessage({ content: parts, tool_calls: toolCalls.length > 0 ? toolCalls : undefined });
+    if (toolCalls.length === 0 && !messageContentToText(aiMessage.content).trim()) {
+        throw new Error('Empty response received from model.');
+    }
+    return aiMessage;
 }
 
 async function streamLangChainModelTurn(
@@ -320,19 +194,16 @@ async function streamLangChainModelTurn(
         touch();
         return result as AIMessage;
     }
-
     const stream = await boundModel.stream(inputMessages, { signal });
     let aggregated: AIMessageChunk | null = null;
     for await (const chunk of stream) {
         touch();
         aggregated = aggregated ? aggregated.concat(chunk) : chunk;
     }
-
     if (!aggregated) {
-        return new AIMessage({ content: '' });
+        throw new Error('Empty response received from model.');
     }
-
-    return new AIMessage({
+    const aiMessage = new AIMessage({
         content: aggregated.content,
         tool_calls: aggregated.tool_calls,
         invalid_tool_calls: aggregated.invalid_tool_calls,
@@ -341,74 +212,36 @@ async function streamLangChainModelTurn(
         id: aggregated.id,
         usage_metadata: aggregated.usage_metadata,
     });
+    if ((!aiMessage.tool_calls || aiMessage.tool_calls.length === 0) && !messageContentToText(aiMessage.content).trim()) {
+        throw new Error('Empty response received from model.');
+    }
+    return aiMessage;
 }
 
-function normalizeHumanMessageForLangChain(
-    message: BaseMessage,
-    providerName: Exclude<ResolvedProvider['providerName'], 'gemini'>
-): BaseMessage {
-    if (!(message instanceof HumanMessage) || !Array.isArray(message.content)) {
-        return message;
-    }
-
-    const needsNormalization = message.content.some(
-        (part: any) => part && typeof part === 'object' && (!('type' in part) || 'inlineData' in part)
-    );
-    if (!needsNormalization) {
-        return message;
-    }
+function normalizeHumanMessageForLangChain(message: BaseMessage, providerName: Exclude<ResolvedProvider['providerName'], 'gemini'>): BaseMessage {
+    if (!(message instanceof HumanMessage) || !Array.isArray(message.content)) return message;
+    if (!message.content.some((p: any) => p && typeof p === 'object' && (!('type' in p) || 'inlineData' in p))) return message;
 
     const normalizedContent: any[] = [];
     for (const part of message.content as any[]) {
-        if (typeof part === 'string') {
-            if (part) normalizedContent.push({ type: 'text', text: part });
-            continue;
-        }
+        if (typeof part === 'string') { if (part) normalizedContent.push({ type: 'text', text: part }); continue; }
         if (!part || typeof part !== 'object') continue;
-
         if ('inlineData' in part && part.inlineData?.mimeType && part.inlineData?.data) {
             const { mimeType, data } = part.inlineData;
-            if (providerName === 'anthropic') {
-                normalizedContent.push({
-                    type: 'image',
-                    source: {
-                        type: 'base64',
-                        media_type: mimeType,
-                        data,
-                    },
-                });
-            } else {
-                normalizedContent.push({
-                    type: 'image_url',
-                    image_url: {
-                        url: `data:${mimeType};base64,${data}`,
-                    },
-                });
-            }
-            continue;
-        }
-
-        if ('text' in part && typeof part.text === 'string' && !('type' in part)) {
+            normalizedContent.push(
+                providerName === 'anthropic'
+                    ? { type: 'image', source: { type: 'base64', media_type: mimeType, data } }
+                    : { type: 'image_url', image_url: { url: `data:${mimeType};base64,${data}` } }
+            );
+        } else if ('text' in part && typeof part.text === 'string' && !('type' in part)) {
             normalizedContent.push({ type: 'text', text: part.text });
-            continue;
+        } else {
+            normalizedContent.push(part);
         }
-
-        normalizedContent.push(part);
     }
-
-    return new HumanMessage({
-        content: normalizedContent.length === 1 && normalizedContent[0].type === 'text'
-            ? normalizedContent[0].text
-            : normalizedContent,
-    });
+    return new HumanMessage({ content: normalizedContent.length === 1 && normalizedContent[0].type === 'text' ? normalizedContent[0].text : normalizedContent });
 }
 
-/**
- * Unified tool-calling turn invocation across all providers:
- * - Streams responses with reasoning/thought traces enabled
- * - Resets a 5-minute rolling silence watchdog on every chunk
- * - Retries transient provider errors with 1m -> 3m -> 5m backoff (fast-failing permanent 4xx errors)
- */
 export async function invokeToolCallingAgentTurn(
     provider: ResolvedProvider,
     messages: BaseMessage[],
@@ -417,113 +250,46 @@ export async function invokeToolCallingAgentTurn(
     options: ToolCallingAgentOptions
 ): Promise<AIMessage> {
     if (provider.providerName === 'gemini') {
-        return invokeGeminiToolAgentTurn(
-            provider.providerConfig,
-            messages,
-            systemPrompt,
-            tools,
-            {
-                ...options,
-                modelName: provider.modelSelectionId || provider.modelName,
-            }
-        );
+        return invokeGeminiToolAgentTurn(provider.providerConfig, messages, systemPrompt, tools, { ...options, modelName: provider.modelSelectionId || provider.modelName });
     }
 
     const nonGeminiProvider = provider.providerName as Exclude<ResolvedProvider['providerName'], 'gemini'>;
     const label = options.label || `${provider.providerName}:${provider.modelName}`;
-    const inputMessages: BaseMessage[] = [
-        new SystemMessage(systemPrompt),
-        ...messages.map(m => normalizeHumanMessageForLangChain(m, nonGeminiProvider)),
-    ];
+    const inputMessages: BaseMessage[] = [new SystemMessage(systemPrompt), ...messages.map(m => normalizeHumanMessageForLangChain(m, nonGeminiProvider))];
 
     return await executeWithInferenceRetry(
-        {
-            label,
-            retryDelaysMs: options.retryDelaysMs,
-            externalSignal: options.abortSignal,
-            onRetry: options.onRetry,
-        },
-        async () => {
-            return await withSilenceWatchdog(
-                {
-                    label,
-                    silenceTimeoutMs: options.silenceTimeoutMs,
-                    externalSignal: options.abortSignal,
-                },
-                async ({ signal, touch }) => {
+        { label, retryDelaysMs: options.retryDelaysMs, externalSignal: options.abortSignal, onRetry: options.onRetry },
+        () => withSilenceWatchdog(
+            { label, silenceTimeoutMs: options.silenceTimeoutMs, externalSignal: options.abortSignal },
+            async ({ signal, touch }) => {
+                try {
+                    const model = createToolCallingAgentModel(nonGeminiProvider, provider.providerConfig, { ...options, modelName: provider.modelName }, true).bindTools(tools);
                     try {
-                        const model = createToolCallingAgentModel(
-                            provider.providerName as Exclude<ResolvedProvider['providerName'], 'gemini'>,
-                            provider.providerConfig,
-                            {
-                                ...options,
-                                modelName: provider.modelName,
-                            },
-                            true
-                        ).bindTools(tools);
-
-                        try {
-                            return await streamLangChainModelTurn(model, inputMessages, signal, touch);
-                        } catch (innerError: any) {
-                            const msg = String(innerError?.message || innerError || '').toLowerCase();
-                            if (
-                                provider.providerName === 'anthropic' &&
-                                (msg.includes('thinking') || msg.includes('budget_tokens'))
-                            ) {
-                                const fallbackModel = createToolCallingAgentModel(
-                                    'anthropic',
-                                    provider.providerConfig,
-                                    {
-                                        ...options,
-                                        modelName: provider.modelName,
-                                    },
-                                    false
-                                ).bindTools(tools);
-                                return await streamLangChainModelTurn(fallbackModel, inputMessages, signal, touch);
-                            }
-                            throw innerError;
+                        return await streamLangChainModelTurn(model, inputMessages, signal, touch);
+                    } catch (innerError: any) {
+                        const msg = String(innerError?.message || innerError || '').toLowerCase();
+                        if (provider.providerName === 'anthropic' && (msg.includes('thinking') || msg.includes('budget_tokens'))) {
+                            const fallbackModel = createToolCallingAgentModel('anthropic', provider.providerConfig, { ...options, modelName: provider.modelName }, false).bindTools(tools);
+                            return await streamLangChainModelTurn(fallbackModel, inputMessages, signal, touch);
                         }
-                    } catch (error) {
-                        if (provider.providerName === 'openai-compatible' && provider.providerConfig.baseURL) {
-                            throw normalizeOpenAICompatibleProviderError(
-                                error,
-                                provider.providerConfig.baseURL,
-                                provider.modelName
-                            );
-                        }
-                        throw error;
+                        throw innerError;
                     }
+                } catch (error) {
+                    if (provider.providerName === 'openai-compatible' && provider.providerConfig.baseURL) {
+                        throw normalizeOpenAICompatibleProviderError(error, provider.providerConfig.baseURL, provider.modelName);
+                    }
+                    throw error;
                 }
-            );
-        }
+            }
+        )
     );
 }
 
 export function messageContentToText(content: BaseMessage['content']): string {
-    if (typeof content === 'string') {
-        return content;
-    }
-
-    if (!Array.isArray(content)) {
-        return String(content ?? '');
-    }
-
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return String(content ?? '');
     return content
-        .map(part => {
-            if (typeof part === 'string') {
-                return part;
-            }
-            if (
-                part &&
-                typeof part === 'object' &&
-                'text' in part &&
-                typeof part.text === 'string' &&
-                (!('thought' in part) || part.thought !== true)
-            ) {
-                return part.text;
-            }
-            return '';
-        })
+        .map(part => typeof part === 'string' ? part : (part && typeof part === 'object' && 'text' in part && typeof part.text === 'string' && (!('thought' in part) || part.thought !== true) ? part.text : ''))
         .join('')
         .trim();
 }
