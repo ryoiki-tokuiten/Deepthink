@@ -1,36 +1,62 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Sidebar from './Styles/Components/Sidebar/Sidebar';
-import MainContent from './Styles/Components/MainContent';
-import PromptsModalManager from './Routing/PromptsModal/PromptsModalManager';
-import { AppInitializer } from './Styles/Components/AppInitializer';
-import { VirtualEnvironmentModal } from './UI/VirtualEnvironmentModal';
+import { PromptsModalManager } from './Styles/Components/PromptContent';
+import { App } from './Core/App';
+import { globalState } from './Core/State';
+import { Icon } from './UI/Icons';
+
+const AppInitializer: React.FC = () => {
+    const initialized = useRef(false);
+    useEffect(() => {
+        if (!initialized.current) {
+            App.init();
+            initialized.current = true;
+        }
+    }, []);
+    return null;
+};
+
+const MainContent: React.FC = () => {
+    const [currentMode, setCurrentMode] = useState(globalState.currentMode);
+
+    useEffect(() => {
+        const handleModeChange = (e: any) => setCurrentMode(e.detail.mode);
+        window.addEventListener('appModeChanged', handleModeChange);
+        return () => window.removeEventListener('appModeChanged', handleModeChange);
+    }, []);
+
+    const showTabs = !(currentMode === 'deepthink' && !globalState.activeDeepthinkPipeline);
+
+    return (
+        <main id="main-content" className="flow-canvas-wrapper" aria-labelledby="main-content-heading">
+            <h2 id="main-content-heading" className="sr-only">Generation Pipelines Output</h2>
+            <div className="main-header-content">
+                <button id="sidebar-expand-button" className="sidebar-expand-button" aria-label="Expand Sidebar" title="Expand Sidebar" style={{ display: 'none' }}>
+                    <Icon name="dock_to_left" />
+                </button>
+                <div id="tabs-nav-container" className="tabs-container" role="tablist" aria-label="Results" style={{ display: showTabs ? '' : 'none' }} />
+            </div>
+            <div id="pipelines-content-container" className="results-content-area custom-scrollbar" />
+        </main>
+    );
+};
 
 document.addEventListener('DOMContentLoaded', () => {
-    // First, render React components to populate the DOM
     const appContainer = document.getElementById('app-container');
     if (appContainer) {
-        const root = createRoot(appContainer);
-        root.render(
+        createRoot(appContainer).render(
             <React.StrictMode>
                 <AppInitializer />
                 <Sidebar />
                 <MainContent />
-                <VirtualEnvironmentModal />
             </React.StrictMode>
         );
     }
 
-    // Render the prompts modal separately in the body
     const modalContainer = document.createElement('div');
     document.body.appendChild(modalContainer);
-    const modalRoot = createRoot(modalContainer);
-    modalRoot.render(
+    createRoot(modalContainer).render(
         <React.StrictMode>
             <PromptsModalManager />
         </React.StrictMode>

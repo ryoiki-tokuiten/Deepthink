@@ -1,16 +1,158 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+import {
+    MAX_MODULES_COUNT,
+    MAX_STRATEGY_PROXIMITY_LOOPS,
+    MAX_MODULES_IMPACT_REVIEW_LOOPS,
+    MAX_DEEPTHINK_DEPTH,
+    MAX_DEEPTHINK_STRATEGIES,
+    ModelConfigManager,
+    type ModelParameters,
+} from './ModelConfig.ts';
+import { determinePostIterationStep, calculateLoopSchedule } from '../Deepthink/core/types.ts';
 
-import { MAX_HYPOTHESIS_COUNT } from './ModelConfig';
+export const SANDBOX_API_CALL_MULTIPLIER = { min: 12, max: 36 } as const;
 
-interface DeepthinkTokenEstimateInput {
+export interface DeepthinkApiCallBreakdown {
+    initialStrategy: { min: number; max: number };
+    strategyProximity: { min: number; max: number };
+    solutionAttempt: { min: number; max: number };
+    solutionCritique: { min: number; max: number };
+    solutionCorrection: number;
+    dos: number;
+    modulesGeneration: number;
+    modulesImpactReview: number;
+    modulesTester: number;
+    bsr: number;
+    memoryBank: { min: number; max: number };
+    finalJudge: number;
+    standaloneHeartbeats: number;
+    globalUpdates: number;
+    totalHeartbeats: number;
+}
+
+export interface DeepthinkApiCallEstimate {
+    min: number;
+    max: number;
+    baseMin: number;
+    baseMax: number;
+    breakdown: DeepthinkApiCallBreakdown;
+    sandboxMultiplier: { min: number; max: number };
+}
+
+export function formatApiCallCount(value: number): string {
+    const safeValue = Math.max(0, Number.isFinite(value) ? value : 0);
+    if (safeValue >= 1_000_000) {
+        const millions = safeValue / 1_000_000;
+        return (millions >= 10 ? millions.toFixed(0) : millions.toFixed(1)).replace(/\.0$/, '') + 'M';
+    }
+    if (safeValue >= 1_000) {
+        const thousands = safeValue / 1_000;
+        return (thousands >= 10 ? thousands.toFixed(0) : thousands.toFixed(1)).replace(/\.0$/, '') + 'k';
+    }
+    return String(Math.round(safeValue));
+}
+
+export function calculateDeepthinkApiCallsFromParams(params: Partial<ModelParameters>): DeepthinkApiCallEstimate {
+    const strategiesCount = Math.max(1, Math.min(params.strategiesCount ?? 3, 5));
+    const i = Math.max(1, Math.min(params.i ?? params.deepthinkDepth ?? 10, MAX_DEEPTHINK_DEPTH));
+    const j = Math.max(3, Math.min(params.j ?? 4, 8));
+    const k = Math.max(2, Math.min(params.k ?? 4, j));
+    const strategyProximityLoops = Math.max(0, Math.min(MAX_STRATEGY_PROXIMITY_LOOPS, params.strategyProximityLoops ?? 1));
+    const modulesCount = Math.max(0, Math.min(MAX_MODULES_COUNT, params.modulesCount ?? 0));
+    const modulesImpactReviewLoops = Math.max(0, Math.min(MAX_MODULES_IMPACT_REVIEW_LOOPS, params.modulesImpactReviewLoops ?? 1));
+
+    const curatedContextEnabled = modulesCount > 0;
+    const { standaloneHeartbeats, globalUpdates, totalHeartbeats } = calculateLoopSchedule(i, j, k, curatedContextEnabled);
+
+    const seedStrategyCalls = 1 + 2 * strategyProximityLoops;
+    const branchIterationCalls = 2 * i * strategiesCount;
+    const modCallsPerHeartbeat = modulesCount > 0 ? 1 + 2 * modulesImpactReviewLoops + modulesCount : 0;
+    const standaloneHeartbeatCalls = standaloneHeartbeats * ((modulesCount > 0 ? 1 : 0) + modCallsPerHeartbeat);
+    const guHeartbeatCalls = curatedContextEnabled ? globalUpdates * modCallsPerHeartbeat : 0;
+    const guStepICalls = globalUpdates * (1 + strategiesCount);
+    const guStepViCalls = globalUpdates * (modulesCount > 0 ? 1 : 0);
+    const guMaintenanceMin = globalUpdates * strategiesCount;
+    const guMaintenanceMax = globalUpdates * (seedStrategyCalls + 2 * strategiesCount);
+    const finalJudgeCalls = 1;
+
+    const commonBase = seedStrategyCalls + branchIterationCalls + standaloneHeartbeatCalls + guHeartbeatCalls + guStepICalls + guStepViCalls + finalJudgeCalls;
+    const baseMin = commonBase + guMaintenanceMin;
+    const baseMax = commonBase + guMaintenanceMax;
+
+    const isSandboxEnabled = params.deepthinkCodeExecutionEnabled === true || (params as any).codeExecutionEnabled === true;
+    const minMultiplier = isSandboxEnabled ? SANDBOX_API_CALL_MULTIPLIER.min : 1;
+    const maxMultiplier = isSandboxEnabled ? SANDBOX_API_CALL_MULTIPLIER.max : 1;
+
+    const totalHeartbeatsWithMod = modulesCount > 0 ? totalHeartbeats : 0;
+    const breakdown: DeepthinkApiCallBreakdown = {
+        initialStrategy: {
+            min: 1 + strategyProximityLoops,
+            max: (1 + strategyProximityLoops) * (1 + globalUpdates),
+        },
+        strategyProximity: {
+            min: strategyProximityLoops,
+            max: strategyProximityLoops * (1 + globalUpdates),
+        },
+        solutionAttempt: {
+            min: strategiesCount,
+            max: strategiesCount * (1 + globalUpdates),
+        },
+        solutionCritique: {
+            min: i * strategiesCount,
+            max: (i + globalUpdates) * strategiesCount,
+        },
+        solutionCorrection: Math.max(0, i - 1) * strategiesCount,
+        dos: standaloneHeartbeats * (modulesCount > 0 ? 1 : 0) + globalUpdates * (1 + (modulesCount > 0 ? 1 : 0)),
+        modulesGeneration: totalHeartbeatsWithMod * (1 + modulesImpactReviewLoops),
+        modulesImpactReview: totalHeartbeatsWithMod * modulesImpactReviewLoops,
+        modulesTester: totalHeartbeatsWithMod * modulesCount,
+        bsr: globalUpdates * strategiesCount,
+        memoryBank: { min: globalUpdates * strategiesCount, max: 0 },
+        finalJudge: finalJudgeCalls,
+        standaloneHeartbeats,
+        globalUpdates,
+        totalHeartbeats,
+    };
+
+    return {
+        min: baseMin * minMultiplier,
+        max: baseMax * maxMultiplier,
+        baseMin,
+        baseMax,
+        breakdown,
+        sandboxMultiplier: { min: minMultiplier, max: maxMultiplier },
+    };
+}
+
+export class ApiCallEstimator {
+    private readonly countElement: HTMLElement | null;
+    constructor(private readonly modelConfig: ModelConfigManager) {
+        this.countElement = document.getElementById('api-call-count');
+    }
+
+    public updateApiCallDisplay(): void {
+        const countEl = (this.countElement && document.contains(this.countElement))
+            ? this.countElement
+            : document.getElementById('api-call-count');
+        if (countEl) {
+            const { min, max } = calculateDeepthinkApiCallsFromParams(this.modelConfig.getParameters());
+            const formattedMin = formatApiCallCount(min);
+            const formattedMax = formatApiCallCount(max);
+            countEl.textContent = min === max ? `~${formattedMin}` : `~${formattedMin} to ${formattedMax}`;
+        }
+    }
+}
+
+export interface DeepthinkTokenEstimateInput {
     strategiesCount: number;
-    hypothesisCount: number;
-    deepthinkDepth: number;
+    strategyProximityLoops?: number;
+    modulesCount: number;
+    modulesImpactReviewLoops?: number;
+    deepthinkDepth?: number;
+    i?: number;
+    j?: number;
+    k?: number;
     isolateBranches?: boolean;
-    disableSolutionPool?: boolean;
+    codeExecutionEnabled?: boolean;
 }
 
 interface TokenRange {
@@ -18,329 +160,410 @@ interface TokenRange {
     worst: number;
 }
 
-interface ApiCallRange {
+export interface ApiCallRange {
     min: number;
     max: number;
+    baseMin?: number;
+    baseMax?: number;
+    breakdown?: DeepthinkApiCallBreakdown;
+    sandboxMultiplier?: { min: number; max: number };
 }
 
 export interface DeepthinkTokenEstimate {
     depth: number;
     strategiesCount: number;
-    hypothesisCount: number;
+    modulesCount: number;
     input: TokenRange;
     output: TokenRange;
     total: TokenRange;
     apiCalls: ApiCallRange;
 }
 
+const DEFAULT_ROLE_MAX_OUTPUT_TOKENS = 5_000;
+const EXTENDED_ROLE_MAX_OUTPUT_TOKENS = 10_000;
+
 interface TokenProfile {
-    branchPairContext: number;
-    poolContext: number;
-    solutionContext: number;
-    hypothesisPacketContext: number;
-    initialExecutionInput: number;
-    hypothesisTestInput: number;
-    memoryBankContext: number;
     promptBase: number;
-    solutionOutput: number;
-    critiqueOutput: number;
-    poolOutput: number;
-    hypothesisTestOutput: number;
-    hypothesisGenerationOutputPerHypothesis: number;
+    harnessNoteTokens: number;
+    reframedNoteTokens: number;
     strategyGenerationOutputPerStrategy: number;
+    modulesGenerationOutputPerModule: number;
+    strategyProximityOutput: number;
+    modulesImpactReviewOutput: number;
+    solutionAttemptOutput: number;
+    solutionCorrectionOutput: number;
+    critiqueOutput: number;
     memoryOutput: number;
-    pqfOutput: number;
-    strategyUpdateOutput: number;
+    modulesTestOutput: number;
+    dosStepIOutput: number;
+    dosFullOutput: number;
+    dosCoreSynthesisContext: number;
+    bsrOutput: number;
+    bsrLedgerGrowthPerUpdate: number;
     finalJudgeOutput: number;
-    updateBranchShare: number;
     branchPacketShare: number;
 }
 
-const MAX_DEEPTHINK_STRATEGIES = 5;
-const MAX_DEEPTHINK_DEPTH = 10;
-const MEMORY_INTERVAL = 5;
-const HYPOTHESIS_HEARTBEAT_INTERVAL = 2;
-const PQF_GROUP_SIZE = 2;
-const CORRECTOR_CONTEXT_CEILING = 195_000;
-const SOLUTION_POOL_CONTEXT_CEILING = 155_000;
+export const SANDBOX_PER_CALL = {
+    input: { average: 50_000, worst: 350_000 },
+    output: { average: 30_000, worst: 250_000 },
+};
+
+export const SANDBOX_ITERATION_NOISE = { min: 256_000, max: 512_000 };
+
+export function getRandomSandboxIterationNoise(): number {
+    return Math.floor(Math.random() * (SANDBOX_ITERATION_NOISE.max - SANDBOX_ITERATION_NOISE.min + 1)) + SANDBOX_ITERATION_NOISE.min;
+}
 
 const WORST_PROFILE: TokenProfile = {
-    branchPairContext: 20_000,
-    poolContext: 15_000,
-    solutionContext: 12_000,
-    hypothesisPacketContext: 8_000,
-    initialExecutionInput: 30_000,
-    hypothesisTestInput: 5_000,
-    memoryBankContext: 4_000,
     promptBase: 5_000,
-    solutionOutput: 12_000,
-    critiqueOutput: 6_000,
-    poolOutput: 15_000,
-    hypothesisTestOutput: 8_000,
-    hypothesisGenerationOutputPerHypothesis: 500,
-    strategyGenerationOutputPerStrategy: 500,
-    memoryOutput: 4_000,
-    pqfOutput: 1_500,
-    strategyUpdateOutput: 3_000,
-    finalJudgeOutput: 5_000,
-    updateBranchShare: 1,
-    branchPacketShare: 1,
+    harnessNoteTokens: 400,
+    reframedNoteTokens: 250,
+    strategyGenerationOutputPerStrategy: 1_000,
+    modulesGenerationOutputPerModule: 800,
+    strategyProximityOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    modulesImpactReviewOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    solutionAttemptOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    solutionCorrectionOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
+    critiqueOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    memoryOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
+    modulesTestOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    dosStepIOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    dosFullOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    dosCoreSynthesisContext: 3_500,
+    bsrOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    bsrLedgerGrowthPerUpdate: 800,
+    finalJudgeOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    branchPacketShare: 1.0,
 };
 
 const AVERAGE_PROFILE: TokenProfile = {
-    branchPairContext: 4_000,
-    poolContext: 2_750,
-    solutionContext: 3_500,
-    hypothesisPacketContext: 1_750,
-    initialExecutionInput: 9_000,
-    hypothesisTestInput: 1_800,
-    memoryBankContext: 2_000,
-    promptBase: 4_000,
-    solutionOutput: 3_500,
-    critiqueOutput: 1_200,
-    poolOutput: 3_200,
-    hypothesisTestOutput: 1_800,
-    hypothesisGenerationOutputPerHypothesis: 300,
-    strategyGenerationOutputPerStrategy: 250,
-    memoryOutput: 1_400,
-    pqfOutput: 600,
-    strategyUpdateOutput: 800,
-    finalJudgeOutput: 1_500,
-    updateBranchShare: 0.2,
+    promptBase: 3_500,
+    harnessNoteTokens: 250,
+    reframedNoteTokens: 150,
+    strategyGenerationOutputPerStrategy: 550,
+    modulesGenerationOutputPerModule: 450,
+    strategyProximityOutput: 2_000,
+    modulesImpactReviewOutput: 2_000,
+    solutionAttemptOutput: 3_200,
+    solutionCorrectionOutput: 6_000,
+    critiqueOutput: 2_400,
+    memoryOutput: 5_500,
+    modulesTestOutput: 2_800,
+    dosStepIOutput: 2_200,
+    dosFullOutput: 3_000,
+    dosCoreSynthesisContext: 1_800,
+    bsrOutput: 1_800,
+    bsrLedgerGrowthPerUpdate: 400,
+    finalJudgeOutput: 2_800,
     branchPacketShare: 0.5,
 };
+
+type SampledBsrDecision = 'CONTINUE' | 'EVOLVE' | 'PRUNE';
+
+function sampleGlobalUpdateDecisions(strategyCount: number): SampledBsrDecision[] {
+    return Array.from({ length: strategyCount }, () => {
+        const roll = Math.random();
+        return roll < 0.35 ? 'CONTINUE' : roll < 0.70 ? 'EVOLVE' : 'PRUNE';
+    });
+}
+
+function computeProximityLoopTokens(
+    baseContextInput: number,
+    proximityLoops: number,
+    generatorTurnOutput: number,
+    proximityTurnOutput: number
+) {
+    let inputTokens = 0, outputTokens = 0, accumulatedLoopTranscript = 0;
+    for (let reviewIdx = 0; reviewIdx <= proximityLoops; reviewIdx++) {
+        inputTokens += baseContextInput + accumulatedLoopTranscript;
+        outputTokens += generatorTurnOutput;
+        accumulatedLoopTranscript += generatorTurnOutput;
+        if (reviewIdx < proximityLoops) {
+            inputTokens += baseContextInput + accumulatedLoopTranscript;
+            outputTokens += proximityTurnOutput;
+            accumulatedLoopTranscript += proximityTurnOutput;
+        }
+    }
+    return { inputTokens, outputTokens, transcriptTokens: accumulatedLoopTranscript };
+}
 
 function clampInteger(value: number, min: number, max: number): number {
     if (!Number.isFinite(value)) return min;
     return Math.max(min, Math.min(max, Math.round(value)));
 }
 
-function getHypothesisRoundGlobals(depth: number): number[] {
-    const rounds = [0];
-    for (let globalIteration = HYPOTHESIS_HEARTBEAT_INTERVAL; globalIteration <= depth; globalIteration += HYPOTHESIS_HEARTBEAT_INTERVAL) {
-        rounds.push(globalIteration);
-    }
-    return rounds;
+interface BranchSimState {
+    hasMemoryBank: boolean;
+    preUpdatePairTokens: number;
+    windowHistoryTokens: number;
+    latestSolutionTokens: number;
+    latestCritiqueTokens: number;
+    updatesSurvived: number;
 }
 
-function getPqfGroupSizes(strategyCount: number): number[] {
-    const sizes: number[] = [];
-    for (let remaining = strategyCount; remaining > 0; remaining -= PQF_GROUP_SIZE) {
-        sizes.push(Math.min(PQF_GROUP_SIZE, remaining));
-    }
-    return sizes;
-}
-
-function calculateApiCalls(strategyCount: number, hypothesisCount: number, depth: number, disableSolutionPool: boolean): ApiCallRange {
-    let min = 1; // Initial strategy generation
-    let max = 1;
-
-    if (hypothesisCount > 0) {
-        const hypothesisRounds = getHypothesisRoundGlobals(depth).length;
-        min += hypothesisRounds * (1 + hypothesisCount);
-        max += hypothesisRounds * (1 + hypothesisCount);
-    }
-
-    const branchCallsPerDepth = disableSolutionPool ? 2 : 3;
-    min += strategyCount * depth * branchCallsPerDepth;
-    max += strategyCount * depth * branchCallsPerDepth;
-
-    const maintenancePasses = Math.floor(depth / MEMORY_INTERVAL);
-    const pqfAgentCount = Math.ceil(strategyCount / PQF_GROUP_SIZE);
-    min += maintenancePasses * (strategyCount + pqfAgentCount);
-    max += maintenancePasses * (strategyCount + pqfAgentCount + 1 + (strategyCount * 2));
-
-    min += 1; // Final judging
-    max += 1;
-
-    return { min, max };
-}
-
-function calculateHypothesisInput(profile: TokenProfile, strategyCount: number, hypothesisCount: number, depth: number): number {
-    if (hypothesisCount <= 0) return 0;
-
-    return getHypothesisRoundGlobals(depth).reduce((total, globalIteration, roundIndex) => {
-        const previousRoundCount = roundIndex;
-        const previousPackets = previousRoundCount * hypothesisCount * profile.hypothesisPacketContext;
-        const recentBranchHistory = globalIteration > 0
-            ? strategyCount * Math.min(2, globalIteration) * profile.branchPairContext
-            : strategyCount * 500;
-        const generationInput = profile.promptBase + previousPackets + recentBranchHistory;
-        const testingInput = hypothesisCount * profile.hypothesisTestInput;
-        return total + generationInput + testingInput;
-    }, 0);
-}
-
-function calculateBranchInput(
+function simulatePipelineTokens(
     profile: TokenProfile,
     strategyCount: number,
-    hypothesisCount: number,
-    depth: number,
+    strategyProximityLoops: number,
+    modulesCount: number,
+    modulesImpactReviewLoops: number,
+    i: number,
+    j: number,
+    k: number,
     isolateBranches: boolean,
-    disableSolutionPool: boolean
-): number {
-    let input = 0;
-    const branchPacketContext = hypothesisCount *
-        profile.hypothesisPacketContext *
-        profile.branchPacketShare;
+    sampledDecisionsPerUpdate?: SampledBsrDecision[][]
+): { input: number; output: number } {
+    let totalInput = 0, totalOutput = 0;
+    const strategyTextTokens = profile.strategyGenerationOutputPerStrategy;
+    const moduleItemTokens = profile.modulesGenerationOutputPerModule;
 
-    for (let currentDepth = 1; currentDepth <= depth; currentDepth++) {
-        if (currentDepth === 1) {
-            input += strategyCount * (profile.initialExecutionInput + branchPacketContext);
+    const seedGenTurnOutput = Math.min(DEFAULT_ROLE_MAX_OUTPUT_TOKENS, strategyCount * strategyTextTokens);
+    const seedLoop = computeProximityLoopTokens(profile.promptBase, strategyProximityLoops, seedGenTurnOutput, profile.strategyProximityOutput);
+    totalInput += seedLoop.inputTokens;
+    totalOutput += seedLoop.outputTokens;
+
+    let priorStrategyProximityHistoryTokens = seedLoop.transcriptTokens;
+    let strategiesFinalizedAndUsedCount = strategyCount;
+    let priorModulesImpactReviewHistoryTokens = 0;
+    let modulesFinalizedAndUsedCount = 0;
+
+    const branches: BranchSimState[] = Array.from({ length: strategyCount }, () => ({
+        hasMemoryBank: false,
+        preUpdatePairTokens: 0,
+        windowHistoryTokens: 0,
+        latestSolutionTokens: 0,
+        latestCritiqueTokens: 0,
+        updatesSurvived: 0,
+    }));
+
+    const curatedContextEnabled = modulesCount > 0;
+    let sinceHeartbeat = 0, heartbeatNo = 0, globalUpdateNo = 0;
+
+    const runHeartbeatModulesAndTesters = (currentHbNo: number) => {
+        let hbActiveContextTokens = profile.harnessNoteTokens;
+        if (currentHbNo === 1) {
+            const activeStrategiesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens, 0);
+            hbActiveContextTokens += activeStrategiesTokens + profile.dosCoreSynthesisContext;
         } else {
-            const currentHistoryPairs = Math.min(currentDepth - 1, MEMORY_INTERVAL);
-            const correctionInput = Math.min(
-                (isolateBranches ? 0 : (strategyCount - 1) * profile.branchPairContext) +
-                (currentHistoryPairs * profile.branchPairContext) +
-                (disableSolutionPool ? 0 : profile.poolContext) +
-                branchPacketContext,
-                CORRECTOR_CONTEXT_CEILING
-            );
-            input += strategyCount * correctionInput;
+            const prevModAndTestsTokens = modulesCount * (moduleItemTokens + profile.modulesTestOutput);
+            const mappedPacketsSchemaTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + 80, 0);
+            const realizedFeedbackTokens = modulesCount * 350;
+            const usedSoFarTokens = modulesFinalizedAndUsedCount * moduleItemTokens;
+            hbActiveContextTokens += prevModAndTestsTokens + mappedPacketsSchemaTokens + realizedFeedbackTokens + usedSoFarTokens + profile.dosCoreSynthesisContext;
         }
 
-        const critiqueHistoryPairs = Math.min(currentDepth - 1, MEMORY_INTERVAL);
-        input += strategyCount * (profile.solutionContext + (critiqueHistoryPairs * profile.branchPairContext));
+        const hbBaseInput = profile.promptBase + priorModulesImpactReviewHistoryTokens + hbActiveContextTokens;
+        const modGenTurnOutput = Math.min(DEFAULT_ROLE_MAX_OUTPUT_TOKENS, modulesCount * moduleItemTokens);
+        const modLoop = computeProximityLoopTokens(hbBaseInput, modulesImpactReviewLoops, modGenTurnOutput, profile.modulesImpactReviewOutput);
+        totalInput += modLoop.inputTokens;
+        totalOutput += modLoop.outputTokens;
 
-        if (!disableSolutionPool) {
-            const poolContextCount = currentDepth === 1
-                ? 0
-                : (isolateBranches ? 0 : strategyCount - 1) + Math.min(currentDepth - 1, MEMORY_INTERVAL);
-            const poolInput = Math.min(
-                profile.branchPairContext +
-                (poolContextCount * profile.poolContext) +
-                branchPacketContext,
-                SOLUTION_POOL_CONTEXT_CEILING
-            );
-            input += strategyCount * poolInput;
+        priorModulesImpactReviewHistoryTokens += profile.reframedNoteTokens + modLoop.transcriptTokens;
+        modulesFinalizedAndUsedCount += modulesCount;
+
+        totalInput += modulesCount * (profile.promptBase + moduleItemTokens);
+        totalOutput += modulesCount * profile.modulesTestOutput;
+    };
+
+    for (let n = 1; n <= i; n++) {
+        if (n === 1) {
+            for (const branch of branches) {
+                const attemptInput = profile.promptBase + strategyTextTokens;
+                const attemptOutput = profile.solutionAttemptOutput;
+                const critiqueInput = profile.promptBase + strategyTextTokens + attemptOutput;
+                const critiqueOutput = profile.critiqueOutput;
+                totalInput += attemptInput + critiqueInput;
+                totalOutput += attemptOutput + critiqueOutput;
+                branch.latestSolutionTokens = attemptOutput;
+                branch.latestCritiqueTokens = critiqueOutput;
+                branch.windowHistoryTokens = attemptOutput + critiqueOutput;
+            }
+        } else {
+            const totalAllBranchesLatestPairs = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
+            const mappedPacketTokens = (curatedContextEnabled && heartbeatNo >= 1)
+                ? modulesCount * profile.branchPacketShare * (moduleItemTokens + profile.modulesTestOutput)
+                : 0;
+
+            for (const branch of branches) {
+                const ownLatestPair = strategyTextTokens + branch.latestSolutionTokens + branch.latestCritiqueTokens;
+                const peerContextTokens = isolateBranches ? 0 : Math.max(0, totalAllBranchesLatestPairs - ownLatestPair);
+                const memBankTokens = branch.hasMemoryBank ? profile.memoryOutput : 0;
+                const preUpdateTokens = branch.preUpdatePairTokens;
+                const windowTokens = branch.windowHistoryTokens;
+
+                const correctionInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + mappedPacketTokens + windowTokens + peerContextTokens;
+                const correctionOutput = profile.solutionCorrectionOutput;
+                const critiqueInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + windowTokens + correctionOutput;
+                const critiqueOutput = profile.critiqueOutput;
+
+                totalInput += correctionInput + critiqueInput;
+                totalOutput += correctionOutput + critiqueOutput;
+                branch.latestSolutionTokens = correctionOutput;
+                branch.latestCritiqueTokens = critiqueOutput;
+                branch.windowHistoryTokens += correctionOutput + critiqueOutput;
+            }
+        }
+
+        const step = determinePostIterationStep(n, sinceHeartbeat, i, j, k, curatedContextEnabled);
+        sinceHeartbeat = step.nextSinceHeartbeat;
+
+        if (step.action.type === 'FINAL_JUDGE') {
+            const candidatesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
+            totalInput += profile.promptBase + candidatesTokens;
+            totalOutput += profile.finalJudgeOutput;
+            break;
+        } else if (step.action.type === 'HEARTBEAT') {
+            heartbeatNo++;
+            if (curatedContextEnabled) {
+                const activeBranchesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
+                const prevModAndTestsForDos = heartbeatNo >= 2 ? modulesCount * (moduleItemTokens + profile.modulesTestOutput) : 0;
+                totalInput += profile.promptBase + profile.harnessNoteTokens + activeBranchesTokens + prevModAndTestsForDos;
+                totalOutput += profile.dosFullOutput;
+                runHeartbeatModulesAndTesters(heartbeatNo);
+            }
+            sinceHeartbeat = 0;
+        } else if (step.action.type === 'GLOBAL_UPDATE') {
+            globalUpdateNo++;
+            const decisions = sampledDecisionsPerUpdate?.[globalUpdateNo - 1] ?? sampleGlobalUpdateDecisions(strategyCount);
+
+            const activeBranchesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
+            totalInput += profile.promptBase + profile.harnessNoteTokens + activeBranchesTokens;
+            totalOutput += profile.dosStepIOutput;
+
+            for (const branch of branches) {
+                const memBeforeWindowTokens = branch.hasMemoryBank ? profile.memoryOutput : 0;
+                const ledgerTokens = branch.updatesSurvived * profile.bsrLedgerGrowthPerUpdate;
+                totalInput += profile.promptBase + strategyTextTokens + memBeforeWindowTokens + ledgerTokens + branch.windowHistoryTokens;
+                totalOutput += profile.bsrOutput;
+            }
+
+            const changedCount = decisions.filter(d => d !== 'CONTINUE').length;
+            if (changedCount > 0) {
+                const activeStrategiesAndLatestCorrections = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens, 0);
+                const consolidatedBsrDecisionsTokens = strategyCount * 250;
+                const strategiesUsedSoFarTokens = strategiesFinalizedAndUsedCount * strategyTextTokens;
+                const guContextTokens = profile.harnessNoteTokens + activeStrategiesAndLatestCorrections + consolidatedBsrDecisionsTokens + profile.dosCoreSynthesisContext + strategiesUsedSoFarTokens;
+                const guStratBaseInput = profile.promptBase + priorStrategyProximityHistoryTokens + guContextTokens;
+                const guStratGenTurnOutput = Math.min(DEFAULT_ROLE_MAX_OUTPUT_TOKENS, changedCount * strategyTextTokens);
+                const guStratLoop = computeProximityLoopTokens(guStratBaseInput, strategyProximityLoops, guStratGenTurnOutput, profile.strategyProximityOutput);
+                totalInput += guStratLoop.inputTokens;
+                totalOutput += guStratLoop.outputTokens;
+                priorStrategyProximityHistoryTokens += profile.reframedNoteTokens + guStratLoop.transcriptTokens;
+                strategiesFinalizedAndUsedCount += changedCount;
+            }
+
+            for (let s = 0; s < strategyCount; s++) {
+                const branch = branches[s];
+                const decision = decisions[s];
+                if (decision === 'CONTINUE' || decision === 'EVOLVE') {
+                    const prevMemTokens = branch.hasMemoryBank ? profile.memoryOutput : 0;
+                    totalInput += profile.promptBase + strategyTextTokens + prevMemTokens + branch.windowHistoryTokens;
+                    totalOutput += profile.memoryOutput;
+                    branch.hasMemoryBank = true;
+                    branch.preUpdatePairTokens = branch.latestSolutionTokens + branch.latestCritiqueTokens;
+                    branch.windowHistoryTokens = 0;
+                    branch.updatesSurvived += 1;
+                } else {
+                    const attemptInput = profile.promptBase + strategyTextTokens;
+                    const attemptOutput = profile.solutionAttemptOutput;
+                    const critiqueInput = profile.promptBase + strategyTextTokens + attemptOutput;
+                    const critiqueOutput = profile.critiqueOutput;
+                    totalInput += attemptInput + critiqueInput;
+                    totalOutput += attemptOutput + critiqueOutput;
+                    branch.hasMemoryBank = false;
+                    branch.latestSolutionTokens = attemptOutput;
+                    branch.latestCritiqueTokens = critiqueOutput;
+                    branch.preUpdatePairTokens = attemptOutput + critiqueOutput;
+                    branch.windowHistoryTokens = 0;
+                    branch.updatesSurvived = 0;
+                }
+            }
+
+            heartbeatNo++;
+            if (curatedContextEnabled) {
+                const postUpdateBranchesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
+                const prevModAndTestsForStepIi = heartbeatNo >= 2 ? modulesCount * (moduleItemTokens + profile.modulesTestOutput) : 0;
+                const slotStatusesTokens = strategyCount * 80;
+                totalInput += profile.promptBase + profile.harnessNoteTokens + slotStatusesTokens + profile.dosStepIOutput + prevModAndTestsForStepIi + postUpdateBranchesTokens;
+                totalOutput += profile.dosFullOutput;
+                runHeartbeatModulesAndTesters(heartbeatNo);
+            }
+            sinceHeartbeat = 0;
         }
     }
 
-    return input;
-}
-
-function calculateMaintenanceInput(profile: TokenProfile, strategyCount: number, depth: number): number {
-    const maintenancePasses = Math.floor(depth / MEMORY_INTERVAL);
-    if (maintenancePasses <= 0) return 0;
-
-    const groupSizes = getPqfGroupSizes(strategyCount);
-    let input = 0;
-
-    for (let pass = 1; pass <= maintenancePasses; pass++) {
-        const memoryInputPerStrategy = profile.promptBase +
-            (MEMORY_INTERVAL * profile.branchPairContext) +
-            (pass > 1 ? profile.memoryBankContext : 0);
-        input += strategyCount * memoryInputPerStrategy;
-
-        input += groupSizes.reduce((total, groupSize) => {
-            return total + profile.promptBase + (groupSize * MEMORY_INTERVAL * profile.branchPairContext);
-        }, 0);
-
-        const updatedBranches = strategyCount * profile.updateBranchShare;
-        if (updatedBranches > 0) {
-            input += profile.promptBase +
-                (updatedBranches * (profile.branchPairContext + profile.memoryBankContext)) +
-                (strategyCount * 500);
-            input += updatedBranches * (profile.initialExecutionInput + profile.solutionContext);
-        }
-    }
-
-    return input;
-}
-
-function calculateInputTokens(
-    profile: TokenProfile,
-    strategyCount: number,
-    hypothesisCount: number,
-    depth: number,
-    isolateBranches: boolean,
-    disableSolutionPool: boolean
-): number {
-    const strategyGenerationInput = profile.promptBase + (strategyCount * 500);
-    const finalJudgeInput = profile.promptBase + (strategyCount * profile.solutionContext);
-
-    return Math.round(
-        strategyGenerationInput +
-        calculateHypothesisInput(profile, strategyCount, hypothesisCount, depth) +
-        calculateBranchInput(profile, strategyCount, hypothesisCount, depth, isolateBranches, disableSolutionPool) +
-        calculateMaintenanceInput(profile, strategyCount, depth) +
-        finalJudgeInput
-    );
-}
-
-function calculateOutputTokens(
-    profile: TokenProfile,
-    strategyCount: number,
-    hypothesisCount: number,
-    depth: number,
-    disableSolutionPool: boolean
-): number {
-    const hypothesisRounds = hypothesisCount > 0 ? getHypothesisRoundGlobals(depth).length : 0;
-    const maintenancePasses = Math.floor(depth / MEMORY_INTERVAL);
-    const pqfAgentCount = Math.ceil(strategyCount / PQF_GROUP_SIZE);
-    const updatedBranches = strategyCount * profile.updateBranchShare * maintenancePasses;
-
-    const branchOutput = strategyCount * depth * (
-        profile.solutionOutput +
-        profile.critiqueOutput +
-        (disableSolutionPool ? 0 : profile.poolOutput)
-    );
-
-    const maintenanceOutput = maintenancePasses * (
-        (strategyCount * profile.memoryOutput) +
-        (pqfAgentCount * profile.pqfOutput) +
-        profile.strategyUpdateOutput
-    );
-
-    return Math.round(
-        (strategyCount * profile.strategyGenerationOutputPerStrategy) +
-        branchOutput +
-        (hypothesisRounds * hypothesisCount * (
-            profile.hypothesisGenerationOutputPerHypothesis +
-            profile.hypothesisTestOutput
-        )) +
-        maintenanceOutput +
-        (updatedBranches * (profile.solutionOutput + profile.critiqueOutput)) +
-        profile.finalJudgeOutput
-    );
+    return { input: Math.round(totalInput), output: Math.round(totalOutput) };
 }
 
 export function calculateDeepthinkTokenEstimate(args: DeepthinkTokenEstimateInput): DeepthinkTokenEstimate {
     const strategiesCount = clampInteger(args.strategiesCount, 1, MAX_DEEPTHINK_STRATEGIES);
-    const hypothesisCount = clampInteger(args.hypothesisCount, 0, MAX_HYPOTHESIS_COUNT);
-    const depth = clampInteger(args.deepthinkDepth, 1, MAX_DEEPTHINK_DEPTH);
-    const isolateBranches = args.isolateBranches === true;
-    const disableSolutionPool = args.disableSolutionPool === true;
+    const strategyProximityLoops = clampInteger(args.strategyProximityLoops ?? 1, 0, MAX_STRATEGY_PROXIMITY_LOOPS);
+    const modulesCount = clampInteger(args.modulesCount, 0, MAX_MODULES_COUNT);
+    const modulesImpactReviewLoops = clampInteger(args.modulesImpactReviewLoops ?? 1, 0, MAX_MODULES_IMPACT_REVIEW_LOOPS);
+    const i = clampInteger(args.i ?? args.deepthinkDepth ?? 10, 1, MAX_DEEPTHINK_DEPTH);
+    const j = clampInteger(args.j ?? 4, 3, 8);
+    const k = clampInteger(args.k ?? 4, 2, j);
+    const isolateBranches = args.codeExecutionEnabled === true || args.isolateBranches === true;
 
-    const averageInput = calculateInputTokens(AVERAGE_PROFILE, strategiesCount, hypothesisCount, depth, isolateBranches, disableSolutionPool);
-    const worstInput = calculateInputTokens(WORST_PROFILE, strategiesCount, hypothesisCount, depth, isolateBranches, disableSolutionPool);
-    const averageOutput = calculateOutputTokens(AVERAGE_PROFILE, strategiesCount, hypothesisCount, depth, disableSolutionPool);
-    const worstOutput = calculateOutputTokens(WORST_PROFILE, strategiesCount, hypothesisCount, depth, disableSolutionPool);
+    const maxUpdates = Math.floor(Math.max(0, i - 1) / j);
+    const sampledDecisionsPerUpdate = Array.from({ length: maxUpdates }, () => sampleGlobalUpdateDecisions(strategiesCount));
+
+    const averageSim = simulatePipelineTokens(AVERAGE_PROFILE, strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, i, j, k, isolateBranches, sampledDecisionsPerUpdate);
+    const worstSim = simulatePipelineTokens(WORST_PROFILE, strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, i, j, k, isolateBranches, sampledDecisionsPerUpdate);
+
+    const apiCalls = calculateDeepthinkApiCallsFromParams({
+        strategiesCount,
+        strategyProximityLoops,
+        modulesCount,
+        modulesImpactReviewLoops,
+        i,
+        j,
+        k,
+        codeExecutionEnabled: args.codeExecutionEnabled,
+        deepthinkCodeExecutionEnabled: args.codeExecutionEnabled,
+    } as any);
+
+    const minMultiplier = args.codeExecutionEnabled ? (apiCalls.sandboxMultiplier?.min ?? 12) : 1;
+    const maxMultiplier = args.codeExecutionEnabled ? (apiCalls.sandboxMultiplier?.max ?? 36) : 1;
+
+    const sandboxInputAvg = args.codeExecutionEnabled && apiCalls.baseMin ? apiCalls.baseMin * SANDBOX_PER_CALL.input.average : 0;
+    const sandboxInputWorst = args.codeExecutionEnabled && apiCalls.baseMax ? apiCalls.baseMax * SANDBOX_PER_CALL.input.worst : 0;
+    const sandboxOutputAvg = args.codeExecutionEnabled && apiCalls.baseMin ? apiCalls.baseMin * SANDBOX_PER_CALL.output.average : 0;
+    const sandboxOutputWorst = args.codeExecutionEnabled && apiCalls.baseMax ? apiCalls.baseMax * SANDBOX_PER_CALL.output.worst : 0;
+
+    let sandboxIterationNoiseAvg = 0, sandboxIterationNoiseWorst = 0;
+    if (args.codeExecutionEnabled) {
+        for (let iter = 1; iter <= i; iter++) {
+            sandboxIterationNoiseAvg += getRandomSandboxIterationNoise();
+            sandboxIterationNoiseWorst += getRandomSandboxIterationNoise();
+        }
+        if (sandboxIterationNoiseWorst < sandboxIterationNoiseAvg) {
+            [sandboxIterationNoiseAvg, sandboxIterationNoiseWorst] = [sandboxIterationNoiseWorst, sandboxIterationNoiseAvg];
+        }
+    }
+
+    const totalAverageInput = averageSim.input * minMultiplier + sandboxInputAvg + sandboxIterationNoiseAvg;
+    const totalWorstInput = worstSim.input * maxMultiplier + sandboxInputWorst + sandboxIterationNoiseWorst;
+    const totalAverageOutput = averageSim.output + sandboxOutputAvg;
+    const totalWorstOutput = worstSim.output + sandboxOutputWorst;
 
     return {
-        depth,
+        depth: i,
         strategiesCount,
-        hypothesisCount,
-        input: {
-            average: averageInput,
-            worst: worstInput,
-        },
-        output: {
-            average: averageOutput,
-            worst: worstOutput,
-        },
-        total: {
-            average: averageInput + averageOutput,
-            worst: worstInput + worstOutput,
-        },
-        apiCalls: calculateApiCalls(strategiesCount, hypothesisCount, depth, disableSolutionPool),
+        modulesCount,
+        input: { average: totalAverageInput, worst: totalWorstInput },
+        output: { average: totalAverageOutput, worst: totalWorstOutput },
+        total: { average: totalAverageInput + totalAverageOutput, worst: totalWorstInput + totalWorstOutput },
+        apiCalls,
     };
 }
 
-export function buildDeepthinkTokenTrend(args: Omit<DeepthinkTokenEstimateInput, 'deepthinkDepth'> & { maxDepth?: number }): DeepthinkTokenEstimate[] {
+export function buildDeepthinkTokenTrend(args: Omit<DeepthinkTokenEstimateInput, 'deepthinkDepth' | 'i'> & { maxDepth?: number }): DeepthinkTokenEstimate[] {
     const maxDepth = clampInteger(args.maxDepth ?? MAX_DEEPTHINK_DEPTH, 1, MAX_DEEPTHINK_DEPTH);
     return Array.from({ length: maxDepth }, (_, index) => calculateDeepthinkTokenEstimate({
         ...args,
         deepthinkDepth: index + 1,
+        i: index + 1,
     }));
 }

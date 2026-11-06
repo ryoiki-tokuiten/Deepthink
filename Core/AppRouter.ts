@@ -64,7 +64,7 @@ function renderActiveMode() {
             } else {
                 const pipelinesContentContainer = document.getElementById('pipelines-content-container');
                 if (pipelinesContentContainer) {
-                    const panel = await import('../Deepthink/DeepthinkConfigPanel');
+                    const panel = await import('../Deepthink/ui/DeepthinkConfigPanel');
                     if (mode !== globalState.currentMode || token !== renderToken) return;
                     if (globalState.activeDeepthinkPipeline) {
                         mod.renderActiveDeepthinkPipeline();
@@ -76,8 +76,7 @@ function renderActiveMode() {
             return;
         }
 
-        // Fallback for unknown/unsupported modes
-        console.warn('Unknown or unsupported mode in active renderer:', mode);
+        throw new Error(`Unknown or unsupported mode in active renderer: ${mode}`);
     })();
 }
 

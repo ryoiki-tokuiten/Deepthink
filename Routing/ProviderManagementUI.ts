@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import { isOpenAICompatibleProvider, ProviderManager, ProviderConfig } from './ProviderManager';
 import { renderIconMarkup } from '../UI/Icons';
 
@@ -19,196 +14,116 @@ function isAtlasCloudEndpoint(endpoint?: string): boolean {
 }
 
 function escapeHtml(value: string): string {
-    return value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
 export class ProviderManagementUI {
-    private providerManager: ProviderManager;
-    private elements: {
-        trigger: HTMLElement | null;
-        promptsButton: HTMLElement | null;
-        overlay: HTMLElement | null;
-        closeButton: HTMLElement | null;
-        content: HTMLElement | null;
+    private elements = {
+        trigger: null as HTMLElement | null,
+        promptsButton: null as HTMLElement | null,
+        overlay: null as HTMLElement | null,
+        closeButton: null as HTMLElement | null,
+        content: null as HTMLElement | null,
     };
     private onModelsChangedCallback?: () => void;
-    private promptsModal?: any;
 
-    constructor(providerManager: ProviderManager, promptsModal?: any) {
-        this.providerManager = providerManager;
-        this.promptsModal = promptsModal;
-        this.elements = {
-            trigger: null,
-            promptsButton: null,
-            overlay: null,
-            closeButton: null,
-            content: null
-        };
-        this.initializeElements();
+    constructor(private providerManager: ProviderManager, private promptsModal?: any) {
+        this.createModal();
+        const container = document.getElementById('provider-buttons-mount-point');
+        if (container) this.mountButtons(container);
 
-        // Listen to model updates to automatically re-render card contents when dynamically loaded
         this.providerManager.addModelUpdateListener(() => {
-            if (this.elements.overlay && this.elements.overlay.style.display === 'flex') {
-                this.renderProviderCards();
-            }
+            if (this.elements.overlay?.style.display === 'flex') this.renderProviderCards();
         });
     }
 
-    private initializeElements(): void {
-        this.createModal();
-
-        // Try to mount buttons if container exists (for initial load)
-        const container = document.getElementById('provider-buttons-mount-point');
-        if (container) {
-            this.mountButtons(container);
-        }
-    }
-
     public mountButtons(container: HTMLElement): void {
-        // Clear container first to prevent duplicates
         container.innerHTML = '';
-
-        // Create container for both buttons
         const buttonsContainer = document.createElement('div');
         buttonsContainer.className = 'provider-buttons-container';
 
-        // Create Add Providers button
         const triggerButton = document.createElement('button');
         triggerButton.id = 'add-providers-trigger';
         triggerButton.className = 'add-providers-button btn';
-        triggerButton.innerHTML = `
-            ${renderIconMarkup('key_round')}
-            <span>Providers</span>
-        `;
+        triggerButton.innerHTML = `${renderIconMarkup('key_round')}<span>Providers</span>`;
 
-        // Create Prompts button
         const promptsButton = document.createElement('button');
         promptsButton.id = 'prompts-trigger';
         promptsButton.className = 'prompts-button btn';
-        promptsButton.innerHTML = `
-            ${renderIconMarkup('edit')}
-            <span>Prompts</span>
-        `;
+        promptsButton.innerHTML = `${renderIconMarkup('edit')}<span>Prompts</span>`;
 
-        buttonsContainer.appendChild(triggerButton);
-        buttonsContainer.appendChild(promptsButton);
-
+        buttonsContainer.append(triggerButton, promptsButton);
         container.appendChild(buttonsContainer);
 
         this.elements.trigger = triggerButton;
         this.elements.promptsButton = promptsButton;
 
         triggerButton.addEventListener('click', () => this.show());
-        promptsButton.addEventListener('click', () => {
-            this.openPromptsModal();
-        });
-
+        promptsButton.addEventListener('click', () => this.openPromptsModal());
         this.updateTriggerState();
     }
 
     private createModal(): void {
-        // Create modal overlay using the same structure as prompts modal
         const overlay = document.createElement('div');
         overlay.id = 'provider-management-overlay';
         overlay.className = 'modal-overlay';
         overlay.style.display = 'none';
-
         overlay.innerHTML = `
             <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="provider-management-title">
                 <header class="modal-header">
-                    <h2 id="provider-management-title" class="modal-title">
-                        ${renderIconMarkup('key')}
-                        Provider Management
-                    </h2>
-                    <button id="provider-management-close" class="modal-close-button" aria-label="Close Provider Management">
-                        ${renderIconMarkup('close')}
-                    </button>
+                    <h2 id="provider-management-title" class="modal-title">${renderIconMarkup('key')} Provider Management</h2>
+                    <button id="provider-management-close" class="modal-close-button" aria-label="Close Provider Management">${renderIconMarkup('close')}</button>
                 </header>
                 <div class="modal-body">
-                    <div id="provider-management-content" class="provider-management-content">
-                        <!-- Provider cards will be rendered here -->
-                    </div>
+                    <div id="provider-management-content" class="provider-management-content"></div>
                 </div>
             </div>
         `;
-
         document.body.appendChild(overlay);
         this.elements.overlay = overlay;
         this.elements.closeButton = overlay.querySelector('#provider-management-close');
         this.elements.content = overlay.querySelector('#provider-management-content');
 
-        // Add event listeners
-        if (this.elements.closeButton) {
-            this.elements.closeButton.addEventListener('click', () => this.hide());
-        }
-
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) {
-                this.hide();
-            }
-        });
-
-        // Add escape key listener
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && overlay.style.display === 'flex') {
-                this.hide();
-            }
-        });
+        this.elements.closeButton?.addEventListener('click', () => this.hide());
+        overlay.addEventListener('click', e => { if (e.target === overlay) this.hide(); });
+        document.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.style.display === 'flex') this.hide(); });
     }
 
     public show(): void {
-        if (this.elements.overlay) {
-            this.renderProviderCards();
-            this.elements.overlay.style.display = 'flex';
-            setTimeout(() => {
-                this.elements.overlay!.classList.add('is-visible');
-            }, 10);
-        }
+        if (!this.elements.overlay) return;
+        this.renderProviderCards();
+        this.elements.overlay.style.display = 'flex';
+        setTimeout(() => this.elements.overlay!.classList.add('is-visible'), 10);
     }
 
     public hide(): void {
-        if (this.elements.overlay) {
-            this.elements.overlay.classList.remove('is-visible');
-            this.elements.overlay.addEventListener('transitionend', () => {
-                if (!this.elements.overlay!.classList.contains('is-visible')) {
-                    this.elements.overlay!.style.display = 'none';
-                }
-            }, { once: true });
-        }
+        if (!this.elements.overlay) return;
+        this.elements.overlay.classList.remove('is-visible');
+        this.elements.overlay.addEventListener('transitionend', () => {
+            if (!this.elements.overlay!.classList.contains('is-visible')) this.elements.overlay!.style.display = 'none';
+        }, { once: true });
     }
 
     private renderProviderCards(): void {
         if (!this.elements.content) return;
-
-        const providers = this.providerManager.getAllProviders().filter(provider => !isOpenAICompatibleProvider(provider));
+        const providers = this.providerManager.getAllProviders().filter(p => !isOpenAICompatibleProvider(p));
         const openAICompatibleProviders = this.providerManager.getOpenAICompatibleProviders();
 
         this.elements.content.innerHTML = `
             <div class="provider-cards-grid">
-                ${providers.map(provider => this.renderProviderCard(provider)).join('')}
+                ${providers.map(p => this.renderProviderCard(p)).join('')}
                 ${this.renderOpenAICompatibleCard(openAICompatibleProviders)}
             </div>
         `;
-
-        // Add event listeners for each provider card
-        providers.forEach(provider => {
-            this.attachProviderCardListeners(provider);
-        });
-        openAICompatibleProviders.forEach(provider => {
-            this.attachProviderCardListeners(provider);
-        });
+        providers.forEach(p => this.attachProviderCardListeners(p));
+        openAICompatibleProviders.forEach(p => this.attachProviderCardListeners(p));
         this.attachOpenAICompatibleCardListeners();
     }
 
     private renderOpenAICompatibleCard(providers: ProviderConfig[]): string {
         const configuredCount = providers.length;
-        const hasOpenRouter = providers.some(provider => isOpenRouterEndpoint(provider.baseURL));
-        const hasAtlasCloud = providers.some(provider => isAtlasCloudEndpoint(provider.baseURL));
+        const hasOpenRouter = providers.some(p => isOpenRouterEndpoint(p.baseURL));
+        const hasAtlasCloud = providers.some(p => isAtlasCloudEndpoint(p.baseURL));
         return `
             <div class="provider-card openai-compatible-card" data-provider-id="openai-compatible">
                 <div class="provider-card-header">
@@ -224,7 +139,7 @@ export class ProviderManagementUI {
                     <div class="openai-compatible-content">
                         <div class="openai-compatible-instances">
                             ${providers.length > 0
-                                ? providers.map(provider => this.renderOpenAICompatibleInstance(provider)).join('')
+                                ? providers.map(p => this.renderOpenAICompatibleInstance(p)).join('')
                                 : '<div class="openai-compatible-empty">No compatible endpoints configured yet.</div>'}
                         </div>
                         <div class="openai-compatible-add-form">
@@ -236,16 +151,12 @@ export class ProviderManagementUI {
                                 </div>
                             </div>
                             <div class="openai-compatible-form-fields">
-                                <div class="input-group">
-                                    <input type="text" class="openai-compatible-name-input" placeholder="Name (optional)">
-                                </div>
+                                <div class="input-group"><input type="text" class="openai-compatible-name-input" placeholder="Name (optional)"></div>
                                 <div class="input-group">
                                     <input type="url" class="openai-compatible-endpoint-input" placeholder="Endpoint URL (e.g., https://api.example.com/v1)">
                                     <small class="input-help">Use the API base URL that exposes /chat/completions.</small>
                                 </div>
-                                <div class="input-group">
-                                    <input type="password" class="openai-compatible-api-key-input" placeholder="API key (optional)">
-                                </div>
+                                <div class="input-group"><input type="password" class="openai-compatible-api-key-input" placeholder="API key (optional)"></div>
                                 <div class="input-group">
                                     <input type="text" class="openai-compatible-models-input" placeholder="Model IDs (comma-separated)">
                                     <small class="input-help">Leave empty only when the endpoint exposes /models or is listed in Models.dev.</small>
@@ -272,9 +183,7 @@ export class ProviderManagementUI {
                 </div>
             `).join('')
             : '<div class="openai-compatible-empty">No models configured yet.</div>';
-        const maskedKey = provider.apiKey
-            ? `••••${provider.apiKey.slice(-4)}`
-            : 'No API key';
+        const maskedKey = provider.apiKey ? `••••${provider.apiKey.slice(-4)}` : 'No API key';
 
         return `
             <div class="openai-compatible-instance" data-provider-id="${escapeHtml(provider.name)}">
@@ -307,13 +216,18 @@ export class ProviderManagementUI {
 
     private getProviderElement(providerName: string): Element | null {
         if (!this.elements.content) return null;
-        const elements = this.elements.content.querySelectorAll('[data-provider-id]');
-        return Array.from(elements).find(element => element.getAttribute('data-provider-id') === providerName) ?? null;
+        return Array.from(this.elements.content.querySelectorAll('[data-provider-id]')).find(el => el.getAttribute('data-provider-id') === providerName) ?? null;
     }
 
     private renderProviderCard(provider: ProviderConfig): string {
         const isConfigured = provider.isConfigured;
         const isEnvironmentKey = this.isEnvironmentKey(provider.name);
+        const icons: Record<string, string> = {
+            gemini: '<img src="./Logos/Google.png" alt="Google Gemini" class="provider-logo">',
+            openai: '<img src="./Logos/OpenAI.png" alt="OpenAI" class="provider-logo">',
+            anthropic: '<img src="./Logos/Anthropic.png" alt="Anthropic" class="provider-logo">',
+            local: '<img src="./Logos/Local.png" alt="Local Models" class="provider-logo">',
+        };
 
         return `
             <div class="provider-card" data-provider-id="${provider.name}">
@@ -324,11 +238,8 @@ export class ProviderManagementUI {
                             ${isConfigured ? 'Configured' : 'Not Configured'}
                         </div>
                     </div>
-                    <div class="provider-icon">
-                        ${this.getProviderIcon(provider.name)}
-                    </div>
+                    <div class="provider-icon">${icons[provider.name] || renderIconMarkup('api')}</div>
                 </div>
-                
                 <div class="provider-card-body">
                     ${isConfigured ? this.renderConfiguredState(provider, isEnvironmentKey) : this.renderNotConfiguredState(provider)}
                 </div>
@@ -337,299 +248,153 @@ export class ProviderManagementUI {
     }
 
     private renderConfiguredState(provider: ProviderConfig, isEnvironmentKey: boolean): string {
-        const models = provider.models;
-        // For local models, all models are custom (no defaults)
         const isLocal = provider.name === 'local';
-
         return `
             <div class="configured-content">
-                ${isLocal && provider.apiKey ? `
-                    <div class="endpoint-info">
-                        ${renderIconMarkup('link')}
-                        <span class="endpoint-url">Endpoint: ${provider.apiKey}</span>
-                    </div>
-                ` : ''}
-                
+                ${isLocal && provider.apiKey ? `<div class="endpoint-info">${renderIconMarkup('link')}<span class="endpoint-url">Endpoint: ${provider.apiKey}</span></div>` : ''}
                 <div class="models-section">
                     <h4>Available Models</h4>
                     <div class="models-list">
-                        ${models.map(model => `
+                        ${provider.models.map(model => `
                             <div class="model-item ${isLocal ? 'custom-model' : 'default-model'}">
                                 <span class="model-name">${model}</span>
-                                ${isLocal ? `
-                                    <button class="remove-model-btn" data-provider="${provider.name}" data-model="${model}">
-                                        ${renderIconMarkup('close')}
-                                    </button>
-                                ` : ''}
+                                ${isLocal ? `<button class="remove-model-btn" data-provider="${provider.name}" data-model="${model}">${renderIconMarkup('close')}</button>` : ''}
                             </div>
                         `).join('')}
                     </div>
                 </div>
-                
                 <div class="add-model-section">
                     <div class="add-model-and-actions">
                         <div class="input-group">
-                            <input type="text" 
-                                   class="add-model-input" 
-                                   placeholder="Add custom model ID"
-                                   data-provider="${provider.name}">
+                            <input type="text" class="add-model-input" placeholder="Add custom model ID" data-provider="${provider.name}">
                             <button class="add-model-btn" data-provider="${provider.name}">Add</button>
                         </div>
-                        ${!isEnvironmentKey ? `
-                            <div class="provider-actions">
-                                <button class="remove-provider-btn" data-provider="${provider.name}">
-                                    Clear Key
-                                </button>
-                            </div>
-                        ` : ''}
+                        ${!isEnvironmentKey ? `<div class="provider-actions"><button class="remove-provider-btn" data-provider="${provider.name}">Clear Key</button></div>` : ''}
                     </div>
-                    ${isEnvironmentKey ? `
-                        <div class="env-key-notice">
-                            ${renderIconMarkup('info')}
-                            API key loaded from environment
-                        </div>
-                    ` : ''}
+                    ${isEnvironmentKey ? `<div class="env-key-notice">${renderIconMarkup('info')} API key loaded from environment</div>` : ''}
                 </div>
             </div>
         `;
     }
 
     private renderNotConfiguredState(provider: ProviderConfig): string {
-        // Special UI for Local Models provider
         if (provider.name === 'local') {
             return `
                 <div class="not-configured-content">
                     <div class="input-group">
-                        <input type="text" 
-                               class="api-key-input" 
-                               placeholder="Enter endpoint URL (e.g., http://localhost:1234)"
-                               data-provider="${provider.name}">
+                        <input type="text" class="api-key-input" placeholder="Enter endpoint URL (e.g., http://localhost:1234)" data-provider="${provider.name}">
                         <small class="input-help">The URL of your local model server (LM Studio, Ollama, etc.)</small>
                     </div>
-                    
                     <div class="input-group">
-                        <input type="text" 
-                               class="model-ids-input" 
-                               placeholder="Model IDs (comma-separated, required)"
-                               data-provider="${provider.name}">
+                        <input type="text" class="model-ids-input" placeholder="Model IDs (comma-separated, required)" data-provider="${provider.name}">
                         <small class="input-help">Enter the model IDs available on your local server</small>
                     </div>
-                    
-                    <button class="configure-provider-btn" data-provider="${provider.name}">
-                        Configure Local Models
-                    </button>
+                    <button class="configure-provider-btn" data-provider="${provider.name}">Configure Local Models</button>
                 </div>
             `;
         }
-
-        // Standard UI for other providers
         return `
             <div class="not-configured-content">
                 <div class="input-group">
-                    <input type="password" 
-                           class="api-key-input" 
-                           placeholder="Enter ${provider.displayName} API Key"
-                           data-provider="${provider.name}">
+                    <input type="password" class="api-key-input" placeholder="Enter ${provider.displayName} API Key" data-provider="${provider.name}">
                 </div>
-                
                 <div class="input-group">
-                    <input type="text" 
-                           class="model-ids-input" 
-                           placeholder="Model IDs (comma-separated, optional)"
-                           data-provider="${provider.name}">
+                    <input type="text" class="model-ids-input" placeholder="Model IDs (comma-separated, optional)" data-provider="${provider.name}">
                     <small class="input-help">Leave empty to use default models only</small>
                 </div>
-                
-                <button class="configure-provider-btn" data-provider="${provider.name}">
-                    Configure Provider
-                </button>
+                <button class="configure-provider-btn" data-provider="${provider.name}">Configure Provider</button>
             </div>
         `;
     }
 
     private attachProviderCardListeners(provider: ProviderConfig): void {
-        if (!this.elements.content) return;
         const card = this.getProviderElement(provider.name);
         if (!card) return;
-
-        // Configure provider button
-        const configureBtn = card.querySelector('.configure-provider-btn');
-        if (configureBtn) {
-            configureBtn.addEventListener('click', () => this.handleConfigureProvider(provider.name));
-        }
-
-        // Remove provider button
-        const removeBtn = card.querySelector('.remove-provider-btn');
-        if (removeBtn) {
-            removeBtn.addEventListener('click', () => this.handleRemoveProvider(provider.name));
-        }
-
-        // Add model button
-        const addModelBtn = card.querySelector('.add-model-btn');
-        if (addModelBtn) {
-            addModelBtn.addEventListener('click', () => this.handleAddModel(provider.name));
-        }
-
-        // Add model input enter key
-        const addModelInput = card.querySelector('.add-model-input') as HTMLInputElement;
-        if (addModelInput) {
-            addModelInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    this.handleAddModel(provider.name);
-                }
-            });
-        }
-
-        // Remove model buttons
-        const removeModelBtns = card.querySelectorAll('.remove-model-btn');
-        removeModelBtns.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const target = e.target as HTMLElement;
-                const button = target.closest('.remove-model-btn') as HTMLElement;
-                const modelId = button.dataset.model!;
-                this.handleRemoveModel(provider.name, modelId);
+        card.querySelector('.configure-provider-btn')?.addEventListener('click', () => this.handleConfigureProvider(provider.name));
+        card.querySelector('.remove-provider-btn')?.addEventListener('click', () => this.handleRemoveProvider(provider.name));
+        card.querySelector('.add-model-btn')?.addEventListener('click', () => this.handleAddModel(provider.name));
+        card.querySelector<HTMLInputElement>('.add-model-input')?.addEventListener('keypress', e => {
+            if (e.key === 'Enter') this.handleAddModel(provider.name);
+        });
+        card.querySelectorAll('.remove-model-btn').forEach(btn => {
+            btn.addEventListener('click', e => {
+                const button = (e.target as HTMLElement).closest('.remove-model-btn') as HTMLElement;
+                this.handleRemoveModel(provider.name, button.dataset.model!);
             });
         });
     }
 
     private attachOpenAICompatibleCardListeners(): void {
         if (!this.elements.content) return;
-        const addButton = this.elements.content.querySelector('.add-openai-compatible-btn');
-        addButton?.addEventListener('click', () => this.handleAddOpenAICompatibleProvider());
-
+        this.elements.content.querySelector('.add-openai-compatible-btn')?.addEventListener('click', () => this.handleAddOpenAICompatibleProvider());
         const form = this.elements.content.querySelector('.openai-compatible-add-form');
-        const nameInput = form?.querySelector('.openai-compatible-name-input') as HTMLInputElement | null;
-        const endpointInput = form?.querySelector('.openai-compatible-endpoint-input') as HTMLInputElement | null;
-        const apiKeyInput = form?.querySelector('.openai-compatible-api-key-input') as HTMLInputElement | null;
-        const modelsInput = form?.querySelector('.openai-compatible-models-input') as HTMLInputElement | null;
-        form?.querySelectorAll('.openai-compatible-preset-btn').forEach(button => {
+        const nameInput = form?.querySelector<HTMLInputElement>('.openai-compatible-name-input');
+        const endpointInput = form?.querySelector<HTMLInputElement>('.openai-compatible-endpoint-input');
+        const apiKeyInput = form?.querySelector<HTMLInputElement>('.openai-compatible-api-key-input');
+        const modelsInput = form?.querySelector<HTMLInputElement>('.openai-compatible-models-input');
+        form?.querySelectorAll<HTMLElement>('.openai-compatible-preset-btn').forEach(button => {
             button.addEventListener('click', () => {
-                const preset = (button as HTMLElement).dataset.preset;
                 if (!endpointInput) return;
-
-                if (preset === 'atlas-cloud') {
+                if (button.dataset.preset === 'atlas-cloud') {
                     if (nameInput) nameInput.value = 'Atlas Cloud';
                     endpointInput.value = ATLAS_CLOUD_ENDPOINT;
                     if (modelsInput) modelsInput.value = ATLAS_CLOUD_DEFAULT_MODEL;
                     apiKeyInput?.focus();
                     return;
                 }
-
                 endpointInput.value = OPENROUTER_ENDPOINT;
                 endpointInput.focus();
             });
         });
         form?.querySelectorAll('input').forEach(input => {
-            input.addEventListener('keypress', event => {
-                if (event.key === 'Enter') this.handleAddOpenAICompatibleProvider();
-            });
+            input.addEventListener('keypress', event => { if (event.key === 'Enter') this.handleAddOpenAICompatibleProvider(); });
         });
     }
 
     private handleConfigureProvider(providerName: string): void {
-        if (!this.elements.content) return;
         const card = this.getProviderElement(providerName);
         if (!card) return;
+        const apiKey = (card.querySelector('.api-key-input') as HTMLInputElement).value.trim();
+        const customModels = (card.querySelector('.model-ids-input') as HTMLInputElement).value.split(',').map(m => m.trim()).filter(Boolean);
 
-        const apiKeyInput = card.querySelector('.api-key-input') as HTMLInputElement;
-        const modelIdsInput = card.querySelector('.model-ids-input') as HTMLInputElement;
-
-        const apiKey = apiKeyInput.value.trim();
-
-        // For local models, validate endpoint URL and require model IDs
         if (providerName === 'local') {
-            if (!apiKey) {
-                this.showError(card, 'Please enter an endpoint URL');
-                return;
-            }
+            if (!apiKey) return this.showError(card, 'Please enter an endpoint URL');
+            if (!customModels.length) return this.showError(card, 'Please enter at least one model ID');
+        } else if (!apiKey) {
+            return this.showError(card, 'Please enter an API key');
+        }
 
-            const customModels = modelIdsInput.value
-                .split(',')
-                .map(m => m.trim())
-                .filter(m => m.length > 0);
-
-            if (customModels.length === 0) {
-                this.showError(card, 'Please enter at least one model ID');
-                return;
-            }
-
-            const success = this.providerManager.configureProvider(providerName, apiKey, customModels);
-            if (success) {
-                this.updateTriggerState();
-                this.renderProviderCards(); // Re-render to show configured state
-
-                // Notify the routing manager to refresh models
-                this.notifyModelsChanged();
-            } else {
-                this.showError(card, 'Failed to configure local models. Please check your endpoint URL.');
-            }
+        if (this.providerManager.configureProvider(providerName, apiKey, customModels)) {
+            this.updateTriggerState();
+            this.renderProviderCards();
+            this.onModelsChangedCallback?.();
         } else {
-            // Standard provider configuration
-            if (!apiKey) {
-                this.showError(card, 'Please enter an API key');
-                return;
-            }
-
-            const customModels = modelIdsInput.value
-                .split(',')
-                .map(m => m.trim())
-                .filter(m => m.length > 0);
-
-            const success = this.providerManager.configureProvider(providerName, apiKey, customModels);
-            if (success) {
-                this.updateTriggerState();
-                this.renderProviderCards(); // Re-render to show configured state
-
-                // Notify the routing manager to refresh models
-                this.notifyModelsChanged();
-            } else {
-                this.showError(card, 'Failed to configure provider. Please check your API key.');
-            }
+            this.showError(card, providerName === 'local' ? 'Failed to configure local models. Please check your endpoint URL.' : 'Failed to configure provider. Please check your API key.');
         }
     }
 
     private handleAddOpenAICompatibleProvider(): void {
-        if (!this.elements.content) return;
-        const card = this.elements.content.querySelector('.openai-compatible-card');
+        const card = this.elements.content?.querySelector('.openai-compatible-card');
         if (!card) return;
-
         const nameInput = card.querySelector('.openai-compatible-name-input') as HTMLInputElement;
         const endpointInput = card.querySelector('.openai-compatible-endpoint-input') as HTMLInputElement;
         const apiKeyInput = card.querySelector('.openai-compatible-api-key-input') as HTMLInputElement;
         const modelsInput = card.querySelector('.openai-compatible-models-input') as HTMLInputElement;
         const endpoint = endpointInput.value.trim();
-        const models = modelsInput.value.split(',').map(model => model.trim()).filter(Boolean);
+        const models = modelsInput.value.split(',').map(m => m.trim()).filter(Boolean);
 
-        if (!endpoint) {
-            this.showError(card, 'Error: Endpoint URL is required.');
-            return;
-        }
-
-        if (isOpenRouterEndpoint(endpoint) && !apiKeyInput.value.trim()) {
-            this.showError(card, 'Error: OpenRouter API key is required.');
-            return;
-        }
-
-        if (models.length === 0) {
+        if (!endpoint) return this.showError(card, 'Error: Endpoint URL is required.');
+        if (isOpenRouterEndpoint(endpoint) && !apiKeyInput.value.trim()) return this.showError(card, 'Error: OpenRouter API key is required.');
+        if (!models.length) {
             try {
-                const parsedEndpoint = new URL(endpoint);
-                if (!parsedEndpoint.hostname) throw new Error('Invalid URL');
+                if (!new URL(endpoint).hostname) throw new Error();
             } catch {
-                this.showError(card, 'Error: Endpoint URL is invalid.');
-                return;
+                return this.showError(card, 'Error: Endpoint URL is invalid.');
             }
         }
 
-        const result = this.providerManager.configureOpenAICompatibleProvider(
-            endpoint,
-            apiKeyInput.value,
-            models,
-            nameInput.value
-        );
-        if (!result.success) {
-            this.showError(card, result.error || 'Error: Endpoint URL or API compatibility could not be initialized.');
-            return;
-        }
+        const result = this.providerManager.configureOpenAICompatibleProvider(endpoint, apiKeyInput.value, models, nameInput.value);
+        if (!result.success) return this.showError(card, result.error || 'Error: Endpoint URL or API compatibility could not be initialized.');
 
         nameInput.value = '';
         endpointInput.value = '';
@@ -637,7 +402,7 @@ export class ProviderManagementUI {
         modelsInput.value = '';
         this.updateTriggerState();
         this.renderProviderCards();
-        this.notifyModelsChanged();
+        this.onModelsChangedCallback?.();
     }
 
     private handleRemoveProvider(providerName: string): void {
@@ -646,32 +411,20 @@ export class ProviderManagementUI {
             this.providerManager.removeProvider(providerName);
             this.updateTriggerState();
             this.renderProviderCards();
-
-            // Notify the routing manager to refresh models
-            this.notifyModelsChanged();
+            this.onModelsChangedCallback?.();
         }
     }
 
     private handleAddModel(providerName: string): void {
-        if (!this.elements.content) return;
         const card = this.getProviderElement(providerName);
         if (!card) return;
-
         const input = card.querySelector('.add-model-input') as HTMLInputElement;
         const modelId = input.value.trim();
-
-        if (!modelId) {
-            this.showError(card, 'Please enter a model ID');
-            return;
-        }
-
-        const success = this.providerManager.addCustomModel(providerName, modelId);
-        if (success) {
+        if (!modelId) return this.showError(card, 'Please enter a model ID');
+        if (this.providerManager.addCustomModel(providerName, modelId)) {
             input.value = '';
             this.renderProviderCards();
-
-            // Notify the routing manager to refresh models
-            this.notifyModelsChanged();
+            this.onModelsChangedCallback?.();
         } else {
             this.showError(card, 'Failed to add model or model already exists');
         }
@@ -680,85 +433,36 @@ export class ProviderManagementUI {
     private handleRemoveModel(providerName: string, modelId: string): void {
         this.providerManager.removeCustomModel(providerName, modelId);
         this.renderProviderCards();
-
-        // Notify the routing manager to refresh models
-        this.notifyModelsChanged();
+        this.onModelsChangedCallback?.();
     }
 
     private showError(card: Element, message: string): void {
-        // Remove existing error
-        const existingError = card.querySelector('.error-message');
-        if (existingError) {
-            existingError.remove();
-        }
-
-        // Add new error
+        card.querySelector('.error-message')?.remove();
         const errorDiv = document.createElement('div');
         errorDiv.className = 'error-message';
         errorDiv.textContent = message;
         card.appendChild(errorDiv);
-
-        // Remove error after 3 seconds
-        setTimeout(() => {
-            errorDiv.remove();
-        }, 3000);
+        setTimeout(() => errorDiv.remove(), 3000);
     }
-
-    private getProviderIcon(providerName: string): string {
-        const icons: Record<string, string> = {
-            gemini: '<img src="./Logos/Google.png" alt="Google Gemini" class="provider-logo">',
-            openai: '<img src="./Logos/OpenAI.png" alt="OpenAI" class="provider-logo">',
-            anthropic: '<img src="./Logos/Anthropic.png" alt="Anthropic" class="provider-logo">',
-            local: '<img src="./Logos/Local.png" alt="Local Models" class="provider-logo">'
-        };
-        return icons[providerName] || renderIconMarkup('api');
-    }
-
 
     private isEnvironmentKey(providerName: string): boolean {
         const provider = this.providerManager.getAllProviders().find(p => p.name === providerName);
         if (!provider?.apiKey) return false;
-
-        switch (providerName) {
-            case 'gemini':
-                return provider.apiKey === (process.env.GEMINI_API_KEY || process.env.AI_API_KEY || process.env.API_KEY);
-            case 'openai':
-                return provider.apiKey === process.env.OPENAI_API_KEY;
-            case 'anthropic':
-                return provider.apiKey === process.env.ANTHROPIC_API_KEY;
-            default:
-                return false;
-        }
+        if (providerName === 'gemini') return provider.apiKey === '__SERVER_ENV__';
+        if (providerName === 'openai') return provider.apiKey === process.env.OPENAI_API_KEY;
+        if (providerName === 'anthropic') return provider.apiKey === process.env.ANTHROPIC_API_KEY;
+        return false;
     }
 
     public updateTriggerState(): void {
-        if (!this.elements.trigger) return;
-
-        const hasConfiguredProviders = this.providerManager.hasAnyConfiguredProvider();
-
-        if (hasConfiguredProviders) {
-            this.elements.trigger.classList.add('configured');
-        } else {
-            this.elements.trigger.classList.remove('configured');
-        }
+        this.elements.trigger?.classList.toggle('configured', this.providerManager.hasAnyConfiguredProvider());
     }
 
     public setOnModelsChangedCallback(callback: () => void): void {
         this.onModelsChangedCallback = callback;
     }
 
-    private notifyModelsChanged(): void {
-        if (this.onModelsChangedCallback) {
-            this.onModelsChangedCallback();
-        }
-    }
-
     public openPromptsModal(): void {
-        if (this.promptsModal) {
-            console.log('Opening prompts modal');
-            this.promptsModal.show();
-        } else {
-            console.error('Prompts modal not available');
-        }
+        this.promptsModal?.show();
     }
 }

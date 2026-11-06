@@ -1,6 +1,6 @@
 
 import { ApplicationMode, DeepthinkPipelineState, FileData } from './Types';
-import { createDefaultCustomPromptsDeepthink } from '../Deepthink/DeepthinkPrompts';
+import { createDefaultCustomPromptsDeepthink } from '../Deepthink/prompts';
 import { createDefaultCustomPromptsAdaptiveDeepthink } from '../AdaptiveDeepthink/AdaptiveDeepthinkPrompt';
 import { createDefaultCustomPromptsContextual } from '../Contextual/ContextualPrompts';
 

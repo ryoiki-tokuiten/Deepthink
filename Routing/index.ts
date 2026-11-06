@@ -5,7 +5,7 @@
 
 import { RoutingManager } from './RoutingManager';
 
-export { callAI } from './AIService';
+export { callAI, type CallAIOptions } from './AIService';
 
 
 // Global routing manager instance - initialized lazily
@@ -50,16 +50,12 @@ export function getStrategyProximityLoops(): number {
     return getRoutingManager().getStrategyProximityLoops();
 }
 
-export function getSelectedHypothesisCount(): number {
-    return getRoutingManager().getHypothesisCount();
+export function getSelectedModulesCount(): number {
+    return getRoutingManager().getModulesCount();
 }
 
-export function getHypothesisProximityLoops(): number {
-    return getRoutingManager().getHypothesisProximityLoops();
-}
-
-export function getSelectedPqfAggressiveness(): string {
-    return getRoutingManager().getPqfAggressiveness();
+export function getModulesImpactReviewLoops(): number {
+    return getRoutingManager().getModulesImpactReviewLoops();
 }
 
 export function getDeepthinkDepth(): number {
@@ -70,8 +66,28 @@ export function getIsolateBranchesEnabled(): boolean {
     return getRoutingManager().isIsolateBranchesEnabled();
 }
 
-export function getSolutionPoolDisabled(): boolean {
-    return getRoutingManager().isSolutionPoolDisabled();
+export function getBsrNoiseLevel(): number {
+    return getRoutingManager().getBsrNoiseLevel();
+}
+
+export function getBsrPressureFloor(): number {
+    return getRoutingManager().getBsrPressureFloor();
+}
+
+export function getBsrWeightSmall(): number {
+    return getRoutingManager().getBsrWeightSmall();
+}
+
+export function getBsrWeightMedium(): number {
+    return getRoutingManager().getBsrWeightMedium();
+}
+
+export function getBsrWeightLarge(): number {
+    return getRoutingManager().getBsrWeightLarge();
+}
+
+export function getBsrWeightPreset(): string {
+    return getRoutingManager().getBsrWeightPreset();
 }
 
 export function hasValidApiKey(): boolean {

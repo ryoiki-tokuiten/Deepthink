@@ -1,7 +1,7 @@
 
 import type {
     DeepthinkPipelineState
-} from '../Deepthink/DeepthinkCore';
+} from '../Deepthink/core/deepthinkCore';
 
 export type {
     DeepthinkPipelineState

@@ -1,107 +1,186 @@
-# Iterative Studio
+## Deepthink pipeline flow
 
-Highly specific & carefully thought multi-agent pipelines. The goal is to scale the inference test-time compute for any kind of problem/benchmark and push the frontier. All major providers are supported + local model support fully.
+Deepthink is a carefully thought multi-agent pipeline that coordinates agents with focused roles by routing precise, surgical context to explore the solution search space. More broadly, it explores diverse "correct trajectories", "implementations", or "executions" in parallel for any given user request. The system is based on the following ideas: "strategies proximity", "modules impact review", "parallel exploration", "iterative corrections/refinements", "cross-strategy-learning through curated context", "independent modules generation & testing", and a "meta strategies evolving loop". Each agent role can be steered surgically by the user as needed.
 
-## Provider setup
+### Full Deepthink flow
 
-Open **Providers** and configure a native provider, a local endpoint, or an OpenAI-compatible API. Atlas Cloud is available as a preset: select **Use Atlas Cloud**, enter your Atlas Cloud API key, and add the endpoint. The preset uses `https://api.atlascloud.ai/v1` and starts with `deepseek-ai/deepseek-v4-flash`; the model list can be refreshed from the endpoint or edited after setup.
+You provide the problem or attach codebase files into the virtual environment and start the run. The system first generates high-level, distinct ways to approach the core challenge, which act as strategies. The system does not generate strategies in a single shot. A Strategy Generator and a Strategy Proximity Reviewer go back and forth for a few rounds so that surface-level variations, overlapping ideas, or blind spots get caught and refined before any execution starts.
 
-## Operational Modes
+In Iteration 1, every branch runs in parallel to produce its initial work inside its own `Strategy-N/` folder. Once all branches finish, a Critique agent runs on each branch in parallel to evaluate the solution for correctness, completeness, broken constraints, structural weaknesses, and whether the strategy itself still looks viable. The critique diagnoses issues without rewriting the solution.
 
-### 1. Deepthink Mode (huge refactoring in progress)
+From the second iteration onward, every branch runs a Correction agent followed by a Critique agent in parallel. The Correction agent receives the core challenge, its assigned strategy, the back-and-forth correction and critique history of its branch, any tested module packets routed to it, and the latest work and critiques from the other active branches so it can learn from what worked or failed across peer strategies. If you turn on `isolateBranches`, the Correction agent only sees its own branch. It produces an improved solution, which the Critique agent then evaluates again.
 
-Deepthink is a multi-agentic system that co-ordinates agents with highly focused roles by routing very precise and surgical context to explore the solution search space. More broadly, it explores diverse "correct trajectories" or "implementations" or "executions" in parallel for any given user request. The system is based on the following ideas: "strategies proximity", "hypothesis proximity" "parallel exploration", "iterative corrections/refinements", "cross-strategy-learning through curated context", "independent hypothesis generation & testing", "random structured noise injection" and a "meta strategies evolving loop (pruning)". Each agent role can be steered surgically by the user as needed.
+On top of this core loop, two periodic mechanisms keep the branches sharp and prevent wasted compute.
 
-**Full Deepthink Flow:**
-User provides the core challenge or put some files in your virtual environment and start the process. The system first generates high-level, distinct ways to approach the core challenge(strategies): in a global context, these are like parallel branches that tries to execute the given user core challenge using the provided approach (the strategy).
+### Heartbeats: modules generation and testing
 
-In parallel, various hypothesis are generated about the core user challenge and each one is tested independently. Hypotheses may include testing pivotal uncertainties or solving a problem for a smaller case and test if they can be transferred for a larger network etc. This is extremely useful context since it was tested with full attention by an independent agent and the agents further don't have to spend their tokens again thinking about that.
+After every `k` iterations, a heartbeat runs to refresh the curated evidence fed into the branches. A heartbeat only runs if it will serve at least two corrections before the next global update, because every global update ends with its own heartbeat anyway.
 
-Most of the times, hypothesis are aware about the strategies i.e. they know exactly what strategies will be executed in the system later. So the hypotheses here are generated so that the agents executing those strategies can benefit., these are also resolved in advanced i.e. exactly what hypothesis testing should this strategy / branch agents should see to keep the context focused. Hypothesis generation and testing organically produce useful context and information that can be integrated into the branches. These are called information packet (or sub-packets if they are strategy-resolved).
+First, a Dissected Observations Synthesis agent, or DOS, reads the latest work and critiques across all branches to summarize where every branch stands and how well earlier modules were actually used. For every module sent out in the previous heartbeat, DOS checks each target branch and classifies utilization as `USED_CORRECTLY`, `USED_PARTIALLY`, `NOT_USED`, or `MISUSED`. It also flags when a later critique gives strong evidence against a tester's verdict.
 
-Now, the execution agent (actual work-producing agent) receives the core challenge + its assigned strategy + available information packet. It produce its work. Its work is then critiqued. this happens in each and every branch in parallel.
+Next, a Modules Generator and a Modules Impact Reviewer go back and forth for `modulesImpactReviewLoops` rounds to propose `modulesCount` high-leverage modules about key uncertainties, bottlenecks, verification harnesses, or smaller cases worth verifying. When generating new modules, they also see the previous test verdicts, the utilization breakdown across branches, and whether branches actually benefited from them.
 
-By default, before producing the correction blindly by simply passing the execution + critique, this system introduces an extra agent in this step: structured solution pool agent. their sole purpose is to add random structured noise to each branch so that the branch is not stuck in a local-minima. pool contains various artifacts, independent helpful blocks, correction approaches, logic fragments, alternative improvements, or full alterative solutions that the correction agent may benefit from... but they are all not necessarily correct, rigorous and complete. yes, this can contain the wrong artifacts and that's the "random structured noise" in this context. the reason behind this is that typical execution > critique > correction never works with LLMs. they will always get stuck in some kind of cognitive loop. showing them wrong artifacts  or approaches explicitly executed removes their cognitive restraint and they actually start considering paths or approaches for implementation of some idea or solving some problem that they might only consider in their chain of thoughts but never in the actual final work pushed. it is like adding random structured noise within a sanity boundary. Once the solution pool is ready, the correction agent receives the previous work + critique + available information packet + solution pool for that branch + curated cross-strategy context and it produces an improved work product.
+Dedicated tester agents then test each module independently in parallel inside `Modules/Heartbeat-h/Module-M/`. That way the branch execution agents do not have to spend their own tokens and attention testing side ideas. Each tester finishes with a verdict of `VALIDATED`, `REJECTED`, or `INCONCLUSIVE`, and can also drop reusable verification scripts or proven helpers into `/tmp` and `shared_workspace.md`. The runner maps the verified results back as focused information packets to the specific branches listed in `target_branches`, or to all branches when `target_branches` is empty.
 
-and that's pretty much all. on top of this loop, there is an extra highly precise engineering to refresh the hypothesis (and thus information packets) after every k iteration., or after certain iterations distill the history into memory banks(what worked, what improved, what critique patterns persisted etc), or update the main strategies themselves (post-quality filter) after some point based on the degree to which critique-correction go back in a loop without a big delta (i.e. is the branch stuck? or the strategy is flawed? etc). post quality filter decides whether a branch should continue, be refined, or be replaced with an updated strategy.
-after certain iterations, the final corrections are collected and sent to the final judge. it selects the best execution.
+In the iterations that follow a heartbeat, each branch's Correction agent receives its mapped module packet in `<LatestCustomCuratedContext>` and can pull verified scripts, proofs, and shared verifiers from `/tmp` and `/workspace` while coordinating live findings across branches on `shared_workspace.md`.
 
-**Sandbox Environment and Artifact Submission**:
-Deepthink integrates a secure sandbox virtual environment for execution and verification.
-- **Repository Visibility**: Every Deepthink role receives `sandbox_exec` and `final_output` when the Sandbox Terminal Environment is enabled. Active branches use `Strategy-N/{Critique,SolutionPool}`: execution and correction write direct branch files, critique owns `Critique`, and the pool owns `SolutionPool`. PQF replacements archive the complete old branch under `Pruned_Strategies/Strategy-N_First_PQF` (then ordinal successors) before recreating fresh active slot directories. Hypothesis tests are organized by `Hypothesis-vN`, while only current selectively routed tests are mounted to branch workers. (this is largely a scaffolding and I am currently working on a cleaner solution.)
-- **Submit Final Artifact**: Sandbox-enabled agents use `sandbox_exec` for iterative exploration and testing, then use `final_output` to submit their completed work. JSON-producing roles submit their existing role-specific JSON object directly through `final_output`; the environment validates that contract in the tool loop and returns a correction error without discarding the agent's research. Downstream agents and the central system receive only the submitted artifact, filtering out intermediate command transcripts and scratchpad data.
+| Heartbeat synthesis, testing, and packet mapping | Branches pulling tested modules into subsequent iterations |
+|---|---|
+| ![Heartbeat module generation, parallel testing, and branch mapping](Deepthink/docs/diagrams/Modules.png) | ![Branches pulling tested modules and shared verifiers into subsequent iterations](<Deepthink/docs/diagrams/CoreLoop(2).png>) |
 
+### Global updates: branch evaluation, rollbacks, pruning, and memory distillation
 
-See [Deepthink architecture and context flow](Deepthink/DeepthinkDocs.md) for the complete agent contracts, repository schemas, mode behavior, iteration synchronization, and failure policy. The previous diagram remains archived at `Deepthink/OldSystemArchitecture.png`.
+After a window of `j` iterations, a global update runs to evaluate how each branch has been trending as a whole trajectory. No agent decides what happens to a branch. Instead, a Branch State Representation agent, or BSR, reviews the window for each branch and reports confirmed progress events, confirmed regressions, and how well corrections followed critiques.
 
+BSR tags each confirmed event as `small`, `medium`, or `large`, which carry default weights of `0.15`, `0.30`, and `0.50`. A correction claiming it fixed a bug does not count as progress on its own. A later critique or a sandbox run has to back it up. BSR also outputs `critique_alignment` from `-1` to `1` so a good strategy does not take the blame when a correction agent ignored the critique.
 
-### 2. Adaptive Deepthink Mode
+Deterministic formulas in code combine that window report with the branch's lifetime standing event ledger. Code tracks the running total across the window, the peak iteration `last_good_iteration`, the share of movement undone after that peak as `lost_ground`, and the lifetime `progress_kept` ratio. Using the noise floor `bsrNoiseLevel` at `0.05` and pressure threshold `bsrPressureFloor` at `0.20`, code turns those signals into one of four outcomes:
 
-**Purpose**: An orchestrator-directed, pass-based Deepthink workflow for divergent strategic search without a separate final judge.
+- **Continue.** The branch is making real progress and keeps going.
+- **Evolve in place.** The branch has built strong progress that is worth keeping, but its current angle has plateaued. The strategy generator updates its strategy to push further while keeping its work, history, and ledger intact.
+- **Evolve with rollback.** The branch started well earlier in the window and then regressed into a worse trajectory. Rewriting a prompt rarely saves a branch that is already deep in a broken state, so the runner reverts the branch folder in git back to `last_good_iteration`, drops the discarded iterations from its history and ledger, and updates its strategy so it does not repeat the same dead end.
+- **Prune.** The branch is stuck or failing with little standing progress. The runner archives its folder into `Pruned_Strategies/` and replaces the slot with a brand new strategy, which runs its first execution and critique before the next window begins.
 
-**Worker topology**:
-- Strategy Generator ↔ Strategies Proximity
-- Hypothesis Generator ↔ Hypothesis Proximity
-- Test Hypothesis
-- Execution → Critique → Correction for each selected strategy
+At the same time, every surviving branch distills its window history into a compact memory bank covering what worked, what improved, and what critique patterns kept recurring, so future iterations stay focused without losing hard-won lessons.
 
-Each generation/proximity pair runs a bounded three-round internal revision loop. The orchestrator remains responsible for judging evidence, selectively routing tested hypotheses, saving successful strategies, replacing failed unsaved slots, and submitting the final answer.
+After all `i` iterations complete, the runner sends the final solutions and critiques from the surviving branches to the Final Judge, which evaluates the candidates and selects the best execution.
 
-**Tool system**:
-- `generate_strategies` — generates or updates up to five unsaved strategies.
-- `generate_hypothesis` and `test_hypothesis` — create critique-driven, non-strategy-aware hypotheses and test them independently.
-- `execute` — parallel per-strategy Execution → Critique → Correction, with optional per-branch `specialContext`.
-- `save` — permanently reserves a strategy and its corrected branch state.
-- `finalize_pass_and_execute` — compacts the completed pass into Markdown/trace files, advances the pass, then executes the requested next branches.
-- `read_files`, `virtual_environment`, and `submit_final_output` — restore compacted evidence, use the shared sandbox repository, and let the orchestrator submit the final answer.
+| Deterministic BSR window scoring and slot decisions | Full multi-window memory folding and branch control loop |
+|---|---|
+| ![Branch state observations and decisions](Deepthink/docs/diagrams/BranchStateObservations.png) | ![Core loop and multi-branch control](Deepthink/docs/diagrams/CoreLoop.png) |
 
-**Filesystem and UI**:
-Adaptive runs project directly into the Deepthink Live and Filesystem tabs. When the Sandbox Terminal Environment is enabled, every worker receives the corresponding Deepthink role permissions and `final_output`; the orchestrator receives an explicit root read/write virtual-environment tool. Full agent outputs and JSON traces are written to the Results repository. Before an unsaved branch's correction runs, its strategy directory is checkpointed; the checkpoint is restored before a later pass reuses that strategy, so discarded corrections cannot leak into future executions.
+### Git repository and shared workspace
 
+When the sandbox environment is enabled, every agent works inside a shared git-backed repository at `Results/deepthink_<timestamp>/`, mounted at `/workspace` inside the sandbox.
 
-### 3. Contextual Mode
+Every branch folder, heartbeat test folder, and history file sits side by side in a single working tree. Because all branches run in parallel and read each other's files, everything has to be on disk at the same time.
 
-**Purpose**: Iterative refinement through specialized agent collaboration.
+Each branch writes inside its own `Strategy-N/` directory, which holds `strategy.md`, solution code, per-iteration markdown snapshots in `iterations/`, and raw `.jsonl` trajectories and memory banks in `history/`. Module testers work in their own `Modules/Heartbeat-h/Module-M/` directories. When a branch is pruned, the runner moves its folder to `Pruned_Strategies/Strategy-N_pruned_01/` so the `Strategy-N/` slot name stays clean for the replacement branch.
 
-This can work stable upto 2 Hours without human intervention for difficult problems and actually yield high quality insights and results.
+Every agent can read across the entire repository, use the untracked `/workspace/tmp` scratch directory for shared verification scripts and test runners, and read or update `shared_workspace.md` through the `shared_workspace` tool. That file is capped at 5,000 tokens and supports `read`, `edit`, and `append` actions so concurrent agents can leave verified notes for each other without waiting for the next iteration. Agents run their experiments with `sandbox_exec` and submit their final artifact through `final_output`, keeping raw command logs and failed experiments out of downstream prompts.
 
-**Architecture**:
-- Three-agent system with distinct responsibilities:
-  1. **Main Generator**: Produces content based on user requirements
-  2. **Iterative Agent**: Suggests improvements and corrections
-  3. **Memory Agent**: Works like a long term memory.
+Agents never run `git commit` or `git checkout` themselves. The runner serializes all git commits between agent turns when nothing is writing, committing each `Strategy-N/` directory at the end of every iteration and at the start of every window. Restoring one rolled-back branch folder from an earlier commit never touches the other branches. The runner also writes a compressed state checkpoint to `latest.gz` after every step so you can stop and resume a run without losing finished work.
 
-**Key Components**:
-- `ContextualCore.ts`: State management and history tracking
-- Separate history managers for each agent type
-- Automated context window management
+![Git repository and file system layout](Deepthink/docs/diagrams/Git-File-System.png)
 
-**Agent Interaction**:
-```
-User Request → Main Generator → Generated Content
-                      ↓
-              Iterative Agent → Suggestions
-                      ↓
-              Main Generator → Refined Content
-                      ↓
-              [Repeat until complete]
-                      ↓
-              Memory Agent → History Compression
+## Adaptive Deepthink
+
+Adaptive Deepthink is basically deepthink mode access given to an orchestrator agent. It is still very brittle and I haven't really spent time observing its failures.
+
+A central orchestrator running inside a LangGraph state loop decides at each pass when to generate or replace strategies with `generate_strategies`, when to formulate and independently test modules from critiques with `generate_modules` and `test_modules`, which branches to execute, critique, and correct in parallel with `execute`, and which promising branches to save permanently with `save`. Before a correction agent runs on an unsaved branch, the system takes a git snapshot of that branch directory. If the orchestrator decides not to save the branch after seeing the correction, the directory rolls back to that pre-correction snapshot before the next pass.
+
+Long reasoning runs fall apart when the orchestrator's context fills up with old transcripts. To prevent that, the orchestrator calls `finalize_pass_and_execute` when a pass finishes. That writes the completed pass outputs into markdown files under `/workspace/Results` and moves a compaction boundary forward in the orchestrator's message history. Verbose transcripts from earlier passes drop out of the prompt and get replaced by file links that the orchestrator can read on demand with `read_files`. The orchestrator also has root read and write access to `/workspace` through `virtual_environment` and submits the final answer directly through `submit_final_output`.
+
+---
+
+## Installation and setup
+
+Clone the repository, install dependencies, and start the dev server:
+
+```bash
+git clone https://github.com/ryoiki-tokuiten/Deepthink
+cd Deepthink
+npm install
+npm run dev
 ```
 
-**Key Features**:
-- Automatic history condensation when context limits approached
-- Iterative refinement through suggestion-response cycles
-- Clean separation of concerns between agents
-- Real-time visualization of agent interactions
+The app starts at `http://localhost:3000/Iterative-Contextual-Refinements/`. You can configure all provider keys and models directly in the frontend UI, or optionally put `GEMINI_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY` in a `.env` file in the project root.
 
-**Workflow**:
-1. Main generator creates initial content
-2. Iterative agent analyzes and suggests improvements
-3. Main generator applies suggestions
-4. Memory agent compresses history when needed
-5. Cycle continues until completion criteria met
+## Sandbox execution environment configuration
 
+When code execution is enabled, agents run bash commands inside an OS sandbox backed by Docker or bubblewrap, `bwrap`. By default, `ITERATIVE_STUDIO_SANDBOX_RUNTIME=auto` uses Docker when the Docker daemon is reachable and falls back to `bwrap`.
+
+In Docker mode, containers run with a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, and writable mounts only for the agent's assigned folder and `/tmp`. In bubblewrap mode, the backend creates isolated user, PID, IPC, and UTS namespaces, mounts system paths read-only, and restricts writes to the agent's folder and `/tmp`. If the host has a Rust toolchain, the backend mounts only the rustc sysroot read-only at `/sandbox-rust` so agents can run `rustc` and `cargo` without seeing your home directory.
+
+A fresh clone does not silently download gigabytes of packages on startup. You can prewarm a shared read-only environment at `~/.cache/iterative-studio/sandbox-env`, mounted at `/sandbox-env` inside the sandbox, or adjust runtime limits and agent budgets at any time using environment variables when starting the server.
+
+Configure the maximum tool calls per agent invocation, the wall-clock timeout per agent invocation, and the default and maximum timeout for each `sandbox_exec` command:
+
+```bash
+ITERATIVE_STUDIO_SANDBOX_MAX_TOOL_TURNS=64 \
+ITERATIVE_STUDIO_SANDBOX_MAX_DURATION_MINUTES=60 \
+ITERATIVE_STUDIO_SANDBOX_COMMAND_TIMEOUT_MS=120000 \
+ITERATIVE_STUDIO_SANDBOX_MAX_COMMAND_TIMEOUT_MS=300000 \
+npm run dev
+```
+
+Start with the full shared prewarm bundle, which installs the default scientific Python packages, Node utility packages, Lean 4 via `elan`, and a cached Mathlib Lake project:
+
+```bash
+ITERATIVE_STUDIO_SANDBOX_PREWARM=1 npm run dev
+```
+
+Prewarm Python and Node packages only, skipping the multi-gigabyte Lean 4 and Mathlib download:
+
+```bash
+ITERATIVE_STUDIO_SANDBOX_PREWARM=1 ITERATIVE_STUDIO_SANDBOX_LEAN=0 npm run dev
+```
+
+Enable Lean 4 and Mathlib prewarm on its own, and optionally pin a specific Lean toolchain or Mathlib revision:
+
+```bash
+ITERATIVE_STUDIO_SANDBOX_LEAN=1 \
+ITERATIVE_STUDIO_SANDBOX_LEAN_TOOLCHAIN="leanprover/lean4:stable" \
+ITERATIVE_STUDIO_SANDBOX_MATHLIB_REV="v4.31.0" \
+npm run dev
+```
+
+When Lean and Mathlib are enabled, agents can run `lean-check` to verify the toolchain and `lean-init-mathlib ProjectName` to scaffold a workspace Lake project linked against the cached Mathlib build.
+
+Override which Python or Node packages get preinstalled into `/sandbox-env`, or change where the shared cache lives on disk:
+
+```bash
+ITERATIVE_STUDIO_SANDBOX_PREWARM=1 \
+ITERATIVE_STUDIO_SANDBOX_ENV_ROOT="$HOME/.cache/iterative-studio/sandbox-env" \
+ITERATIVE_STUDIO_SANDBOX_PYTHON_PACKAGES="numpy scipy pandas matplotlib sympy networkx pytest hypothesis" \
+ITERATIVE_STUDIO_SANDBOX_NODE_PACKAGES="lodash zod mathjs csv-parse fast-check" \
+npm run dev
+```
+
+Force a specific sandbox runtime, disable network access inside the sandbox, or raise the Docker container CPU, memory, and process limits:
+
+```bash
+ITERATIVE_STUDIO_SANDBOX_RUNTIME=docker \
+ITERATIVE_STUDIO_SANDBOX_IMAGE="python:3.12-bookworm" \
+ITERATIVE_STUDIO_SANDBOX_NETWORK=none \
+ITERATIVE_STUDIO_SANDBOX_CPUS=4 \
+ITERATIVE_STUDIO_SANDBOX_MEMORY=4g \
+ITERATIVE_STUDIO_SANDBOX_PIDS_LIMIT=512 \
+npm run dev
+```
+
+Force bubblewrap with a private network namespace and a custom directory for storing Deepthink run repositories:
+
+```bash
+ITERATIVE_STUDIO_SANDBOX_RUNTIME=bwrap \
+ITERATIVE_STUDIO_SANDBOX_NETWORK=none \
+ITERATIVE_STUDIO_RESULTS_ROOT="./Results" \
+npm run dev
+```
+
+## Supported providers and models
+
+You can set up all providers and models directly from the frontend UI without touching config files, or pass API keys through environment variables. You can use one model for the entire run or assign different models from different providers to individual agent roles in the prompt settings:
+
+- **Google Gemini.** Add your key in the frontend or set `GEMINI_API_KEY`.
+- **OpenAI.** Add your key in the frontend or set `OPENAI_API_KEY`.
+- **Anthropic.** Add your key in the frontend or set `ANTHROPIC_API_KEY`.
+- **OpenAI-compatible endpoints.** Add any number of custom endpoints in the UI with a display name, base URL, optional API key, and model IDs. Works with Atlas Cloud (one-click **Use Atlas Cloud** preset in the UI: `https://api.atlascloud.ai/v1`, starting with `deepseek-ai/deepseek-v4-flash`), OpenRouter, Together, Groq, Fireworks, DeepSeek, vLLM, LiteLLM, and custom gateways.
+- **Local models through an endpoint URL.** Point the Local Models provider in the UI at a local server URL such as `http://localhost:11434` for Ollama, `http://localhost:1234` for LM Studio, or a local llama.cpp or vLLM server, and list the model IDs you want to use.
+
+
+## External Harness Plugging Support
+
+This is the part where I am kinda puzzled and have conflicting ideas:
+one that the models are very good at certain harnesses because they have been trained inside them. and two as models get better and better over time most of the components, hand-holding and modules provided by that harness become redundant and are removed anw. I believe in keeping the most minimal harness that doesn't interfere with the agent's work as much. One more counter-point is that this system literally builds its own custom verification heuristics and harness on the fly because that's literally the point of some modules. So for now I am just keeping it to the agents. I might add a direct computer/browser use and academia search tools though.
+
+
+
+See the full documentation for complete details:
+- [Deepthink Architecture and Context Flow](Deepthink/docs/DeepthinkDocs.md)
+- [Architecture Visuals](Deepthink/docs/deepthink_architecture.html)
+- [Adaptive Deepthink Architecture](AdaptiveDeepthink/AdaptiveDeepthinkDocs.md)
+- [Sandbox Tool Environment](Backend/README.md)
 
 ## License
 

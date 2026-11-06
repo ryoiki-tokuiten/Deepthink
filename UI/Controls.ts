@@ -6,7 +6,6 @@ interface ControlsDisabledState {
     exportConfigButton: boolean;
     importConfigInput: boolean;
     initialIdeaInput: boolean;
-    pqfButtons: boolean;
     sliders: boolean;
     toggles: boolean;
     sidebarContent: boolean;
@@ -25,13 +24,18 @@ function computeIsGenerating(): boolean {
 function computeControlsDisabledState(): ControlsDisabledState {
     const isGenerating = computeIsGenerating();
     const isApiKeyReady = hasValidApiKey();
+    const isDeepthinkRunning = globalState.activeDeepthinkPipeline?.status === 'processing' || globalState.activeDeepthinkPipeline?.status === 'stopping';
+
+    let generateButtonDisabled = isGenerating || !isApiKeyReady;
+    if (globalState.currentMode === 'deepthink' && isDeepthinkRunning) {
+        generateButtonDisabled = false;
+    }
 
     return {
-        generateButton: isGenerating || !isApiKeyReady,
+        generateButton: generateButtonDisabled,
         exportConfigButton: isGenerating,
         importConfigInput: isGenerating,
         initialIdeaInput: isGenerating,
-        pqfButtons: isGenerating,
         sliders: isGenerating,
         toggles: isGenerating,
         sidebarContent: isGenerating,
@@ -61,11 +65,6 @@ export function updateControlsState(): void {
     }
     if (initialIdeaInput) initialIdeaInput.disabled = disabledState.initialIdeaInput;
 
-    const pqfButtons = document.querySelectorAll('.pqf-button');
-    pqfButtons.forEach(button => {
-        (button as HTMLButtonElement).disabled = disabledState.pqfButtons;
-    });
-
     const sliders = document.querySelectorAll('.slider');
     sliders.forEach(slider => {
         (slider as HTMLInputElement).disabled = disabledState.sliders;
@@ -94,4 +93,5 @@ export function updateControlsState(): void {
     }
 
     globalState.isGenerating = computeIsGenerating();
+    window.dispatchEvent(new CustomEvent('controlsStateUpdated'));
 }

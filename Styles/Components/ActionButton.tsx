@@ -1,10 +1,4 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useState } from 'react';
-import { copyToClipboard, downloadFile, openLivePreviewFullscreen } from './ActionButtonLogic';
 import { Icon } from '../../UI/Icons';
 
 interface ActionButtonProps {
@@ -36,29 +30,32 @@ export const ActionButton: React.FC<ActionButtonProps> = ({
 
     const handleClick = async () => {
         if (disabled) return;
-
         const finalContent = typeof content === 'function' ? content() : content;
 
         if (type === 'copy' && finalContent) {
-            const success = await copyToClipboard(finalContent);
-            if (success) {
+            try {
+                await navigator.clipboard.writeText(finalContent);
                 setStatus('success');
                 setTimeout(() => setStatus('idle'), 1500);
+            } catch (err) {
+                console.error('Failed to copy to clipboard:', err);
             }
         } else if (type === 'download' && finalContent) {
-            downloadFile(finalContent, filename, filename.endsWith('html') ? 'text/html' : 'text/plain');
-        } else if (type === 'preview' && finalContent) {
-            openLivePreviewFullscreen(finalContent);
+            const blob = new Blob([finalContent], { type: filename.endsWith('html') ? 'text/html' : 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
-        if (onClick) {
-            onClick();
-        }
+        onClick?.();
     };
 
-    const baseClass = type === 'copy' ? 'copy-solution-btn' :
-        type === 'download' ? 'download-solution-btn' :
-            'action-btn';
+    const baseClass = type === 'copy' ? 'copy-solution-btn' : type === 'download' ? 'download-solution-btn' : 'action-btn';
 
     return (
         <button
@@ -70,9 +67,7 @@ export const ActionButton: React.FC<ActionButtonProps> = ({
             onClick={handleClick}
         >
             <Icon name={status === 'success' ? 'check' : icon} />
-            <span className="button-text">
-                {status === 'success' ? 'Copied!' : text}
-            </span>
+            <span className="button-text">{status === 'success' ? 'Copied!' : text}</span>
         </button>
     );
 };

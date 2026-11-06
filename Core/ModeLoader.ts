@@ -1,30 +1,20 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * ModeLoader - Centralized lazy-loading and one-time initialization for heavy modes.
- */
-
 import {
     routingManager,
     getSelectedModel,
     getSelectedStrategiesCount,
     getStrategyProximityLoops,
-    getSelectedHypothesisCount,
-    getHypothesisProximityLoops,
-    getSelectedPqfAggressiveness,
+    getSelectedModulesCount,
+    getModulesImpactReviewLoops,
     getDeepthinkDepth,
     getIsolateBranchesEnabled,
-    getSolutionPoolDisabled,
     callAI,
-    getSelectedThinkingLevel
+    getSelectedThinkingLevel,
 } from '../Routing';
 import { parseJsonSafe } from './JsonParser';
 import { globalState } from './State';
 import { updateControlsState } from '../UI/Controls';
-import { setupCodeExecutionToggle } from '../UI/setupCodeExecutionToggle';
 
-type DeepthinkModule = typeof import('../Deepthink/Deepthink');
+type DeepthinkModule = typeof import('../Deepthink/ui/Deepthink');
 type ContextualModule = typeof import('../Contextual/Contextual');
 type AdaptiveDeepthinkModule = typeof import('../AdaptiveDeepthink/AdaptiveDeepthinkMode');
 
@@ -34,44 +24,17 @@ let deepthinkInitialized = false;
 
 let contextualModule: ContextualModule | null = null;
 let contextualModulePromise: Promise<ContextualModule> | null = null;
-let contextualInitialized = false;
 
 let adaptiveDeepthinkModule: AdaptiveDeepthinkModule | null = null;
 let adaptiveDeepthinkModulePromise: Promise<AdaptiveDeepthinkModule> | null = null;
 
-async function loadDeepthinkModule(): Promise<DeepthinkModule> {
-    if (!deepthinkModulePromise) {
-        deepthinkModulePromise = import('../Deepthink/Deepthink').then((mod) => {
-            deepthinkModule = mod;
-            return mod;
-        });
-    }
-    return deepthinkModulePromise;
-}
-
-async function loadContextualModule(): Promise<ContextualModule> {
-    if (!contextualModulePromise) {
-        contextualModulePromise = import('../Contextual/Contextual').then((mod) => {
-            contextualModule = mod;
-            return mod;
-        });
-    }
-    return contextualModulePromise;
-}
-
-async function loadAdaptiveDeepthinkModule(): Promise<AdaptiveDeepthinkModule> {
-    if (!adaptiveDeepthinkModulePromise) {
-        adaptiveDeepthinkModulePromise = import('../AdaptiveDeepthink/AdaptiveDeepthinkMode').then((mod) => {
-            adaptiveDeepthinkModule = mod;
-            return mod;
-        });
-    }
-    return adaptiveDeepthinkModulePromise;
-}
-
 export async function ensureDeepthinkInitialized(): Promise<DeepthinkModule> {
-    const mod = await loadDeepthinkModule();
+    if (!deepthinkModulePromise) {
+        deepthinkModulePromise = import('../Deepthink/ui/Deepthink').then(mod => (deepthinkModule = mod));
+    }
+    const mod = await deepthinkModulePromise;
     if (!deepthinkInitialized) {
+        const ctrl = routingManager.getDeepthinkConfigController();
         mod.initializeDeepthinkModule({
             callAI,
             parseJsonSafe,
@@ -80,22 +43,25 @@ export async function ensureDeepthinkInitialized(): Promise<DeepthinkModule> {
             getSelectedModel,
             getSelectedStrategiesCount,
             getStrategyProximityLoops,
-            getSelectedHypothesisCount,
-            getHypothesisProximityLoops,
-            getSelectedPqfAggressiveness,
+            getSelectedModulesCount,
+            getModulesImpactReviewLoops,
             getDeepthinkDepth,
+            getI: () => ctrl.getI(),
+            getJ: () => ctrl.getJ(),
+            getK: () => ctrl.getK(),
             getIsolateBranchesEnabled,
-            getSolutionPoolDisabled,
-            getDeepthinkCodeExecutionEnabled: () => routingManager.getDeepthinkConfigController().isCodeExecutionEnabled(),
+            getDeepthinkCodeExecutionEnabled: () => ctrl.isCodeExecutionEnabled(),
+            getBsrNoiseLevel: () => ctrl.getBsrNoiseLevel(),
+            getBsrPressureFloor: () => ctrl.getBsrPressureFloor(),
+            getBsrWeightSmall: () => ctrl.getBsrWeightSmall(),
+            getBsrWeightMedium: () => ctrl.getBsrWeightMedium(),
+            getBsrWeightLarge: () => ctrl.getBsrWeightLarge(),
+            getBsrWeightPreset: () => ctrl.getBsrWeightPreset(),
             getSelectedThinkingLevel,
-            getCustomPromptsDeepthinkState: () =>
-                routingManager.getPromptsManager()?.getDeepthinkPrompts()
-                || globalState.customPromptsDeepthinkState,
+            getCustomPromptsDeepthinkState: () => routingManager.getPromptsManager()?.getDeepthinkPrompts() || globalState.customPromptsDeepthinkState,
             tabsNavContainer: document.getElementById('tabs-nav-container'),
             pipelinesContentContainer: document.getElementById('pipelines-content-container'),
-            setActiveDeepthinkPipeline: (pipeline: any) => {
-                globalState.activeDeepthinkPipeline = pipeline as any;
-            }
+            setActiveDeepthinkPipeline: (pipeline: any) => { globalState.activeDeepthinkPipeline = pipeline; },
         });
         deepthinkInitialized = true;
     }
@@ -103,26 +69,19 @@ export async function ensureDeepthinkInitialized(): Promise<DeepthinkModule> {
 }
 
 export async function ensureContextualInitialized(): Promise<ContextualModule> {
-    const mod = await loadContextualModule();
-    if (!contextualInitialized) {
-        setupCodeExecutionToggle();
-        contextualInitialized = true;
+    if (!contextualModulePromise) {
+        contextualModulePromise = import('../Contextual/Contextual').then(mod => (contextualModule = mod));
     }
-    return mod;
+    return contextualModulePromise;
 }
 
 export async function ensureAdaptiveDeepthinkInitialized(): Promise<AdaptiveDeepthinkModule> {
-    return loadAdaptiveDeepthinkModule();
+    if (!adaptiveDeepthinkModulePromise) {
+        adaptiveDeepthinkModulePromise = import('../AdaptiveDeepthink/AdaptiveDeepthinkMode').then(mod => (adaptiveDeepthinkModule = mod));
+    }
+    return adaptiveDeepthinkModulePromise;
 }
 
-export function getLoadedDeepthinkModule(): DeepthinkModule | null {
-    return deepthinkModule;
-}
-
-export function getLoadedContextualModule(): ContextualModule | null {
-    return contextualModule;
-}
-
-export function getLoadedAdaptiveDeepthinkModule(): AdaptiveDeepthinkModule | null {
-    return adaptiveDeepthinkModule;
-}
+export function getLoadedDeepthinkModule(): DeepthinkModule | null { return deepthinkModule; }
+export function getLoadedContextualModule(): ContextualModule | null { return contextualModule; }
+export function getLoadedAdaptiveDeepthinkModule(): AdaptiveDeepthinkModule | null { return adaptiveDeepthinkModule; }

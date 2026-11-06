@@ -1,39 +1,90 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+import { CustomizablePromptsDeepthink } from '../Deepthink/prompts';
+import { CustomizablePromptsContextual, createDefaultCustomPromptsContextual } from '../Contextual/ContextualPrompts';
+import { CustomizablePromptsAdaptiveDeepthink, createDefaultCustomPromptsAdaptiveDeepthink } from '../AdaptiveDeepthink/AdaptiveDeepthinkPrompt';
+import { globalState } from '../Core/State';
 
-import { CustomizablePromptsDeepthink } from '../Deepthink/DeepthinkPrompts';
-import { CustomizablePromptsContextual } from '../Contextual/ContextualPrompts';
-import { ContextualPromptsManager } from '../Contextual/ContextualPromptsManager';
-import { DeepthinkPromptsManager } from '../Deepthink/DeepthinkPromptsManager';
+export class ScopedPromptsManager<T extends object> {
+    private ref: { current: T };
+    private listeners = new Set<(state: T) => void>();
+    private getDefault?: () => T;
+
+    constructor(ref: { current: T }, getDefault?: () => T) {
+        this.ref = ref;
+        this.getDefault = getDefault;
+        if (getDefault && (!this.ref.current || Object.keys(this.ref.current).length === 0)) {
+            this.ref.current = getDefault();
+        }
+    }
+
+    public getPrompts(): T {
+        return this.ref.current;
+    }
+
+    public setPrompts(prompts: T): void {
+        this.ref.current = { ...prompts };
+        this.notify();
+    }
+
+    public updatePrompt(key: keyof T, value: string | undefined): void {
+        if (value === undefined) {
+            delete this.ref.current[key];
+        } else {
+            (this.ref.current as any)[key] = value;
+        }
+        this.notify();
+    }
+
+    public updateModel(key: keyof T, value: string | undefined): void {
+        if (!value) {
+            delete this.ref.current[key];
+        } else {
+            (this.ref.current as any)[key] = value;
+        }
+        this.notify();
+    }
+
+    public resetToDefaults(): void {
+        if (this.getDefault) this.setPrompts(this.getDefault());
+    }
+
+    public subscribe(listener: (state: T) => void): () => void {
+        this.listeners.add(listener);
+        listener(this.ref.current);
+        return () => { this.listeners.delete(listener); };
+    }
+
+    private notify(): void {
+        const snapshot = { ...this.ref.current };
+        this.listeners.forEach(l => l(snapshot));
+    }
+}
+
+export const globalAdaptiveDeepthinkPromptsManager = new ScopedPromptsManager<CustomizablePromptsAdaptiveDeepthink>(
+    {
+        get current() { return globalState.customPromptsAdaptiveDeepthinkState; },
+        set current(prompts) { globalState.customPromptsAdaptiveDeepthinkState = prompts; }
+    },
+    createDefaultCustomPromptsAdaptiveDeepthink
+);
 
 export class PromptsManager {
-    private deepthinkPromptsManager: DeepthinkPromptsManager;
-    private contextualPromptsManager?: ContextualPromptsManager;
+    private deepthinkPromptsManager: ScopedPromptsManager<CustomizablePromptsDeepthink>;
+    private contextualPromptsManager?: ScopedPromptsManager<CustomizablePromptsContextual>;
 
     constructor(
         deepthinkPromptsRef: { current: CustomizablePromptsDeepthink },
         contextualPromptsRef?: { current: CustomizablePromptsContextual }
     ) {
-        this.deepthinkPromptsManager = new DeepthinkPromptsManager(deepthinkPromptsRef);
-
+        this.deepthinkPromptsManager = new ScopedPromptsManager(deepthinkPromptsRef);
         if (contextualPromptsRef) {
-            this.contextualPromptsManager = new ContextualPromptsManager(contextualPromptsRef);
+            if (!contextualPromptsRef.current.sys_contextual_mainGenerator) {
+                contextualPromptsRef.current = createDefaultCustomPromptsContextual();
+            }
+            this.contextualPromptsManager = new ScopedPromptsManager(contextualPromptsRef, createDefaultCustomPromptsContextual);
         }
     }
 
-    // Deepthink prompts
-    public getDeepthinkPromptsManager(): DeepthinkPromptsManager {
-        return this.deepthinkPromptsManager;
-    }
-
-    public getDeepthinkPrompts(): CustomizablePromptsDeepthink {
-        return this.deepthinkPromptsManager.getPrompts();
-    }
-
-    // Contextual prompts
-    public getContextualPromptsManager(): ContextualPromptsManager | undefined {
-        return this.contextualPromptsManager;
-    }
+    public getDeepthinkPromptsManager() { return this.deepthinkPromptsManager; }
+    public getDeepthinkPrompts() { return this.deepthinkPromptsManager.getPrompts(); }
+    public getContextualPromptsManager() { return this.contextualPromptsManager; }
 }
