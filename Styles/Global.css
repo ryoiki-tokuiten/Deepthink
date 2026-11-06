@@ -419,6 +419,7 @@ textarea.prompt-textarea { background: transparent; border: none; padding: 1rem 
 .openai-compatible-add-form { display: flex; flex-direction: column; gap: .65rem; padding: .9rem; background: rgba(var(--card-bg-base-rgb), .16); border: 1px dashed var(--border-color); border-radius: 24px;& .configure-provider-btn { width: 100%; white-space: nowrap; } }
 .openai-compatible-form-title { color: var(--text-color); font-size: .875rem; font-weight: 600; }
 .openai-compatible-form-title-row { gap: .75rem; }
+.openai-compatible-preset-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
 .openai-compatible-preset-btn { border: 1px solid rgba(var(--accent-blue-rgb), .35); border-radius: 24px; background: rgba(var(--accent-blue-rgb), .08); color: var(--accent-blue); cursor: pointer; font-family: var(--font-family); font-size: .75rem; padding: .4rem .65rem; transition: all .3s;&:hover { background: rgba(var(--accent-blue-rgb), .18); border-color: var(--accent-blue); } }
 .openai-compatible-form-fields { display: flex; align-items: flex-start; gap: .65rem; width: 100%;& .input-group { flex: 1 1 0; min-width: 0; } }
 .openai-compatible-empty { align-self: center; color: var(--text-tertiary-color); font-size: .75rem; padding: .5rem; }

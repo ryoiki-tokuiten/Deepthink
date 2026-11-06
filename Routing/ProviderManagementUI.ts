@@ -2,9 +2,15 @@ import { isOpenAICompatibleProvider, ProviderManager, ProviderConfig } from './P
 import { renderIconMarkup } from '../UI/Icons';
 
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1';
+const ATLAS_CLOUD_ENDPOINT = 'https://api.atlascloud.ai/v1';
+const ATLAS_CLOUD_DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-flash';
 
 function isOpenRouterEndpoint(endpoint?: string): boolean {
     return endpoint?.trim().replace(/\/+$/, '') === OPENROUTER_ENDPOINT;
+}
+
+function isAtlasCloudEndpoint(endpoint?: string): boolean {
+    return endpoint?.trim().replace(/\/+$/, '') === ATLAS_CLOUD_ENDPOINT;
 }
 
 function escapeHtml(value: string): string {
@@ -117,6 +123,7 @@ export class ProviderManagementUI {
     private renderOpenAICompatibleCard(providers: ProviderConfig[]): string {
         const configuredCount = providers.length;
         const hasOpenRouter = providers.some(p => isOpenRouterEndpoint(p.baseURL));
+        const hasAtlasCloud = providers.some(p => isAtlasCloudEndpoint(p.baseURL));
         return `
             <div class="provider-card openai-compatible-card" data-provider-id="openai-compatible">
                 <div class="provider-card-header">
@@ -138,7 +145,10 @@ export class ProviderManagementUI {
                         <div class="openai-compatible-add-form">
                             <div class="openai-compatible-form-title-row">
                                 <div class="openai-compatible-form-title">Add endpoint</div>
-                                ${hasOpenRouter ? '' : '<button type="button" class="openai-compatible-preset-btn">Use OpenRouter</button>'}
+                                <div class="openai-compatible-preset-actions">
+                                    ${hasAtlasCloud ? '' : '<button type="button" class="openai-compatible-preset-btn" data-preset="atlas-cloud">Use Atlas Cloud</button>'}
+                                    ${hasOpenRouter ? '' : '<button type="button" class="openai-compatible-preset-btn" data-preset="openrouter">Use OpenRouter</button>'}
+                                </div>
                             </div>
                             <div class="openai-compatible-form-fields">
                                 <div class="input-group"><input type="text" class="openai-compatible-name-input" placeholder="Name (optional)"></div>
@@ -318,12 +328,23 @@ export class ProviderManagementUI {
         if (!this.elements.content) return;
         this.elements.content.querySelector('.add-openai-compatible-btn')?.addEventListener('click', () => this.handleAddOpenAICompatibleProvider());
         const form = this.elements.content.querySelector('.openai-compatible-add-form');
+        const nameInput = form?.querySelector<HTMLInputElement>('.openai-compatible-name-input');
         const endpointInput = form?.querySelector<HTMLInputElement>('.openai-compatible-endpoint-input');
-        form?.querySelector('.openai-compatible-preset-btn')?.addEventListener('click', () => {
-            if (endpointInput) {
+        const apiKeyInput = form?.querySelector<HTMLInputElement>('.openai-compatible-api-key-input');
+        const modelsInput = form?.querySelector<HTMLInputElement>('.openai-compatible-models-input');
+        form?.querySelectorAll<HTMLElement>('.openai-compatible-preset-btn').forEach(button => {
+            button.addEventListener('click', () => {
+                if (!endpointInput) return;
+                if (button.dataset.preset === 'atlas-cloud') {
+                    if (nameInput) nameInput.value = 'Atlas Cloud';
+                    endpointInput.value = ATLAS_CLOUD_ENDPOINT;
+                    if (modelsInput) modelsInput.value = ATLAS_CLOUD_DEFAULT_MODEL;
+                    apiKeyInput?.focus();
+                    return;
+                }
                 endpointInput.value = OPENROUTER_ENDPOINT;
                 endpointInput.focus();
-            }
+            });
         });
         form?.querySelectorAll('input').forEach(input => {
             input.addEventListener('keypress', event => { if (event.key === 'Enter') this.handleAddOpenAICompatibleProvider(); });
