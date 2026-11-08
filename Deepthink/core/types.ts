@@ -260,11 +260,6 @@ export interface DeepthinkPipelineState {
     solutionCritiquesStatus?: AgentStatus;
     memoryBankAgents?: Array<{ mainStrategyId: string; memoryBank?: string; globalIteration: number }>;
     modulesExplorerComplete?: boolean;
-    finalJudgedBestSolution?: string;
-    finalJudgingResponseText?: string;
-    finalJudgingExecutionTraceText?: string;
-    finalJudgingStatus?: AgentStatus;
-    finalJudgingError?: string;
     strategySpecificKnowledgePackets?: Record<string, string>;
     liveEvents?: DeepthinkLiveEvent[];
     currentIteration?: number;
@@ -281,10 +276,6 @@ export interface DeepthinkPipelineState {
     heartbeats: HeartbeatBlock[];
     modulesImpactReviewHistory: ProximityTurn[];
 }
-
-// ============================================================================
-// Pure BSR & DOS Formulas
-// ============================================================================
 
 export const SIZE_WEIGHTS: Record<BsrEventSize, number> = { small: 1, medium: 2, large: 4 };
 export const TAU = 2;
@@ -441,11 +432,7 @@ export function calculateUtilizationVector(branchUtilizations: DosBranchUtilizat
     return total === 0 ? undefined : { correct_use: c / total, partial_use: p / total, not_used: n / total, misused: m / total };
 }
 
-// ============================================================================
-// Loop Schedule & Barrier Controller
-// ============================================================================
-
-export type PostIterationAction = { type: 'FINAL_JUDGE' } | { type: 'GLOBAL_UPDATE' } | { type: 'HEARTBEAT' } | { type: 'NONE' };
+export type PostIterationAction = { type: 'GLOBAL_UPDATE' } | { type: 'HEARTBEAT' } | { type: 'NONE' };
 
 export function validateLoopBounds(i: number, j: number, k: number): { valid: boolean; error?: string } {
     if (i < 5 || i > 20) return { valid: false, error: `Iteration count i must be between 5 and 20 (got ${i}).` };
@@ -469,7 +456,7 @@ export function determinePostIterationStep(
     k: number,
     curatedContextEnabled: boolean
 ): { action: PostIterationAction; nextSinceHeartbeat: number } {
-    if (n >= i) return { action: { type: 'FINAL_JUDGE' }, nextSinceHeartbeat: currentSinceHeartbeat };
+    if (n >= i) return { action: { type: 'NONE' }, nextSinceHeartbeat: currentSinceHeartbeat };
     if (n % j === 0) return { action: { type: 'GLOBAL_UPDATE' }, nextSinceHeartbeat: 0 };
     const incrementedSinceHeartbeat = currentSinceHeartbeat + 1;
     if (curatedContextEnabled && isHeartbeatDue(n, incrementedSinceHeartbeat, k, j, i)) {

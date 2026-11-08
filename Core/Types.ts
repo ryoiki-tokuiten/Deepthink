@@ -1,4 +1,3 @@
-
 import type {
     DeepthinkPipelineState
 } from '../Deepthink/core/deepthinkCore';
@@ -6,9 +5,6 @@ import type {
 export type {
     DeepthinkPipelineState
 };
-
-export type ApplicationMode = 'deepthink' | 'contextual' | 'adaptive-deepthink';
-
 
 export interface FileData {
     base64: string;

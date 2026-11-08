@@ -1,9 +1,6 @@
 import { updatePromptContent } from '../Styles/Components/PromptStyling';
-import { globalState } from '../Core/State';
 import { renderIconMarkup } from '../UI/Icons';
 import { ModelSelectionUI } from './ModelSelectionUI';
-import type { CustomizablePromptsAdaptiveDeepthink } from '../AdaptiveDeepthink/AdaptiveDeepthinkPrompt';
-import type { CustomizablePromptsContextual } from '../Contextual/ContextualPrompts';
 import type { CustomizablePromptsDeepthink } from '../Deepthink/prompts';
 import { DEEPTHINK_AGENT_REGISTRY, type DeepthinkAgentKind } from '../Deepthink/core/agentRegistry';
 import type { PromptPaneConfig } from '../Styles/Components/PromptContent';
@@ -29,39 +26,12 @@ export const DEEPTHINK_PROMPT_PANES: readonly PromptPaneConfig<CustomizablePromp
             };
         });
 
-export const ADAPTIVE_PROMPT_PANES: readonly PromptPaneConfig<CustomizablePromptsAdaptiveDeepthink>[] = [
-    { key: 'adaptive-main', title: 'Main Orchestrator', modelKey: 'model_main', promptKey: 'sys_adaptiveDeepthink_main', textareaId: 'sys-adaptive-main', agentName: 'adaptive-main', rows: 12, placeholder: 'Main Adaptive Deepthink orchestrator system prompt...' },
-    { key: 'adaptive-strategy-gen', title: 'Strategy Generator', modelKey: 'model_strategyGeneration', promptKey: 'sys_adaptiveDeepthink_strategyGeneration', textareaId: 'sys-adaptive-strategy-gen', agentName: 'adaptive-strategy-gen', rows: 10, placeholder: 'Strategy generation agent system prompt...' },
-    { key: 'adaptive-modules-gen', title: 'Modules Generator', modelKey: 'model_modulesGeneration', promptKey: 'sys_adaptiveDeepthink_modulesGeneration', textareaId: 'sys-adaptive-modules-gen', agentName: 'adaptive-modules-gen', rows: 10, placeholder: 'Modules generator agent system prompt...' },
-    { key: 'adaptive-modules-test', title: 'Modules Testing', modelKey: 'model_modulesTesting', promptKey: 'sys_adaptiveDeepthink_modulesTesting', textareaId: 'sys-adaptive-modules-test', agentName: 'adaptive-modules-test', rows: 10, placeholder: 'Modules testing agent system prompt...' },
-    { key: 'adaptive-execution', title: 'Execution Agent', modelKey: 'model_execution', promptKey: 'sys_adaptiveDeepthink_execution', textareaId: 'sys-adaptive-execution', agentName: 'adaptive-execution', rows: 10, placeholder: 'Execution agent system prompt...' },
-    { key: 'adaptive-critique', title: 'Solution Critique', modelKey: 'model_solutionCritique', promptKey: 'sys_adaptiveDeepthink_solutionCritique', textareaId: 'sys-adaptive-critique', agentName: 'adaptive-critique', rows: 10, placeholder: 'Solution critique agent system prompt...' },
-    { key: 'adaptive-corrector', title: 'Corrector Agent', modelKey: 'model_corrector', promptKey: 'sys_adaptiveDeepthink_corrector', textareaId: 'sys-adaptive-corrector', agentName: 'adaptive-corrector', rows: 10, placeholder: 'Corrector agent system prompt...' }
+const DEEPTHINK_NAV_STRUCTURE: ReadonlyArray<{ groupTitle: string; prompts: string[] }> = [
+    { groupTitle: "1. STRATEGY GENERATION", prompts: ["deepthink-initial-strategy"] },
+    { groupTitle: "2. SOLUTION DEVELOPMENT", prompts: ["deepthink-solution-attempt", "deepthink-solution-critique", "deepthink-solution-correction"] },
+    { groupTitle: "3. MODULES EXPLORATION", prompts: ["deepthink-modules-generation", "deepthink-modules-tester"] },
+    { groupTitle: "4. EVALUATION", prompts: ["deepthink-memory-bank", "deepthink-dos", "deepthink-bsr"] }
 ];
-
-export const CONTEXTUAL_PROMPT_PANES: readonly PromptPaneConfig<CustomizablePromptsContextual>[] = [
-    { key: 'contextual-main-generator', title: 'Main Generation Agent', modelKey: 'model_mainGenerator', promptKey: 'sys_contextual_mainGenerator', textareaId: 'sys-contextual-main-generator', agentName: 'contextual-main-generator', rows: 12, placeholder: 'Main generation agent (self-corrector) system prompt...' },
-    { key: 'contextual-iterative-agent', title: 'Iterative Agent', modelKey: 'model_iterativeAgent', promptKey: 'sys_contextual_iterativeAgent', textareaId: 'sys-contextual-iterative-agent', agentName: 'contextual-iterative-agent', rows: 12, placeholder: 'Iterative agent (solution critique) system prompt...' },
-    { key: 'contextual-solution-pool', title: 'Structured Noise Agent', modelKey: 'model_solutionPoolAgent', promptKey: 'sys_contextual_solutionPoolAgent', textareaId: 'sys-contextual-solution-pool', agentName: 'contextual-solution-pool', rows: 12, placeholder: 'Structured noise / strategy pool agent system prompt...' },
-    { key: 'contextual-memory', title: 'Memory Agent', modelKey: 'model_memoryAgent', promptKey: 'sys_contextual_memoryAgent', textareaId: 'sys-contextual-memory', agentName: 'contextual-memory', rows: 12, placeholder: 'Memory agent system prompt...' }
-];
-
-const NAV_STRUCTURE: Record<string, Array<{ groupTitle: string; prompts: string[] }>> = {
-    deepthink: [
-        { groupTitle: "1. STRATEGY GENERATION", prompts: ["deepthink-initial-strategy"] },
-        { groupTitle: "2. SOLUTION DEVELOPMENT", prompts: ["deepthink-solution-attempt", "deepthink-solution-critique", "deepthink-solution-correction"] },
-        { groupTitle: "3. MODULES EXPLORATION", prompts: ["deepthink-modules-generation", "deepthink-modules-tester"] },
-        { groupTitle: "4. EVALUATION & JUDGMENT", prompts: ["deepthink-memory-bank", "deepthink-dos", "deepthink-bsr", "deepthink-final-judge"] }
-    ],
-    adaptiveDeepthink: [
-        { groupTitle: "1. MAIN ORCHESTRATOR", prompts: ["adaptive-main"] },
-        { groupTitle: "2. STRATEGY & MODULES", prompts: ["adaptive-strategy-gen", "adaptive-modules-gen", "adaptive-modules-test"] },
-        { groupTitle: "3. EXECUTION & CORRECTION", prompts: ["adaptive-execution", "adaptive-critique", "adaptive-corrector"] }
-    ],
-    contextual: [
-        { groupTitle: "CONTEXTUAL AGENTS", prompts: ["contextual-main-generator", "contextual-iterative-agent", "contextual-solution-pool", "contextual-memory"] }
-    ]
-};
 
 export class PromptsModal {
     private elements = {
@@ -71,7 +41,6 @@ export class PromptsModal {
         nav: null as HTMLElement | null,
         content: null as HTMLElement | null
     };
-    private currentMode = 'deepthink';
     private modelConfig: any = null;
     private providerManager: any = null;
     private agentModelUIs = new Map<string, ModelSelectionUI>();
@@ -110,10 +79,6 @@ export class PromptsModal {
             }
         });
         document.addEventListener('click', () => this.closeAllDropdowns());
-        window.addEventListener('appModeChanged', () => {
-            this.setCurrentMode(globalState.currentMode);
-            if (this.elements.overlay?.classList.contains('is-visible')) this.initializeModal();
-        });
     }
 
     public show(): void {
@@ -138,10 +103,6 @@ export class PromptsModal {
         }, { once: true });
     }
 
-    public setCurrentMode(mode: string): void {
-        this.currentMode = mode === 'adaptive-deepthink' ? 'adaptiveDeepthink' : mode;
-    }
-
     public setModelConfig(modelConfig: any): void { this.modelConfig = modelConfig; }
     public setProviderManager(providerManager: any): void { this.providerManager = providerManager; }
 
@@ -150,21 +111,17 @@ export class PromptsModal {
         this.elements.nav.innerHTML = '';
         this.elements.content.querySelectorAll('.prompts-mode-container, .prompt-content-pane').forEach(el => el.classList.remove('active'));
 
-        const activeModeContainer = document.getElementById(`${this.currentMode}-prompts-container`);
+        const activeModeContainer = document.getElementById('deepthink-prompts-container');
         if (!activeModeContainer) return;
         activeModeContainer.classList.add('active');
 
         const modeTitle = document.createElement('h4');
         modeTitle.className = 'prompts-nav-mode-title';
-        const display = this.currentMode === 'adaptiveDeepthink' ? 'Adaptive Deepthink' : (this.currentMode ? this.currentMode.charAt(0).toUpperCase() + this.currentMode.slice(1) : '');
-        modeTitle.textContent = `${display} Mode Prompts`;
+        modeTitle.textContent = 'Deepthink Prompts';
         this.elements.nav.appendChild(modeTitle);
 
-        const navStructure = NAV_STRUCTURE[this.currentMode];
-        if (!navStructure) return;
-
         let firstNavItem: HTMLElement | null = null;
-        navStructure.forEach(group => {
+        DEEPTHINK_NAV_STRUCTURE.forEach(group => {
             const groupTitleEl = document.createElement('h5');
             groupTitleEl.className = 'prompts-nav-group-title';
             groupTitleEl.textContent = group.groupTitle;
@@ -262,7 +219,7 @@ export class PromptsModal {
 
     private setupChangeDetection(): void {
         const agentMap: Record<string, string> = {};
-        for (const pane of [...DEEPTHINK_PROMPT_PANES, ...ADAPTIVE_PROMPT_PANES, ...CONTEXTUAL_PROMPT_PANES]) {
+        for (const pane of DEEPTHINK_PROMPT_PANES) {
             if (pane.textareaId) agentMap[pane.textareaId] = pane.textareaId;
         }
         document.querySelectorAll<HTMLTextAreaElement>('.prompt-textarea').forEach(textarea => {
@@ -281,3 +238,4 @@ export class PromptsModal {
         this.elements.trigger.style.opacity = isGenerating ? '0.6' : '1';
     }
 }
+

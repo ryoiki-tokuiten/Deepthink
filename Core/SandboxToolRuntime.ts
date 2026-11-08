@@ -48,8 +48,6 @@ interface SandboxToolAgentOptions {
     seedFiles?: SeedFile[];
     filesystemFiles?: SeedFile[];
     omitUploadedFileMessage?: boolean;
-    runScopeDescription?: string;
-    agentFilesystemRules?: string[];
     repositoryAccess?: SandboxRepositoryAccess;
     maxToolTurns?: number;
     maxDurationMs?: number;
@@ -568,17 +566,9 @@ function buildSystemPrompt(
     const filesystemFileText = filesystemFiles.length > 0
         ? filesystemFiles.map(file => `- /workspace/${file.relativePath || file.name} (${file.mimeType})`).join('\n')
         : 'No additional filesystem files were uploaded.';
-    const runScopeDescription = options.runScopeDescription || 'same contextual run';
-    const agentFilesystemRules = options.agentFilesystemRules || [
-        '- Main Generator keeps its own sandbox workspace across iterations.',
-        '- Solution Critique / Iterative Agent keeps its own sandbox workspace across iterations.',
-        '- Strategic Pool Agent keeps its own sandbox workspace across iterations.',
-        '- Memory Agent keeps its own sandbox workspace across iterations.',
-    ];
     const filesystemRules = options.repositoryAccess
         ? buildRepositoryFilesystemRules(options.repositoryAccess)
         : [
-            ...agentFilesystemRules,
             '- These agent workspaces do not share generated files with each other. A file created by another agent is not available in your current working directory unless it is also an original uploaded file listed below.',
             '- You may load files from your own previous tool calls by filename when they appeared in your own visible_image_files or generated image outputs.',
             '- Do not try to open filenames merely because they appeared in another agent output, UI transcript, markdown image link, or critique text. If you need a similar artifact, reproduce it in your own session by rerunning equivalent code from the original uploaded image/data, then save your own copy with a clear filename.',
@@ -604,7 +594,7 @@ function buildSystemPrompt(
         `- Sequential commands in a single ${SANDBOX_TOOL_NAME}() call: chain dependent commands with \`&&\` (stops on first non-zero exit, e.g. \`mkdir -p build && g++ -O2 solve.cpp -o build/solve && ./build/solve\`) or chain independent commands with \`;\` or newlines (runs one after another regardless of previous exit codes, e.g. \`python3 check_a.py; python3 check_b.py\`).`,
         `- Parallel concurrent commands in a single ${SANDBOX_TOOL_NAME}() call: background independent commands with \`&\` and synchronize with \`wait\` (e.g. \`python3 sim1.py > sim1.out 2>&1 & python3 sim2.py > sim2.out 2>&1 & wait && cat sim1.out sim2.out\`) to run multiple tasks concurrently in one shell invocation.`,
         `- Parallel ${SANDBOX_TOOL_NAME}() tool calls in a single turn: you may also emit multiple ${SANDBOX_TOOL_NAME}() tool calls in the same assistant turn; the harness executes all ${SANDBOX_TOOL_NAME}() calls in that turn concurrently in parallel and returns each command's separate output.`,
-        `${commandStartRule} Files and directories you create persist across your own tool calls and future iterations in the ${runScopeDescription}. Process memory, shell variables, and language REPL variables do not persist between separate commands; write durable state to files.`,
+        `${commandStartRule} Files and directories you create persist across your own tool calls and future iterations in the same Deepthink run. Process memory, shell variables, and language REPL variables do not persist between separate commands; write durable state to files.`,
         'Use standard terminal practice: write scripts when commands become complex, check tool availability with command -v or --version when a runtime matters, and adapt if a language, package, or network access is unavailable.',
         '',
         '<Detected Sandbox Environment>',
@@ -713,17 +703,6 @@ async function executeSandboxTool(
         images: payload.images?.map(img => ({ ...img, url: withAppBasePath(img.url) })),
         visibleFiles: payload.visibleFiles?.map(img => ({ ...img, url: withAppBasePath(img.url) })),
     };
-}
-
-export async function runVirtualEnvironmentCommand(options: {
-    sessionId: string;
-    command: string;
-    seedFiles?: SeedFile[];
-    repositoryAccess?: SandboxRepositoryAccess;
-    timeoutMs?: number;
-}): Promise<Pick<SandboxToolResponse, 'ok' | 'exitCode' | 'stdout' | 'stderr' | 'error' | 'durationMs'>> {
-    const r = await executeSandboxTool(options.sessionId, options.command, options.seedFiles ?? null, options.repositoryAccess, options.timeoutMs);
-    return { ok: r.ok, exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, error: r.error, durationMs: r.durationMs };
 }
 
 async function getSandboxEnvironmentProfile(): Promise<SandboxEnvironmentProfile | null> {
@@ -910,12 +889,6 @@ function buildTraceMessage(message: BaseMessage): SandboxToolExecutionTraceMessa
     return traced;
 }
 
-export function isContextualSandboxToolEnabled(): boolean {
-    return globalState.virtualEnvironmentEnabled
-        || globalState.directContextFiles.length > 0
-        || globalState.filesystemContextFiles.length > 0;
-}
-
 function extractReasoningTextsFromMessage(message: BaseMessage): string[] {
     const raw = message as any;
     const texts: string[] = [];
@@ -1060,7 +1033,7 @@ export async function runSandboxToolAgent(options: SandboxToolAgentOptions): Pro
     const seedFiles = options.seedFiles ?? getDefaultSeedFiles();
     const filesystemFiles = options.filesystemFiles ?? getDefaultFilesystemFiles();
     const directContextSandboxFiles = getDirectContextSandboxFiles(seedFiles);
-    const sessionId = options.sessionId ?? `ctx-${options.agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${nanoid(12)}`;
+    const sessionId = options.sessionId ?? `dtsb-${options.agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${nanoid(12)}`;
     const environmentProfile = await getSandboxEnvironmentProfile();
     const systemPrompt = buildSystemPrompt(options.systemPrompt, directContextSandboxFiles, filesystemFiles, options, environmentProfile);
     const messages = [...options.messages];
@@ -1341,5 +1314,3 @@ export async function runSandboxToolAgent(options: SandboxToolAgentOptions): Pro
         messages,
     };
 }
-
-export const runContextualSandboxToolAgent = runSandboxToolAgent;

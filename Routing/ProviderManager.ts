@@ -62,7 +62,7 @@ async function fetchCatalog(): Promise<ModelsDevCatalog | null> {
         if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)) return null;
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({ fetchedAt: Date.now(), catalog }));
-        } catch { /* ignore */ }
+        } catch {  }
         memoryCache = { fetchedAt: Date.now(), catalog };
         return catalog;
     } catch {

@@ -1,21 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FileUpload } from './FileUpload';
 import { Icon } from '../../../UI/Icons';
-import { globalState } from '../../../Core/State';
-import { ApplicationMode } from '../../../Core/Types';
-import { updateUIAfterModeChange } from '../../../Core/AppRouter';
 import { App } from '../../../Core/App';
 import { routingManager } from '../../../Routing';
 import { getActiveDeepthinkPipeline, stopDeepthinkAnalysisProcess } from '../../../Deepthink/core/deepthinkCore';
 
-const MODE_LABELS: Record<ApplicationMode, string> = {
-    'deepthink': 'Deepthink',
-    'adaptive-deepthink': 'Adaptive Deepthink',
-    'contextual': 'Iterative Corrections',
-};
-
 const Sidebar: React.FC = () => {
-    const [currentMode, setCurrentMode] = useState<ApplicationMode>(globalState.currentMode as ApplicationMode);
     const [pipelineStatus, setPipelineStatus] = useState<string | null>(() => getActiveDeepthinkPipeline()?.status ?? null);
     const importInputRef = useRef<HTMLInputElement>(null);
     const buttonsContainerRef = useRef<HTMLDivElement>(null);
@@ -33,34 +23,19 @@ const Sidebar: React.FC = () => {
     }, []);
 
     useEffect(() => {
-        const handleModeChange = () => setCurrentMode(globalState.currentMode as ApplicationMode);
         const handlePipelineUpdate = () => setPipelineStatus(getActiveDeepthinkPipeline()?.status ?? null);
-        window.addEventListener('appModeChanged', handleModeChange);
         window.addEventListener('deepthinkPipelineUpdated', handlePipelineUpdate);
         window.addEventListener('deepthinkPipelineStateChanged', handlePipelineUpdate);
         window.addEventListener('controlsStateUpdated', handlePipelineUpdate);
         return () => {
-            window.removeEventListener('appModeChanged', handleModeChange);
             window.removeEventListener('deepthinkPipelineUpdated', handlePipelineUpdate);
             window.removeEventListener('deepthinkPipelineStateChanged', handlePipelineUpdate);
             window.removeEventListener('controlsStateUpdated', handlePipelineUpdate);
         };
     }, []);
 
-    const labelText = currentMode === 'contextual' ? 'Initial User Request:' : 'Core Challenge:';
-    const placeholderText = currentMode === 'contextual'
-        ? 'E.g., "Write a comprehensive guide on machine learning basics", "Create a detailed business plan for a coffee shop"...'
-        : currentMode === 'adaptive-deepthink'
-            ? 'E.g., "Solve this mathematical problem", "Design a scalable database architecture", "Analyze this complex scenario"...'
-            : 'E.g., "Design a sustainable urban transportation system", "Analyze the impact of remote work on company culture"...';
-
-    const isDeepthinkRunning = currentMode === 'deepthink' && (pipelineStatus === 'processing' || pipelineStatus === 'stopping');
-    const isDeepthinkPaused = currentMode === 'deepthink' && pipelineStatus === 'stopped';
-    const generateButtonText = currentMode === 'contextual'
-        ? 'Start Contextual Refinement'
-        : currentMode === 'adaptive-deepthink'
-            ? 'Adaptive Deepthink'
-            : 'Start Deepthink';
+    const isDeepthinkRunning = pipelineStatus === 'processing' || pipelineStatus === 'stopping';
+    const isDeepthinkPaused = pipelineStatus === 'stopped';
 
     return (
         <aside id="controls-sidebar" className="inspector-panel custom-scrollbar" aria-labelledby="controls-sidebar-heading">
@@ -81,41 +56,15 @@ const Sidebar: React.FC = () => {
             <div className="sidebar-content">
                 <div className="input-group">
                     <label htmlFor="initial-idea" id="initial-idea-label" className="input-label">
-                        {labelText}
+                        Core Challenge:
                     </label>
-                    <textarea id="initial-idea" className="input-base" placeholder={placeholderText} rows={5} />
+                    <textarea
+                        id="initial-idea"
+                        className="input-base"
+                        placeholder='E.g., "Design a sustainable urban transportation system", "Analyze the impact of remote work on company culture"...'
+                        rows={5}
+                    />
                     <FileUpload />
-                </div>
-
-                <div className="input-group">
-                    <div id="app-mode-selector" className="mode-selector-container" role="radiogroup" aria-label="Select Application Mode">
-                        <div className="mode-section">
-                            <div className="app-mode-section-label">Application Mode</div>
-                            <div className="mode-grid">
-                                {(['deepthink', 'adaptive-deepthink', 'contextual'] as ApplicationMode[]).map(mode => {
-                                    const isActive = currentMode === mode;
-                                    return (
-                                        <label key={mode} className={`mode-grid-button ${isActive ? 'active' : ''}`}>
-                                            <input
-                                                type="radio"
-                                                name="app-mode"
-                                                value={mode}
-                                                checked={isActive}
-                                                onChange={e => {
-                                                    const newMode = e.target.value as ApplicationMode;
-                                                    globalState.currentMode = newMode;
-                                                    setCurrentMode(newMode);
-                                                    updateUIAfterModeChange();
-                                                }}
-                                                style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }}
-                                            />
-                                            <span className="mode-button-text">{MODE_LABELS[mode]}</span>
-                                        </label>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <details className="sidebar-section" open>
@@ -138,35 +87,7 @@ const Sidebar: React.FC = () => {
                             </select>
                         </div>
 
-                        <div id="model-parameters-container" className="input-group-tight">
-                            <div id="contextual-mode-controls" style={{ display: (currentMode === 'contextual' || currentMode === 'adaptive-deepthink') ? '' : 'none' }}>
-                                <div className="code-execution-container">
-                                    <div className="code-execution-header">
-                                        <Icon name="code" />
-                                        <span className="code-execution-title">Sandbox Terminal Environment</span>
-                                    </div>
-                                    <div className="code-execution-toggle-row">
-                                        <label className="toggle-switch">
-                                            <input
-                                                type="checkbox"
-                                                id="sandbox-code-execution-toggle"
-                                                aria-label="Enable Sandbox Terminal Environment"
-                                                defaultChecked={globalState.virtualEnvironmentEnabled}
-                                                onChange={e => {
-                                                    globalState.virtualEnvironmentEnabled = e.target.checked;
-                                                    window.dispatchEvent(new CustomEvent('sandboxToggled'));
-                                                }}
-                                            />
-                                            <span className="toggle-slider" />
-                                        </label>
-                                        <span className="toggle-label">Enable Sandbox Execution</span>
-                                    </div>
-                                    <div className="code-execution-description">
-                                        Allow agents to use a persistent sandbox terminal for calculations, verification, scripts, plots, and image manipulation.
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        <div id="model-parameters-container" className="input-group-tight" />
                     </div>
                 </details>
 
@@ -241,7 +162,7 @@ const Sidebar: React.FC = () => {
                             App.handleGenerate(initialIdeaInput?.value?.trim() || '');
                         }}
                     >
-                        <span className="button-text" id="generate-button-text">{generateButtonText}</span>
+                        <span className="button-text" id="generate-button-text">Start Deepthink</span>
                     </button>
                 )}
             </footer>
@@ -250,3 +171,4 @@ const Sidebar: React.FC = () => {
 };
 
 export default Sidebar;
+

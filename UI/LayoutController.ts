@@ -1,4 +1,3 @@
-import { globalState } from '../Core/State';
 import { setIconSlot } from './Icons';
 
 let sidebarIsCollapsed = false;
@@ -19,13 +18,7 @@ function getSidebarCollapseDisabledReason(): string | null {
         const style = window.getComputedStyle(header);
         if (style.display !== 'none' && style.visibility !== 'hidden') return null;
     }
-    if (globalState.currentMode === 'contextual' && document.querySelector('.contextual-text-panel')) return null;
-    if (globalState.currentMode === 'adaptive-deepthink' && document.querySelector('.adaptive-deepthink-embedded-panel')) return null;
-
-    if (globalState.currentMode === 'deepthink') return 'Sidebar collapse disabled in config view';
-    if (globalState.currentMode === 'contextual') return 'Sidebar collapse disabled until a Contextual run is visible';
-    if (globalState.currentMode === 'adaptive-deepthink') return 'Sidebar collapse disabled until an Adaptive Deepthink run is visible';
-    return 'Sidebar collapse is disabled in this view';
+    return 'Sidebar collapse disabled in config view';
 }
 
 function expandSidebar(): void {
@@ -111,21 +104,6 @@ export class LayoutController {
             }
         }, true);
 
-        document.addEventListener('fullscreenchange', () => {
-            const fullscreenElement = document.fullscreenElement;
-            document.querySelectorAll<HTMLButtonElement>('.fullscreen-toggle-button').forEach(btn => {
-                const iconFullscreen = btn.querySelector<HTMLElement>('.icon-fullscreen');
-                const iconExitFullscreen = btn.querySelector<HTMLElement>('.icon-exit-fullscreen');
-                const associatedPreview = document.getElementById(btn.id.replace('fullscreen-btn-', 'preview-container-'));
-                const active = !!fullscreenElement && fullscreenElement === associatedPreview;
-                if (iconFullscreen) iconFullscreen.style.display = active ? 'none' : 'inline-block';
-                if (iconExitFullscreen) iconExitFullscreen.style.display = active ? 'inline-block' : 'none';
-                const label = active ? 'Exit Fullscreen Preview' : 'Toggle Fullscreen Preview';
-                btn.title = label;
-                btn.setAttribute('aria-label', label);
-            });
-        });
-
         if (localStorage.getItem('theme') === 'light') {
             document.body.classList.add('light-mode');
             setThemeIcon(true);
@@ -145,7 +123,7 @@ export class LayoutController {
         }
 
         (window as any).reinitializeSidebarControls = syncSidebarCollapseAvailability;
-        window.addEventListener('appModeChanged', syncSidebarCollapseAvailability);
         syncSidebarCollapseAvailability();
     }
 }
+

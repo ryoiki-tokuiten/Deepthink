@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { PromptStylingEditor } from './PromptStyling';
 import { Icon } from '../../UI/Icons';
-import { globalAdaptiveDeepthinkPromptsManager } from '../../Routing/PromptsManager';
-import { ADAPTIVE_PROMPT_PANES, CONTEXTUAL_PROMPT_PANES, DEEPTHINK_PROMPT_PANES } from '../../Routing/PromptsModal';
+import { DEEPTHINK_PROMPT_PANES } from '../../Routing/PromptsModal';
 import { getRoutingManager } from '../../Routing';
 
 interface PromptContentManager<T extends object> {
@@ -103,7 +102,6 @@ export const PromptsModalManager: React.FC = () => {
 
     const modelConfigManager = getRoutingManager().getModelConfigManager();
     const availableModels = modelConfigManager ? modelConfigManager.getAvailableModels().map((m: any) => m.value) : [];
-    const contextualPromptsManager = promptsManager.getContextualPromptsManager();
 
     return (
         <div id="prompts-modal-overlay" className="modal-overlay">
@@ -124,20 +122,6 @@ export const PromptsModalManager: React.FC = () => {
                                 manager={promptsManager.getDeepthinkPromptsManager()}
                                 availableModels={availableModels}
                             />
-                            <PromptContent
-                                containerId="adaptiveDeepthink-prompts-container"
-                                panes={ADAPTIVE_PROMPT_PANES}
-                                manager={globalAdaptiveDeepthinkPromptsManager}
-                                availableModels={availableModels}
-                            />
-                            {contextualPromptsManager ? (
-                                <PromptContent
-                                    containerId="contextual-prompts-container"
-                                    panes={CONTEXTUAL_PROMPT_PANES}
-                                    manager={contextualPromptsManager}
-                                    availableModels={availableModels}
-                                />
-                            ) : null}
                         </div>
                     </div>
                 </div>
@@ -145,3 +129,4 @@ export const PromptsModalManager: React.FC = () => {
         </div>
     );
 };
+

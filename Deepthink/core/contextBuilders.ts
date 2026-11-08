@@ -1,12 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * MANDATORY REFERENCE: Read Deepthink_Consolidated_Specification.md before modifying!
- * The specification document (Deepthink/docs/Deepthink_Consolidated_Specification.md)
- * is the absolute source of truth (§4, §5, §6.7, §7).
- */
-
 import type { Part } from "../../Routing/AIProvider";
 import type {
   BsrAction,
@@ -28,10 +19,6 @@ import {
 function fence(label: string, content: string | undefined): string {
   return `<${label}>\n${content?.trim() || 'Not available.'}\n</${label}>`;
 }
-
-// ============================================================================
-// Strategy Generation & Proximity Context (§7)
-// ============================================================================
 
 export function buildContextForStrategySeed(
   challenge: string,
@@ -87,8 +74,6 @@ export function buildContextForStrategyGlobalUpdate(
     `### ${s.id}\n${s.strategyText}\n\nLatest Correction:\n${s.refinedSolution || s.solutionAttempt || 'None'}`
   )).join('\n\n');
 
-  // Consolidated BSR decisions carry decisions, forms, rollback points, and event reasons ONLY.
-  // Never window scores or pressures (§6.7).
   const formattedDecisions = bsrDecisions.map(d => {
     let detail = `Decision: ${d.decision}`;
     if (d.form) {
@@ -114,12 +99,10 @@ export function buildContextForStrategyGlobalUpdate(
     `Requested Number of Strategies: ${count}`,
   ];
 
-  // 2. Prior Seed G↔P and Reframed Historical Global Update G↔P blocks
   if (priorProximityHistoryText && priorProximityHistoryText.trim()) {
     parts.push('', fence('StrategyProximityHistory', priorProximityHistoryText));
   }
 
-  // 3. Active Note {GU_Note(u)} + [GU-u Context]
   parts.push(
     '',
     `# Strategy Generation Context for Global Update ${updateNumber}`,
@@ -134,7 +117,6 @@ export function buildContextForStrategyGlobalUpdate(
     fence('StrategiesFinalizedAndUsedSoFar', formattedUsedSoFar),
   );
 
-  // 4. Current Global Update G↔P turns so far
   if (currentGuTurns && currentGuTurns.length > 0) {
     const formattedCurrentTurns = currentGuTurns.map(
       t => `### Strategy ${t.role === 'generator' ? 'Generator' : 'Proximity Reviewer'} (Turn ${t.turnNumber ?? 1})\n${t.content}`
@@ -151,10 +133,6 @@ export function buildContextForStrategyGlobalUpdate(
 
   return parts.join('\n\n');
 }
-
-// ============================================================================
-// Modules Generator & Modules Impact Reviewer Context (§7)
-// ============================================================================
 
 export function buildContextForModulesGenerate(
   challenge: string,
@@ -177,21 +155,17 @@ export function buildContextForModulesGenerate(
     `Requested Number of Modules: ${count}`,
   ];
 
-  // 2. Prior Heartbeat Reframed Notes + G↔P histories (for Heartbeat >= 2)
   if (priorImpactReviewHistoryText && priorImpactReviewHistoryText.trim()) {
     parts.push('', fence('ModulesImpactReviewHistory', priorImpactReviewHistoryText));
   }
 
-  // 3. Active Note {HB_Note(h)}
   parts.push(
     '',
     `# Modules Generator Context for Heartbeat ${heartbeatNo}`,
     fence('HarnessNote', note),
   );
 
-  // 4. [HB-h Context]
   if (!previousHeartbeat) {
-    // Heartbeat 1: Active Running Strategies + Latest Corrections + DOS Synthesis
     const formattedActiveStrategies = activeStrategies.map(s => (
       `### ${s.id}\nStrategy: ${s.strategyText}\n\nLatest Correction:\n${s.refinedSolution || s.solutionAttempt || 'None'}`
     )).join('\n\n');
@@ -203,8 +177,6 @@ export function buildContextForModulesGenerate(
       parts.push('', fence('DosCoreSynthesis', JSON.stringify(dosOutput.core_synthesis, null, 2)));
     }
   } else {
-    // Heartbeat h >= 2:
-    // (1) Final generated module object from Heartbeat h-1 + independent testing outputs
     const prevModulesAndTests = previousHeartbeat.modules.map(m => ({
       module_id: m.id,
       text: m.moduleText,
@@ -212,7 +184,6 @@ export function buildContextForModulesGenerate(
       testing_output: m.testerAttempt || 'None',
     }));
 
-    // (2) Mapped branch packets schema (current running strategies + latest corrections + which modules were mapped to which branches)
     const mappedBranchPackets = activeStrategies.map(s => {
       const mappedModuleIds = previousHeartbeat.modules
         .filter(m => !m.targetBranchIds || m.targetBranchIds.length === 0 || m.targetBranchIds.includes(s.id))
@@ -225,12 +196,10 @@ export function buildContextForModulesGenerate(
       };
     });
 
-    // (3) Realized module feedback (observed test outcome, utilization, counterevidence)
     const feedbackText = previousHeartbeat.realized_feedback.length > 0
       ? JSON.stringify(previousHeartbeat.realized_feedback, null, 2)
       : 'No prior feedback recorded.';
 
-    // (4) Modules finalized and used so far across prior heartbeats
     const formattedUsedSoFar = (modulesUsedSoFar || []).map(u => (
       `- [Heartbeat ${u.heartbeatNo}, Iteration ${u.iterationFinalized}] ${u.moduleId}: ${u.text}`
     )).join('\n');
@@ -249,13 +218,11 @@ export function buildContextForModulesGenerate(
       fence('ModulesFinalizedAndUsedSoFar', formattedUsedSoFar),
     );
 
-    // (5) DOS Core Synthesis for Heartbeat h
     if (dosOutput?.core_synthesis && Object.keys(dosOutput.core_synthesis).length > 0) {
       parts.push('', fence('DosCoreSynthesis', JSON.stringify(dosOutput.core_synthesis, null, 2)));
     }
   }
 
-  // 5. Current Heartbeat G↔P turns so far
   if (currentHbTurns && currentHbTurns.length > 0) {
     const formattedCurrentTurns = currentHbTurns.map(
       t => `### Modules ${t.role === 'generator' ? 'Generator' : 'Impact Reviewer'} (Turn ${t.turnNumber ?? 1})\n${t.content}`
@@ -272,10 +239,6 @@ export function buildContextForModulesGenerate(
 
   return parts.join('\n\n');
 }
-
-// ============================================================================
-// DOS Context (§7)
-// ============================================================================
 
 export function buildContextForDos(
   challenge: string,
@@ -343,7 +306,6 @@ export function buildContextForDos(
     ].join('\n\n');
   }
 
-  // Step-ii DOS
   const note = buildDosStepIiNote(options?.slotStatuses || []);
   const prevModules = formatPrevModulesForDos(options?.previousHeartbeat);
 
@@ -361,10 +323,6 @@ export function buildContextForDos(
     fence('SurvivingAndNewBranchesState', formattedBranches),
   ].join('\n\n');
 }
-
-// ============================================================================
-// Branch History & Correction/Critique Context (§7)
-// ============================================================================
 
 function formatIterationEntry(it: DeepthinkBranchIteration): string {
   const hasCritique = Boolean(it.critique && it.critique.trim().length > 0);
@@ -483,10 +441,6 @@ export function buildContextForCritiqueAgent(
   ].join('\n');
 }
 
-// ============================================================================
-// BSR Context (§7, §6.7)
-// ============================================================================
-
 export function buildContextForBsr(
   challenge: string,
   branchId: string,
@@ -511,34 +465,6 @@ export function buildContextForBsr(
     fence('MemoryBankBeforeWindow', distilledMemoryBeforeWindow || 'None available.'),
     '',
     fence('WindowCorrectionCritiqueHistory', windowHistoryText),
-  ].join('\n\n');
-}
-
-// ============================================================================
-// Final Judge Context (§7, §8.3, §9)
-// ============================================================================
-
-export function buildContextForFinalJudge(
-  challenge: string,
-  candidates: Array<{
-    branchId: string;
-    strategyText: string;
-    finalSolution: string;
-    finalCritique?: string;
-  }>
-): string {
-  const formattedCandidates = candidates.map(c => (
-    `### Candidate ${c.branchId}\nStrategy: ${c.strategyText}\n\n` +
-    fence('FinalSolution', c.finalSolution) + '\n' +
-    fence('FinalCritique', c.finalCritique)
-  )).join('\n\n');
-
-  return [
-    `# Core Challenge`,
-    challenge,
-    '',
-    `# Competing Candidate Solutions`,
-    formattedCandidates,
   ].join('\n\n');
 }
 

@@ -42,7 +42,7 @@ How to interpret each block in your prompt and environment:
 3. Zero regression and zero late-iteration laziness:
    A common failure mode in multi-iteration loops is fixing the latest critique point while silently breaking or truncating parts of the artifact that already worked in earlier iterations.
    - Reuse and preserve every verified component listed in the Critique's \`Preserve\` section and \`<DistilledMemoryBank>\`.
-   - Never replace previously complete code, derivations, or sections with \`// ... rest of implementation remains the same ...\` or summary placeholders. Every iteration's **Corrected artifact** must be 100% complete, standalone, and self-contained, because the Final Judge (and downstream readers) evaluates your latest correction directly as the branch's complete deliverable.
+   - Never replace previously complete code, derivations, or sections with \`// ... rest of implementation remains the same ...\` or summary placeholders. Every iteration's **Corrected artifact** must be 100% complete, standalone, and self-contained, because your latest correction serves directly as the branch's complete deliverable.
 </CoreExecutionMandates>
 
 <OutputDiscipline>

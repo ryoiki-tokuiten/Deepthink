@@ -83,13 +83,6 @@ interface SandboxSessionMetadata {
     repositoryAccess?: SandboxRepositoryAccessRequest;
 }
 
-interface SandboxSessionSummary {
-    sessionId: string;
-    agentName: string;
-    mode: 'legacy' | 'repository';
-    repositoryAccess?: SandboxRepositoryAccessRequest;
-}
-
 interface DeepthinkResultsSnapshotRequest {
     repositoryId: string;
     commitMessage?: string;
@@ -307,7 +300,7 @@ function sendText(res: ServerResponse, statusCode: number, message: string, cont
 
 const isSafeSessionId = (id: string) => /^[a-zA-Z0-9_-]{8,80}$/.test(id);
 const isSafeRepositoryId = (id: string) => /^[a-zA-Z0-9_-]{4,80}$/.test(id);
-const isDeepthinkRepository = (id: string) => id.startsWith('deepthink-') || id.startsWith('adaptive-deepthink-');
+const isDeepthinkRepository = (id: string) => id.startsWith('deepthink-');
 
 function isSafeRepositoryDirectory(directory: string): boolean {
     if (!directory || directory.includes('\\') || directory.startsWith('/') || directory.endsWith('/')) return false;
@@ -1888,44 +1881,6 @@ async function handleArtifactRequest(pathname: string, res: ServerResponse) {
     streamFile(res, absolutePath);
 }
 
-function getFriendlyAgentName(sessionId: string, repositoryAccess?: SandboxRepositoryAccessRequest): string {
-    const repositorySuffix = repositoryAccess?.agentDirectory ? ` - /workspace/${repositoryAccess.agentDirectory}` : '';
-    if (sessionId.startsWith('ctx-sess-')) {
-        const namePart = sessionId.split('-').slice(3).join(' ');
-        return `${namePart ? namePart.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : 'Contextual Agent'}${repositorySuffix}`;
-    }
-    if (sessionId.startsWith('dtsb-')) {
-        let strategy = '', sub = '', version = '';
-        for (const part of sessionId.split('-')) {
-            if (/^s\d+$/.test(part)) strategy = part.toUpperCase();
-            else if (/^main\d+$/.test(part)) strategy = 'S' + part.slice(4);
-            else if (/^ss\d+$/.test(part)) sub = part.toUpperCase();
-            else if (/^sub\d+$/.test(part)) sub = 'Sub ' + part.slice(3);
-            else if (part === 'direct') sub = '';
-            else if (/^v\d+$/.test(part)) version = part;
-        }
-        const kind = sessionId.includes('modules-testing') ? 'Modules Testing'
-            : sessionId.includes('solution-attempt') ? 'Solution Attempt'
-            : sessionId.includes('solution-critique') ? 'Solution Critique'
-            : sessionId.includes('solution-correction') ? 'Solution Correction'
-            : 'Deepthink Agent';
-        const details = [strategy, sub, version].filter(Boolean).join(' - ');
-        return `${details ? `${kind} (${details})` : kind}${repositorySuffix}`;
-    }
-    return `${sessionId}${repositorySuffix}`;
-}
-
-async function buildSessionSummary(sessionId: string): Promise<SandboxSessionSummary> {
-    const metadata = await readSessionMetadata(sessionId);
-    const repositoryAccess = sanitizeRepositoryAccess(metadata?.repositoryAccess);
-    return {
-        sessionId,
-        agentName: getFriendlyAgentName(sessionId, repositoryAccess),
-        mode: repositoryAccess ? 'repository' : 'legacy',
-        repositoryAccess,
-    };
-}
-
 interface ExplorerRepositoryTarget {
     root: string;
     workspace?: SandboxCommandWorkspace;
@@ -1992,7 +1947,6 @@ function parseExplorerQuery(req: IncomingMessage) {
         repositoryScope: searchParams.get('scope') === 'repository',
         base: searchParams.get('base') || '',
         head: searchParams.get('head') || '',
-        prefix: searchParams.get('prefix') || '',
     };
 }
 
@@ -2025,20 +1979,6 @@ export async function handleSandboxBackendRequest(req: IncomingMessage, res: Ser
             case '/api/sandbox/execute':
                 if (requireMethod('POST')) await handleExecute(req, res);
                 return true;
-
-            case '/api/sandbox/commit': {
-                if (!requireMethod('POST')) return true;
-                const payload = JSON.parse(await readRequestBody(req)) as { sessionId: string; commitMessage?: string };
-                if (!payload.sessionId) { sendJson(res, 400, { ok: false, error: 'sessionId is required.' }); return true; }
-                const workspace = await getWorkspaceContextForSession(payload.sessionId);
-                if (!workspace || !(await fileExists(gitWorkspaceFor(workspace)))) {
-                    sendJson(res, 404, { ok: false, error: `Workspace not found for session ${payload.sessionId}` });
-                    return true;
-                }
-                await initAndCommitWorkspace(gitWorkspaceFor(workspace), payload.commitMessage || 'Workspace snapshot');
-                sendJson(res, 200, { ok: true });
-                return true;
-            }
 
             case '/api/sandbox/snapshot': {
                 if (!requireMethod('POST')) return true;
@@ -2159,25 +2099,6 @@ export async function handleSandboxBackendRequest(req: IncomingMessage, res: Ser
             case '/api/sandbox/environment':
                 if (requireMethod('GET')) sendJson(res, 200, await getSandboxEnvironmentProfile());
                 return true;
-
-            case '/api/sandbox/workspace/sessions': {
-                if (!requireMethod('GET')) return true;
-                const { prefix } = parseExplorerQuery(req);
-                if (!(await fileExists(VFS_ROOT))) { sendJson(res, 200, []); return true; }
-                const entries = await readdir(VFS_ROOT, { withFileTypes: true });
-                const sessions: SandboxSessionSummary[] = [];
-                for (const entry of entries) {
-                    if (entry.isDirectory() && isSafeSessionId(entry.name) && (!prefix || entry.name.includes(prefix))) {
-                        try {
-                            sessions.push(await buildSessionSummary(entry.name));
-                        } catch {
-                            sessions.push({ sessionId: entry.name, agentName: getFriendlyAgentName(entry.name), mode: 'legacy' });
-                        }
-                    }
-                }
-                sendJson(res, 200, sessions);
-                return true;
-            }
 
             case '/api/sandbox/workspace/history': {
                 if (!requireMethod('GET')) return true;

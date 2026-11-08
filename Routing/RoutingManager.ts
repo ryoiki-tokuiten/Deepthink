@@ -64,8 +64,8 @@ export class RoutingManager {
     public getModelSelectionUI() { return this.modelSelectionUI; }
     public getPromptsManager() { return this.promptsManager; }
 
-    public initializePromptsManager(deepthinkPromptsRef: { current: any }, contextualPromptsRef?: { current: any }): void {
-        this.promptsManager = new PromptsManager(deepthinkPromptsRef, contextualPromptsRef);
+    public initializePromptsManager(deepthinkPromptsRef: { current: any }): void {
+        this.promptsManager = new PromptsManager(deepthinkPromptsRef);
     }
 
     public getSelectedModel() { return this.modelConfigManager.getSelectedModel(); }
@@ -82,6 +82,6 @@ export class RoutingManager {
     public getBsrWeightLarge() { return this.modelConfigManager.getBsrWeightLarge(); }
     public getBsrWeightPreset() { return this.modelConfigManager.getBsrWeightPreset(); }
     public hasValidApiKey() { return this.apiKeyManager.hasValidApiKey(); }
-    public setCurrentMode(mode: string) { this.promptsModal?.setCurrentMode(mode); }
     public updatePromptsModalState(isGenerating: boolean) { this.promptsModal?.updateTriggerState(isGenerating); }
 }
+

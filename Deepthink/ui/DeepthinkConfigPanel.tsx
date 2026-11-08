@@ -496,7 +496,7 @@ const LoopScheduleSection: React.FC<{
                                 <div
                                     key={itNum}
                                     className={classNames('timeline-step', isUpdate && 'update-step', hasHeartbeatAtUpdate && 'with-heartbeat', isFinal && 'final-step', isHeartbeat && 'heartbeat-step')}
-                                    title={`Iteration ${itNum}${isUpdate ? `: Global Update + BSR${hasHeartbeatAtUpdate ? ' (Curated Heartbeat synchronized)' : ''}` : isFinal ? ': Final Evaluation' : isHeartbeat ? `: Curated Context Heartbeat (k=${k})` : ''}`}
+                                    title={`Iteration ${itNum}${isUpdate ? `: Global Update + BSR${hasHeartbeatAtUpdate ? ' (Curated Heartbeat synchronized)' : ''}` : isFinal ? ': Final Iteration (Corrections Only)' : isHeartbeat ? `: Curated Context Heartbeat (k=${k})` : ''}`}
                                 >
                                     <span className="step-num">{itNum}</span>
                                 </div>

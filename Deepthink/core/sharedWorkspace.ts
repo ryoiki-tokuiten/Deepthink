@@ -1,12 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * MANDATORY REFERENCE: Read Deepthink_Consolidated_Specification.md before modifying!
- * The specification document (Deepthink/docs/Deepthink_Consolidated_Specification.md)
- * is the absolute source of truth (§8.2, §8.3, §8.4).
- */
-
 import type { ToolDefinition } from '@langchain/core/language_models/base';
 import { getEncoding } from 'js-tiktoken';
 import { z } from 'zod';
@@ -104,10 +95,6 @@ export const sharedWorkspaceToolDefinition: ToolDefinition = {
   },
 };
 
-/**
- * Shared workspace state manager providing thread-safe realtime read/edit/append
- * across concurrent agent executions with a 5000-token maximum cap (§8.4).
- */
 export class SharedWorkspaceManager {
   private content = '# Shared Workspace\n\nLive collaboration document across agents.\n';
   private writeQueue: Promise<void> = Promise.resolve();
@@ -126,11 +113,6 @@ export class SharedWorkspaceManager {
     return this.content;
   }
 
-  /**
-   * Internal orchestrator initialization/restore method (still enforces the 5000-token gate).
-   * Note: Agent tool calls via handleToolCall do NOT have access to full-file "write"
-   * and must use "edit" or "append".
-   */
   public async write(newContent: string): Promise<string> {
     return this.enqueue(async () => {
       const tokenCount = countTextTokens(newContent);

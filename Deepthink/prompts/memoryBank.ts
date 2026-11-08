@@ -1,12 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * MANDATORY REFERENCE: Read Deepthink_Consolidated_Specification.md before modifying!
- * The specification document (Deepthink/docs/Deepthink_Consolidated_Specification.md)
- * is the absolute source of truth (§7, §9).
- */
-
 import { deepthinkSharedDocument } from './sharedDocument.ts';
 
 export const memoryBankPrompt = `

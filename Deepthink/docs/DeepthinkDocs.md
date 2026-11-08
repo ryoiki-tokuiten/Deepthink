@@ -57,15 +57,15 @@ Each agent has an editable system prompt and an optional model override. The ove
 ```text
 Seed strategies
 Iteration 1            every branch writes a first solution, then it is critiqued
-Iterations 2 to i      every branch corrects its solution, then the correction is critiqued
-Final judge
+Iterations 2 to i - 1  every branch corrects its solution, then the correction is critiqued
+Iteration i            every branch runs its final correction (no critique); pipeline completes
 ```
 
-Inside an iteration, all branches run in parallel and the system waits for every one of them to finish. Every iteration from 2 through `i` runs correction and critique with its natural context, and the final judge receives each active branch's final correction-critique pair. There are no modules before iteration 1, because modules are generated from critiques and DOS synthesis.
+Inside an iteration, all branches run in parallel and the system waits for every one of them to finish. Every iteration from 2 through `i - 1` runs correction and critique with its natural context, and the final iteration `i` runs only the branch corrections. Each surviving strategy branch produces a valid final output. There are no modules before iteration 1, because modules are generated from critiques and DOS synthesis.
 
 After iteration `n` finishes, exactly one of these happens:
 
-1. If `n = i`, the run stops and goes to the final judge. No heartbeat or global update runs.
+1. If `n = i`, the run completes once the final corrections finish. No critique, heartbeat, or global update runs.
 2. If `n` is a multiple of `j`, a global update runs. It always ends with a heartbeat, whatever `k` is.
 3. Otherwise a counter of iterations since the last heartbeat goes up by one. When it reaches `k` and the heartbeat is worth running, a heartbeat runs and the counter resets. If curated context is off, this step is skipped.
 
@@ -88,7 +88,7 @@ Whatever runs after iteration `n` is what the corrections in iteration `n + 1` a
 | 11, 12 | nothing |
 | 13 | heartbeat |
 | 14 | nothing |
-| 15 | final iteration (correction + critique), then the final judge |
+| 15 | final iteration (corrections only); run completes |
 
 **Example of a skipped heartbeat: `i = 14`, `j = 6`, `k = 5`.** After iteration 5 the counter reaches `k`, but the global update comes right after iteration 6, so a heartbeat would serve only one correction. It is skipped, and the global update's heartbeat refreshes everything.
 
@@ -373,7 +373,6 @@ Each call has a system instruction and a user prompt. The system instruction is 
 | Memory bank | `memoryBank` | text | `Strategy-N/` (read-only) |
 | DOS | `dos` | JSON | none, read-only |
 | BSR | `bsr` | JSON | `Strategy-N/` (read-only) |
-| Final judge | `finalJudge` | JSON | none, read-only |
 
 With sandbox tools off, the prompt goes to the model directly, with JSON mode for the JSON agents and the configured thinking level. With sandbox tools on, the same prompt goes in as the user message to a tool-using agent that has the system prompt, full repository read access, read/write access to `/tmp/`, and the `shared_workspace` tool. The thinking level is not passed in that mode.
 
@@ -410,7 +409,7 @@ Prompts are rebuilt from stored fields every time. Nothing is carried over insid
 |---|---|---|---|
 | Strategy text | Seed; EVOLVE; PRUNE | Replaced | Everything that names the branch's strategy |
 | First solution | Iteration 1, and a replacement branch's first execution | Set once per branch | Fallback when there is no latest solution |
-| Latest solution | Iteration 1, then every correction | Replaced | Peers' context, DOS, Modules Generator and Modules Impact Reviewer, strategy generator and proximity, final judge |
+| Latest solution | Iteration 1, then every correction | Replaced | Peers' context, DOS, Modules Generator and Modules Impact Reviewer, strategy generator and proximity |
 | Latest critique | Every critique | Replaced | Peers' context, DOS |
 | Iteration history | After the critique of each iteration | Added to | History windows, BSR, memory bank |
 | Memory bank | Each distillation | Replaced | History window of correction and critique, BSR, next memory bank |
@@ -968,31 +967,7 @@ During this post-update Heartbeat $h$, **MG & MIR** receive the exact same chron
 
 ### Stage 6: final iteration
 
-Iteration `i` uses the exact same Stage 3 correction and critique templates and context as iterations `2` to `i-1`, including `LatestCustomCuratedContext` when a heartbeat has run. Each branch's history entry for iteration `i` holds both the final correction and its final critique.
-
-### Stage 7: final judge
-
-```text
-# Core Challenge
-{challenge}
-
-# Competing Candidate Solutions
-
-### Candidate main1
-Strategy: {strategy text}
-
-<FinalSolution>
-{latest solution}
-</FinalSolution>
-<FinalCritique>
-{latest critique}
-</FinalCritique>
-
-### Candidate main2
-{...}
-```
-
-One candidate per active branch, including its final solution and final critique pair. No memory bank, module history, or archived branch is included.
+Iteration `i` uses the exact same Stage 3 correction template and context as iterations `2` to `i-1`, including `LatestCustomCuratedContext` when a heartbeat has run. In iteration `i`, only the branch corrections run (no critiques are generated), and the pipeline completes once all branch corrections finish.
 
 ## Repository
 
@@ -1067,11 +1042,10 @@ Every agent can read the entire repository and has full read and write access to
 | Modules Tester | Its own `Module-M/` folder (read/write), full repository read, and read/write in `tmp/` |
 | Solution attempt, critique, correction | `Strategy-N/` (read/write), full repository read, and read/write in `tmp/` |
 | Memory bank, BSR | `Strategy-N/` (read-only), full repository read, and read/write in `tmp/` |
-| Final judge | Repo root, read-only. Read/write in `tmp/` |
 
 The harness creates directories, writes strategy history files and module feedback records (along with `.jsonl` trajectory files), makes the commits, restores folders, and moves pruned folders into `Pruned_Strategies/`.
 
-Agents with sandbox access get three tools: `sandbox_exec`, `shared_workspace`, and `final_output`, plus a runtime-appended `<Virtual Sandbox Tool>` system prompt block describing detected runtimes (Python, Node.js, Lean 4 / Mathlib, Rust, and CLI utilities), mount permissions, and inline file/image marker syntax (`[[image:path|Label]]` and `[[file:path|Label]]`, which expand into inline previews in the UI). Each sandboxed agent invocation has a default budget of $m = 64$ tool-call turns and a 60-minute wall-clock timeout. The harness injects countdown reminders at $m - 10$ and $m - 5$ remaining tool calls, as well as wall-clock warnings at 10 minutes and 5 minutes remaining. If an agent reaches $m$ tool calls without submitting, the harness injects an urgent final-submission prompt and grants 5 overtime grace turns; if still not submitted (or if the 60-minute wall-clock limit expires), `sandbox_exec` and `shared_workspace` are revoked for up to 5 finalization turns where only `final_output` remains. Individual `sandbox_exec` commands have a 120-second default timeout (300-second maximum), automatic `rtk` command wrapping, `view`/`open` shell helpers for inspecting generated images, and 5,000-token truncation on `stdout` and `stderr` individually. `final_output` validates both the role's required output format and its maximum output token cap (5,000 tokens for Strategy Generator, Strategy Proximity, Modules Generator, Modules Impact Reviewer, DOS, BSR, Solution Critique, Modules Tester, Solution Attempt, and Final Judge; 10,000 tokens for Solution Correction and Memory Bank). If a submission exceeds the token cap, the tool call and its error remain in conversation history and a harness note instructs the agent to condense and resubmit within its token limit.
+Agents with sandbox access get three tools: `sandbox_exec`, `shared_workspace`, and `final_output`, plus a runtime-appended `<Virtual Sandbox Tool>` system prompt block describing detected runtimes (Python, Node.js, Lean 4 / Mathlib, Rust, and CLI utilities), mount permissions, and inline file/image marker syntax (`[[image:path|Label]]` and `[[file:path|Label]]`, which expand into inline previews in the UI). Each sandboxed agent invocation has a default budget of $m = 64$ tool-call turns and a 60-minute wall-clock timeout. The harness injects countdown reminders at $m - 10$ and $m - 5$ remaining tool calls, as well as wall-clock warnings at 10 minutes and 5 minutes remaining. If an agent reaches $m$ tool calls without submitting, the harness injects an urgent final-submission prompt and grants 5 overtime grace turns; if still not submitted (or if the 60-minute wall-clock limit expires), `sandbox_exec` and `shared_workspace` are revoked for up to 5 finalization turns where only `final_output` remains. Individual `sandbox_exec` commands have a 120-second default timeout (300-second maximum), automatic `rtk` command wrapping, `view`/`open` shell helpers for inspecting generated images, and 5,000-token truncation on `stdout` and `stderr` individually. `final_output` validates both the role's required output format and its maximum output token cap (5,000 tokens for Strategy Generator, Strategy Proximity, Modules Generator, Modules Impact Reviewer, DOS, BSR, Solution Critique, Modules Tester, and Solution Attempt; 10,000 tokens for Solution Correction and Memory Bank). If a submission exceeds the token cap, the tool call and its error remain in conversation history and a harness note instructs the agent to condense and resubmit within its token limit.
 
 ### Shared workspace
 
@@ -1080,12 +1054,6 @@ Every agent gets the `shared_workspace` tool with three actions: `read`, `edit` 
 ### Attached files
 
 Text files the user attaches are included in `state.challenge`. Images are included as `<!-- EXECUTION_IMAGE_START -->` blocks in `state.challenge` and converted into native provider image inputs when prompts are sent. All attached files are also written into `user_uploaded/` inside the run repository so agents can inspect them on disk.
-
-## Final judge
-
-The judge's prompt is listed in Stage 7 above. It also has read-only access to the repository and to the shared workspace, so it can open other files, but the candidates it chooses between are the ones in its prompt. Archived branches are never candidates.
-
-It returns `{ "best_solution_id": "main2", "final_reasoning": "..." }`. The id must match a candidate. The result is the chosen candidate's solution as written, not a blend.
 
 ## Failures and retries
 
@@ -1096,7 +1064,6 @@ It returns `{ "best_solution_id": "main2", "final_reasoning": "..." }`. The id m
   - one decision per branch
   - for a global update, exactly one strategy entry per EVOLVE or PRUNE slot and none for any other slot
   - a BSR report whose `branch_id` matches its branch, with valid progress and regression event arrays
-  - a judge choice that names a real candidate
 
   A failed check is retried, and a partly valid output is never applied.
 - **Stopping.** A stop request takes effect between steps and during waits for a retry.
@@ -1116,19 +1083,17 @@ The saved state also holds BSR records, ledgers, DOS outputs, heartbeat blocks, 
 | Tab | Shows |
 |---|---|
 | Branches | Active strategies and each branch's history |
-| Modules | Generator and impact review history, heartbeats, which branches each module was sent to, test results, and feedback |
-| Branch State | BSR reports, standing event ledgers, computed window metrics, pressures, and decisions at each global update |
-| Final Result | The judge's choice and reasoning |
+| Curated Context | Generator and impact review history, heartbeats, which branches each module was sent to, test results, and feedback |
 | Live | Each agent's lifecycle, prompts, responses, traces, retries, and failures |
 | Filesystem | The run's repository |
 
-The configuration panel has only the settings listed above. The prompt editor lists these agents: Strategy Generator, Modules Generator, Modules Testing, Solution Attempt, Solution Critique, Solution Correction, Memory Bank, DOS, BSR, and Final Judge.
+The configuration panel has only the settings listed above. The prompt editor lists these agents: Strategy Generator, Modules Generator, Modules Testing, Solution Attempt, Solution Critique, Solution Correction, Memory Bank, DOS, and BSR.
 
 ## Code map
 
 | Module | Responsibility |
 |---|---|
-| `pipelineOrchestrator.ts` | The run loop, each iteration phase, heartbeats, global updates, the final judge, retries, and commits |
+| `pipelineOrchestrator.ts` | The run loop, each iteration phase, heartbeats, global updates, retries, and commits |
 | `deepthinkCore.ts` | Starting and resuming a run, reading settings, saving snapshots, and assembling the challenge from attached files |
 | `loopController.ts` | Bounds on `i`, `j`, `k`, the heartbeat rule, and what runs after each iteration |
 | `formulas.ts` | BSR window scoring, pressures, and decisions; module utilization |

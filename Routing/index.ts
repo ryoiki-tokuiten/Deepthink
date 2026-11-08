@@ -1,17 +1,9 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import { RoutingManager } from './RoutingManager';
 
 export { callAI, type CallAIOptions } from './AIService';
 
-
-// Global routing manager instance - initialized lazily
 let routingManagerInstance: RoutingManager | null = null;
 
-// Get or create the routing manager instance
 export function getRoutingManager(): RoutingManager {
     if (!routingManagerInstance) {
         routingManagerInstance = new RoutingManager();
@@ -19,21 +11,17 @@ export function getRoutingManager(): RoutingManager {
     return routingManagerInstance;
 }
 
-// Initialize routing when this module is imported
 export function initializeRouting(): void {
     const manager = getRoutingManager();
     manager.initialize();
 }
 
-// Export the routing manager for direct access
 export const routingManager = getRoutingManager();
 
-// Get the DeepthinkConfigController for centralized Deepthink config management
 export function getDeepthinkConfigController() {
     return getRoutingManager().getDeepthinkConfigController();
 }
 
-// Convenience functions for shared routing consumers
 export function getSelectedModel(): string {
     return getRoutingManager().getSelectedModel();
 }
@@ -105,10 +93,7 @@ export function getProviderForCurrentModel(): string {
         .getProviderTypeForModel(selectedModel);
     if (configuredProviderType) return configuredProviderType;
 
-    // Get provider from the model's configuration
-    // getModelProvider returns the provider string (e.g., 'gemini', 'openai', 'anthropic')
     const provider = modelConfigManager.getModelProvider(selectedModel);
 
-    // Normalize 'google' to 'gemini' for consistency
     return provider === 'google' ? 'gemini' : provider;
 }

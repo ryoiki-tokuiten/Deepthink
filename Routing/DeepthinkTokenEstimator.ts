@@ -23,7 +23,6 @@ export interface DeepthinkApiCallBreakdown {
     modulesTester: number;
     bsr: number;
     memoryBank: { min: number; max: number };
-    finalJudge: number;
     standaloneHeartbeats: number;
     globalUpdates: number;
     totalHeartbeats: number;
@@ -64,7 +63,8 @@ export function calculateDeepthinkApiCallsFromParams(params: Partial<ModelParame
     const { standaloneHeartbeats, globalUpdates, totalHeartbeats } = calculateLoopSchedule(i, j, k, curatedContextEnabled);
 
     const seedStrategyCalls = 1 + 2 * strategyProximityLoops;
-    const branchIterationCalls = 2 * i * strategiesCount;
+    const critiqueIterations = i > 1 ? i - 1 : 1;
+    const branchIterationCalls = (i + critiqueIterations) * strategiesCount;
     const modCallsPerHeartbeat = modulesCount > 0 ? 1 + 2 * modulesImpactReviewLoops + modulesCount : 0;
     const standaloneHeartbeatCalls = standaloneHeartbeats * ((modulesCount > 0 ? 1 : 0) + modCallsPerHeartbeat);
     const guHeartbeatCalls = curatedContextEnabled ? globalUpdates * modCallsPerHeartbeat : 0;
@@ -72,9 +72,8 @@ export function calculateDeepthinkApiCallsFromParams(params: Partial<ModelParame
     const guStepViCalls = globalUpdates * (modulesCount > 0 ? 1 : 0);
     const guMaintenanceMin = globalUpdates * strategiesCount;
     const guMaintenanceMax = globalUpdates * (seedStrategyCalls + 2 * strategiesCount);
-    const finalJudgeCalls = 1;
 
-    const commonBase = seedStrategyCalls + branchIterationCalls + standaloneHeartbeatCalls + guHeartbeatCalls + guStepICalls + guStepViCalls + finalJudgeCalls;
+    const commonBase = seedStrategyCalls + branchIterationCalls + standaloneHeartbeatCalls + guHeartbeatCalls + guStepICalls + guStepViCalls;
     const baseMin = commonBase + guMaintenanceMin;
     const baseMax = commonBase + guMaintenanceMax;
 
@@ -97,8 +96,8 @@ export function calculateDeepthinkApiCallsFromParams(params: Partial<ModelParame
             max: strategiesCount * (1 + globalUpdates),
         },
         solutionCritique: {
-            min: i * strategiesCount,
-            max: (i + globalUpdates) * strategiesCount,
+            min: critiqueIterations * strategiesCount,
+            max: (critiqueIterations + globalUpdates) * strategiesCount,
         },
         solutionCorrection: Math.max(0, i - 1) * strategiesCount,
         dos: standaloneHeartbeats * (modulesCount > 0 ? 1 : 0) + globalUpdates * (1 + (modulesCount > 0 ? 1 : 0)),
@@ -107,7 +106,6 @@ export function calculateDeepthinkApiCallsFromParams(params: Partial<ModelParame
         modulesTester: totalHeartbeatsWithMod * modulesCount,
         bsr: globalUpdates * strategiesCount,
         memoryBank: { min: globalUpdates * strategiesCount, max: 0 },
-        finalJudge: finalJudgeCalls,
         standaloneHeartbeats,
         globalUpdates,
         totalHeartbeats,
@@ -200,7 +198,6 @@ interface TokenProfile {
     dosCoreSynthesisContext: number;
     bsrOutput: number;
     bsrLedgerGrowthPerUpdate: number;
-    finalJudgeOutput: number;
     branchPacketShare: number;
 }
 
@@ -233,7 +230,6 @@ const WORST_PROFILE: TokenProfile = {
     dosCoreSynthesisContext: 3_500,
     bsrOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     bsrLedgerGrowthPerUpdate: 800,
-    finalJudgeOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     branchPacketShare: 1.0,
 };
 
@@ -255,7 +251,6 @@ const AVERAGE_PROFILE: TokenProfile = {
     dosCoreSynthesisContext: 1_800,
     bsrOutput: 1_800,
     bsrLedgerGrowthPerUpdate: 400,
-    finalJudgeOutput: 2_800,
     branchPacketShare: 0.5,
 };
 
@@ -394,24 +389,26 @@ function simulatePipelineTokens(
 
                 const correctionInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + mappedPacketTokens + windowTokens + peerContextTokens;
                 const correctionOutput = profile.solutionCorrectionOutput;
-                const critiqueInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + windowTokens + correctionOutput;
-                const critiqueOutput = profile.critiqueOutput;
-
-                totalInput += correctionInput + critiqueInput;
-                totalOutput += correctionOutput + critiqueOutput;
+                totalInput += correctionInput;
+                totalOutput += correctionOutput;
                 branch.latestSolutionTokens = correctionOutput;
-                branch.latestCritiqueTokens = critiqueOutput;
-                branch.windowHistoryTokens += correctionOutput + critiqueOutput;
+                branch.windowHistoryTokens += correctionOutput;
+
+                if (n < i) {
+                    const critiqueInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + windowTokens + correctionOutput;
+                    const critiqueOutput = profile.critiqueOutput;
+                    totalInput += critiqueInput;
+                    totalOutput += critiqueOutput;
+                    branch.latestCritiqueTokens = critiqueOutput;
+                    branch.windowHistoryTokens += critiqueOutput;
+                }
             }
         }
 
         const step = determinePostIterationStep(n, sinceHeartbeat, i, j, k, curatedContextEnabled);
         sinceHeartbeat = step.nextSinceHeartbeat;
 
-        if (step.action.type === 'FINAL_JUDGE') {
-            const candidatesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
-            totalInput += profile.promptBase + candidatesTokens;
-            totalOutput += profile.finalJudgeOutput;
+        if (n >= i) {
             break;
         } else if (step.action.type === 'HEARTBEAT') {
             heartbeatNo++;

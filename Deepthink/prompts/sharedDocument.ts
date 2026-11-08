@@ -6,7 +6,7 @@ Every agent in the pipeline reads this document so that they get the complete un
 
 <HowThePipelineWorks>
 1. Parallel branches and lockstep iterations:
-   The user provides a Core Challenge (and optional files in \`user_uploaded/\`). Strategy agents generate distinct approaches (\`main1\` to \`mainN\`), each assigned to its own directory (\`Strategy-1/\` to \`Strategy-N/\`). All branches advance in lockstep: in Iteration 1, every branch produces an initial work product and has it critiqued. In Iterations 2 through \`i\`, every branch runs Correction followed by Critique. No branch moves to the next iteration until all branches finish the current one.
+   The user provides a Core Challenge (and optional files in \`user_uploaded/\`). Strategy agents generate distinct approaches (\`main1\` to \`mainN\`), each assigned to its own directory (\`Strategy-1/\` to \`Strategy-N/\`). All branches advance in lockstep: in Iteration 1, every branch produces an initial work product and has it critiqued. In Iterations 2 through \`i - 1\`, every branch runs Correction followed by Critique. In the final Iteration \`i\`, every branch runs its final Correction (without a subsequent Critique). No branch moves to the next iteration until all branches finish the current one.
 
 2. Heartbeats and curated context (every \`k\` iterations):
    Left to themselves, iterative critique-and-correction loops eventually settle into local cognitive fixations, showing the core RL-ed behavior or trapped inside local minima. Every \`k\` iterations, a Heartbeat runs to inject fresh, independently generated modules into the branches. First, a DOS (Dissected Observations Synthesis) agent compresses the current state of all branches into a high-signal synthesis of where each branch stands and what bottlenecks or failure modes they share. From that synthesis, the Modules Generator and Modules Impact Reviewer commission focused, independent investigations or constructive sub-tasks, each executed in parallel by a dedicated Tester agent with full sandbox access. The resulting test outputs are mapped into branch-specific packets (\`<LatestCustomCuratedContext>\`) so branch correction agents can absorb verified results without spending their own turns re-deriving them.
@@ -27,8 +27,8 @@ Across all domains, modules are completely general: beyond supplying standalone 
    - \`PRUNE\`: The branch is stuck with little standing value; its folder is archived to \`Pruned_Strategies/\`, and a replacement branch starts fresh in \`Strategy-N/\` with a new strategy, an initial execution, and a first critique.
    At the same time, each surviving branch's window history is distilled into a compressed Memory Bank so long runs stay sharp without overflowing context. Every Global Update concludes with a Heartbeat.
 
-4. Final selection:
-   After iteration \`i\`, the Final Judge inspects the surviving branches' final work products, critiques, and verification results, and selects the strongest solution.
+4. Final outputs:
+   In the final iteration \`i\`, every surviving branch executes its final correction. Once the final corrections finish, the pipeline ends and every surviving branch's final artifact stands as a complete, valid output.
 </HowThePipelineWorks>
 
 <InformationTheoryAndStateCompression>

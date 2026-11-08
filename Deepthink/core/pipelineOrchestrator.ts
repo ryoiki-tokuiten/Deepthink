@@ -30,7 +30,6 @@ import {
   buildContextForCorrectionAgent,
   buildContextForCritiqueAgent,
   buildContextForDos,
-  buildContextForFinalJudge,
   buildContextForModulesGenerate,
   buildContextForStrategyGlobalUpdate,
   buildContextForStrategySeed,
@@ -275,12 +274,6 @@ async function getSandboxToolAgentRunner() {
   }
 }
 
-/**
- * One continuous sandbox trajectory for one agent of a generator ⇄ reviewer loop
- * (Strategy Generator, Strategy Proximity Reviewer, Modules Generator, Modules Impact Reviewer).
- * It lives for a single seed, global update, or heartbeat invocation. `messages` is empty until
- * the agent's first round; afterwards it ends with the agent's accepted final_output call.
- */
 interface LoopAgentConversation {
   sessionId: string;
   messages: BaseMessage[];
@@ -290,11 +283,6 @@ function createLoopAgentConversation(runId: string, agentKind: DeepthinkAgentKin
   return { sessionId: `dtsb-${runId}-${agentKind}-${nanoid(6)}`, messages: [] };
 }
 
-/**
- * Appends the peer's latest round output as the tool result of the agent's previous final_output
- * call, followed by the agent's Immediate Role line, so its next round continues the exact same
- * append-only trajectory. Does nothing before the agent's first sandbox invocation.
- */
 function appendPeerSubmission(
   conversation: LoopAgentConversation,
   peerHeading: string,
@@ -344,13 +332,8 @@ function buildLoopRoleTrajectoryJsonl(
     .join('\n');
 }
 
-// ============================================================================
-// Constants & Failure Policy (§9)
-// ============================================================================
-
-/** Delays for 4 total attempts: 1m, 3m, 5m */
 const RETRY_DELAYS_MS = INFERENCE_RETRY_DELAYS_MS;
-const MAX_API_ATTEMPTS = RETRY_DELAYS_MS.length + 1; // 4 attempts total
+const MAX_API_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
 
 export interface PipelineExecutionCallbacks {
   callAI: (args: {
@@ -388,25 +371,19 @@ export interface OutputValidationContract<T> {
   validate: (parsed: T) => void;
 }
 
-/**
- * Extracts a candidate JSON string from markdown code blocks or surrounding text.
- */
 export function extractJsonString(raw: string): string {
   if (!raw || typeof raw !== 'string') return '';
   let text = raw.trim();
 
-  // 1. If wrapped in markdown code fence, extract the block
   const fenceMatch = text.match(/```(?:json|json5)?\s*\n?([\s\S]*?)\n?\s*```/i);
   if (fenceMatch && fenceMatch[1].trim()) {
     text = fenceMatch[1].trim();
   }
 
-  // 2. If it already starts with { or [, return it
   if (text.startsWith('{') || text.startsWith('[')) {
     return text;
   }
 
-  // 3. Find the outermost { ... } or [ ... ]
   const firstBrace = text.indexOf('{');
   const firstBracket = text.indexOf('[');
   let startIdx = -1;
@@ -430,13 +407,10 @@ export function extractJsonString(raw: string): string {
   return text;
 }
 
-/**
- * Clean, modular, functional orchestrator for the Deepthink Consolidated Specification.
- */
 export class DeepthinkPipelineOrchestrator {
   private readonly gitHarness: GitRepositoryHarness;
   private readonly sharedWorkspace: SharedWorkspaceManager;
-  private commitHashesPerIteration = new Map<string, string>(); // key: `slotIndex:iteration` or `slotIndex:start_${windowStart}`
+  private commitHashesPerIteration = new Map<string, string>();
   private strategiesUsedSoFar: Array<{ slotId: string; iterationFinalized: number; text: string }> = [];
   private modulesUsedSoFar: Array<{ heartbeatNo: number; iterationFinalized: number; moduleId: string; text: string }> = [];
   private globalUpdateStrategyHistories: Array<{ updateNumber: number; turns: ProximityTurn[] }> = [];
@@ -506,11 +480,6 @@ export class DeepthinkPipelineOrchestrator {
     return this.gitHarness;
   }
 
-  /**
-   * Strict JSON parsing helper: extracts code block / JSON payload
-   * and parses strictly via standard JSON.parse.
-   * If parsing fails, throws immediately (§9). No fallback values or dirty relaxed JSON.
-   */
   public parseJsonStrict<T>(raw: string, context?: string): T {
     if (!raw || typeof raw !== 'string') {
       throw new Error(`Cannot parse JSON from empty or invalid raw input${context ? ` in ${context}` : ''}.`);
@@ -528,10 +497,6 @@ export class DeepthinkPipelineOrchestrator {
     }
   }
 
-  // ==========================================================================
-  // Public Execution Entry Point (§1, §3)
-  // ==========================================================================
-
   public async run(): Promise<void> {
     const config = this.state.runConfig;
     const boundsCheck = validateLoopBounds(config.i, config.j, config.k);
@@ -542,7 +507,6 @@ export class DeepthinkPipelineOrchestrator {
     this.emitEvent('Orchestrator', 'Initializing Deepthink repository and workspace', 'info');
     await this.gitHarness.initializeRepository(config.strategiesCount);
 
-    // Initialize or restore shared workspace file (§8.1, §8.3)
     const existingShared = (this.state as any).sharedWorkspaceContent;
     if (existingShared) {
       await this.sharedWorkspace.write(existingShared);
@@ -550,7 +514,6 @@ export class DeepthinkPipelineOrchestrator {
       await this.sharedWorkspace.write(`# Shared Workspace\nChallenge: ${this.state.challenge}\n`);
     }
 
-    // 1. Initial Strategy Generation + Proximity (§4.1)
     const hasInitialStrategies = Array.isArray(this.state.initialStrategies) &&
       this.state.initialStrategies.length >= config.strategiesCount &&
       this.state.initialStrategies.every(s => typeof s.strategyText === 'string' && s.strategyText.trim().length > 0);
@@ -561,7 +524,6 @@ export class DeepthinkPipelineOrchestrator {
       this.emitEvent('Orchestrator', 'Initial strategies already present; resuming execution loop', 'info');
     }
 
-    // Checkpoint initial window start for window 1 (iterations 1 to j) (§6.3, §8.2)
     for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
       const commitKey = `${slotIdx}:start_1`;
       if (!this.commitHashesPerIteration.has(commitKey)) {
@@ -581,13 +543,12 @@ export class DeepthinkPipelineOrchestrator {
     let heartbeatNo = 0;
     const curatedContextEnabled = config.modulesCount > 0;
 
-    // Helper to check if an iteration was fully completed
     const isIterationFullyComplete = (it: number, currentSinceHeartbeat: number): { complete: boolean; nextSinceHeartbeat: number; nextHeartbeatNo: number } => {
       const branches = this.state.initialStrategies || [];
       if (!branches.length) return { complete: false, nextSinceHeartbeat: currentSinceHeartbeat, nextHeartbeatNo: heartbeatNo };
       const allBranchesDone = branches.every(b => {
         const entry = b.iterationHistory?.iterations?.find(e => e.iterationNumber === it);
-        if (!entry || !entry.correctedSolution || !entry.critique) return false;
+        if (!entry || !entry.correctedSolution || (it < config.i && !entry.critique)) return false;
         return true;
       });
       if (!allBranchesDone) return { complete: false, nextSinceHeartbeat: currentSinceHeartbeat, nextHeartbeatNo: heartbeatNo };
@@ -624,7 +585,6 @@ export class DeepthinkPipelineOrchestrator {
       return { complete: true, nextSinceHeartbeat: nextSince, nextHeartbeatNo: nextHbNo };
     };
 
-    // 2. Iteration Loop (§3)
     for (let iteration = 1; iteration <= config.i; iteration++) {
       this.checkStopRequested();
 
@@ -640,17 +600,13 @@ export class DeepthinkPipelineOrchestrator {
       this.emitEvent('Loop', `Starting Iteration ${iteration} of ${config.i}`, 'info');
 
       if (iteration === 1) {
-        // Iteration 1: Initial solution attempt + critique in parallel (§3)
         await this.runIterationOne();
       } else {
-        // Iterations 2 .. i: Correction + critique in parallel (§3)
         await this.runCorrectionAndCritiqueIteration(iteration, heartbeatNo);
       }
 
-      // Record barrier commits for rollback targets (§8.2)
       await this.commitIterationBarriers(iteration);
 
-      // Post-iteration barrier actions (§3)
       const step = determinePostIterationStep(
         iteration,
         sinceHeartbeat,
@@ -662,11 +618,8 @@ export class DeepthinkPipelineOrchestrator {
 
       sinceHeartbeat = step.nextSinceHeartbeat;
 
-      if (step.action.type === 'FINAL_JUDGE') {
-        if (!this.state.finalJudgedBestSolution || this.state.finalJudgingStatus !== 'completed') {
-          this.emitEvent('Loop', 'Reached final iteration barrier. Calling Final Judge.', 'info');
-          await this.runFinalJudge();
-        }
+      if (iteration >= config.i) {
+        this.emitEvent('Loop', 'Reached final iteration barrier. All branch corrections completed.', 'info');
         break;
       } else if (step.action.type === 'GLOBAL_UPDATE') {
         const alreadyDone = this.state.bsrRecords?.some(r => r.iteration === iteration) &&
@@ -676,7 +629,7 @@ export class DeepthinkPipelineOrchestrator {
           heartbeatNo++;
           this.syncCheckpointState(iteration, heartbeatNo, sinceHeartbeat);
           await this.performGlobalUpdate(iteration, heartbeatNo);
-          sinceHeartbeat = 0; // GU ends with heartbeat, since_heartbeat resets (§3)
+          sinceHeartbeat = 0;
         }
       } else if (step.action.type === 'HEARTBEAT') {
         const alreadyDone = this.state.heartbeats?.some(h => (h as any).iteration === iteration);
@@ -685,7 +638,7 @@ export class DeepthinkPipelineOrchestrator {
           heartbeatNo++;
           this.syncCheckpointState(iteration, heartbeatNo, sinceHeartbeat);
           await this.runCuratedContextHeartbeat(iteration, heartbeatNo);
-          sinceHeartbeat = 0; // Heartbeat resets counter (§3)
+          sinceHeartbeat = 0;
         }
       }
 
@@ -697,10 +650,6 @@ export class DeepthinkPipelineOrchestrator {
     this.syncCheckpointState();
     this.callbacks.onStateChange?.(this.state);
   }
-
-  // ==========================================================================
-  // Strategy Generation (§4.1)
-  // ==========================================================================
 
   private async runInitialStrategyGeneration(): Promise<void> {
     const config = this.state.runConfig;
@@ -756,14 +705,13 @@ export class DeepthinkPipelineOrchestrator {
           history
         );
 
-        // Generator turn with contract validation and retry policy (§9)
         let genTrajectoryJsonl = '';
         const genOutput = await this.callAgentModelWithRetry({
           kind: 'initialStrategy',
           promptText,
           stepDescription: `Seed Strategy Generator (Turn ${turn})`,
           jsonResponse: true,
-          isCritical: true, // Strategy generation failure halts run (§9)
+          isCritical: true,
           contract: seedContract,
           executionGroupId,
           executionGroupName,
@@ -799,7 +747,6 @@ export class DeepthinkPipelineOrchestrator {
       if (reviewIndex < targetProximityReviews) {
         const existingProx = history.find(h => h.role === 'proximity' && h.turnNumber === turn);
         if (!existingProx) {
-          // Proximity review turn receives the exact same full context as the generator (§4.1, §7)
           const proxPrompt = buildContextForStrategySeed(
             this.state.challenge,
             config.strategiesCount,
@@ -841,7 +788,6 @@ export class DeepthinkPipelineOrchestrator {
 
     this.state.strategyProximityHistory = history;
 
-    // Initialize N branches (main1 to mainN) (§1 Invariant 1)
     this.state.initialStrategies = currentStrategies.map((text, idx) => {
       const slotId = `main${idx + 1}`;
       this.strategiesUsedSoFar.push({
@@ -861,7 +807,6 @@ export class DeepthinkPipelineOrchestrator {
       this.state.branchLedgers[strat.id] = [];
     }
 
-    // Persist strategy generator and proximity review histories into repository (§8.1)
     const seedGenTurns = history.filter(h => h.role === 'generator');
     const seedProxTurns = history.filter(h => h.role === 'proximity');
     const seedGenMarkdown = [
@@ -882,14 +827,9 @@ export class DeepthinkPipelineOrchestrator {
     this.callbacks.onStateChange?.(this.state);
   }
 
-  // ==========================================================================
-  // Iteration 1 (§3)
-  // ==========================================================================
-
   private async runIterationOne(): Promise<void> {
     const branches = this.state.initialStrategies;
 
-    // Run Solution Attempt in parallel across all branches
     await Promise.all(branches.map(async (branch) => {
       this.checkStopRequested();
       if (branch.solutionAttempt && branch.status === 'completed') {
@@ -911,7 +851,7 @@ export class DeepthinkPipelineOrchestrator {
           promptText: prompt,
           stepDescription: `Solution Attempt for ${branch.id} (Iteration 1)`,
           workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
-          isCritical: false, // Non-critical branch work records error (§9)
+          isCritical: false,
           executionGroupId: 'group-iter-1-attempt',
           executionGroupName: 'Iteration 1: Initial Solution Attempts (Parallel)',
           onTrajectoryJsonl: (jsonl) => {
@@ -952,7 +892,6 @@ export class DeepthinkPipelineOrchestrator {
       }
     }));
 
-    // Run Critique in parallel across all branches
     await Promise.all(branches.map(async (branch) => {
       this.checkStopRequested();
       if (branch.solutionCritique && branch.solutionCritiqueStatus === 'completed') {
@@ -1002,7 +941,6 @@ export class DeepthinkPipelineOrchestrator {
         });
         this.state.solutionCritiquesStatus = 'completed';
 
-        // Record iteration 1 history
         if (!branch.iterationHistory) {
           branch.iterationHistory = { iterations: [], status: 'completed' };
         }
@@ -1036,16 +974,11 @@ export class DeepthinkPipelineOrchestrator {
     this.callbacks.onStateChange?.(this.state);
   }
 
-  // ==========================================================================
-  // Iterations 2 .. i: Correction + Critique (§3)
-  // ==========================================================================
-
   private async runCorrectionAndCritiqueIteration(iteration: number, _heartbeatNo: number): Promise<void> {
     const branches = this.state.initialStrategies;
     const config = this.state.runConfig;
     const currentWindowStart = Math.floor((iteration - 1) / config.j) * config.j + 1;
 
-    // Snapshot peer state at the start of the iteration before parallel execution begins
     const peerBranchesSnapshot = branches.map(b => {
       const prevIter = (b.iterationHistory?.iterations || [])
         .filter(it => it.iterationNumber < iteration)
@@ -1057,7 +990,6 @@ export class DeepthinkPipelineOrchestrator {
       };
     });
 
-    // Run Correction in parallel
     await Promise.all(branches.map(async (branch) => {
       this.checkStopRequested();
       const existingIteration = branch.iterationHistory?.iterations?.find(it => it.iterationNumber === iteration);
@@ -1086,7 +1018,6 @@ export class DeepthinkPipelineOrchestrator {
         config.isolateBranches
       );
 
-      // Latest curated context packet from most recent heartbeat
       const latestHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
       const mappedPacket = latestHeartbeat
         ? latestHeartbeat.modules
@@ -1151,7 +1082,11 @@ export class DeepthinkPipelineOrchestrator {
       }
     }));
 
-    // Run Critique in parallel
+    if (iteration >= config.i) {
+      this.callbacks.onStateChange?.(this.state);
+      return;
+    }
+
     await Promise.all(branches.map(async (branch) => {
       this.checkStopRequested();
       const existingIteration = branch.iterationHistory?.iterations?.find(it => it.iterationNumber === iteration);
@@ -1211,7 +1146,6 @@ export class DeepthinkPipelineOrchestrator {
         });
         this.state.solutionCritiquesStatus = 'completed';
 
-        // Append or update iteration history
         if (!branch.iterationHistory) {
           branch.iterationHistory = { iterations: [], status: 'completed' };
         }
@@ -1245,10 +1179,6 @@ export class DeepthinkPipelineOrchestrator {
     this.callbacks.onStateChange?.(this.state);
   }
 
-  // ==========================================================================
-  // Curated Context Heartbeat (§4.5)
-  // ==========================================================================
-
   public async runCuratedContextHeartbeat(
     iteration: number,
     heartbeatNo: number,
@@ -1257,13 +1187,12 @@ export class DeepthinkPipelineOrchestrator {
   ): Promise<void> {
     const config = this.state.runConfig;
     if (config.modulesCount === 0) {
-      return; // Curated context disabled (§3, §4.5)
+      return;
     }
 
     const previousHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
     const currentDosFilePath = reusedDosFilePath || `DOS_history/DOS_heartbeat_${String(heartbeatNo).padStart(2, '0')}.md`;
 
-    // 1. DOS (if modules are enabled)
     let dosOutput = reusedDos;
     if (!dosOutput && config.modulesCount > 0) {
       const existingDos = this.state.dosOutputs?.find(
@@ -1309,7 +1238,6 @@ export class DeepthinkPipelineOrchestrator {
       dosOutput = this.parseJsonStrict<DosOutput>(rawDos, `Heartbeat DOS (Heartbeat ${heartbeatNo})`);
       this.state.dosOutputs.push({ callType: 'heartbeat', iteration, output: dosOutput });
 
-      // Save DOS output and trajectory to repository (§8.1, §12.13)
       await this.gitHarness.writeFilesAndCommit(
         `Heartbeat ${heartbeatNo} DOS output`,
         [
@@ -1324,13 +1252,11 @@ export class DeepthinkPipelineOrchestrator {
         ]
       );
 
-      // Process and attach realized module feedback for the previous heartbeat (§5.1, §5.4)
       if (dosOutput.module_feedback && previousHeartbeat) {
         await this.attachRealizedDosFeedback(dosOutput.module_feedback, previousHeartbeat.heartbeat_no);
       }
     }
 
-    // 2. Generate Modules + Impact Review (§4.2)
     const newModules: DeepthinkModuleData[] = [];
     const realizedFeedback: RealizedModuleFeedback[] = [];
     const heartbeatFiles: DeepthinkResultsContextFile[] = [];
@@ -1356,7 +1282,6 @@ export class DeepthinkPipelineOrchestrator {
         },
       };
 
-      // Assemble reframed historical modules impact review transcript across prior heartbeats 1..heartbeatNo-1 (§7)
       const priorHeartbeatEntries: Array<{
         heartbeatNo: number;
         dosFilePath?: string;
@@ -1461,9 +1386,7 @@ export class DeepthinkPipelineOrchestrator {
         if (reviewIndex < targetModImpactReviews) {
           const existingProx = modHistory.find(h => h.role === 'proximity' && h.turnNumber === turn);
           if (existingProx) {
-            // Already completed impact review for this turn
           } else {
-            // Impact review turn receives the exact same full context as the generator (§4.2, §7)
             const proxPrompt = buildContextForModulesGenerate(
               this.state.challenge,
               heartbeatNo,
@@ -1537,7 +1460,6 @@ export class DeepthinkPipelineOrchestrator {
         ),
       ].join('\n\n');
 
-      // Save generator & impact reviewer histories into repository (§8.1) along with their continuous .jsonl trajectories
       const modGenTurns = modHistory.filter(h => h.role === 'generator');
       const modProxTurns = modHistory.filter(h => h.role === 'proximity');
       const modGenHistoryMarkdown = [
@@ -1580,7 +1502,6 @@ export class DeepthinkPipelineOrchestrator {
         }
       );
 
-      // 3. Test Modules in parallel (§4.3)
       await Promise.all(parsedGen.modules.slice(0, config.modulesCount).map(async (modItem, idx) => {
         this.checkStopRequested();
 
@@ -1605,7 +1526,6 @@ export class DeepthinkPipelineOrchestrator {
           },
         });
 
-        // Parse verdict classification line (§4.3)
         let verdict: 'VALIDATED' | 'REJECTED' | 'INCONCLUSIVE' = 'INCONCLUSIVE';
         if (testResult.includes('CLASSIFICATION: VALIDATED')) verdict = 'VALIDATED';
         else if (testResult.includes('CLASSIFICATION: REFUTED') || testResult.includes('CLASSIFICATION: REJECTED')) verdict = 'REJECTED';
@@ -1624,7 +1544,6 @@ export class DeepthinkPipelineOrchestrator {
 
         newModules.push(modData);
 
-        // Record module file and .jsonl trajectory in repository (§8.1)
         heartbeatFiles.push(
           {
             path: `Modules/Heartbeat-${heartbeatNo}/Module-${folderIndex}/module.md`,
@@ -1649,7 +1568,6 @@ export class DeepthinkPipelineOrchestrator {
       }));
     }
 
-    // Record heartbeat block
     const heartbeatBlock: HeartbeatBlock = {
       heartbeat_no: heartbeatNo,
       iteration,
@@ -1660,14 +1578,9 @@ export class DeepthinkPipelineOrchestrator {
     this.state.heartbeats.push(heartbeatBlock);
     this.state.modules = newModules;
 
-    // Commit heartbeat artifacts to repository (§8.2)
     await this.gitHarness.commitHeartbeat(heartbeatNo, heartbeatFiles);
     this.callbacks.onStateChange?.(this.state);
   }
-
-  // ==========================================================================
-  // Perform Global Update (§4.6)
-  // ==========================================================================
 
   public async performGlobalUpdate(iteration: number, heartbeatNo: number): Promise<void> {
     const config = this.state.runConfig;
@@ -1676,7 +1589,6 @@ export class DeepthinkPipelineOrchestrator {
 
     this.emitEvent('GlobalUpdate', `Step i: Running Step-i DOS and BSR across branches`, 'info');
 
-    // i. Step-i DOS and BSR in parallel (§4.6 i)
     const activeBranchesState = this.state.initialStrategies.map(s => ({
       branchId: s.id,
       strategyText: s.strategyText,
@@ -1759,7 +1671,6 @@ export class DeepthinkPipelineOrchestrator {
     const stepIDosOutput = this.parseJsonStrict<DosOutput>(rawStepIDos, `Step-i DOS (Global Update ${updateNumber})`);
     this.state.dosOutputs.push({ callType: 'step_i', iteration, output: stepIDosOutput });
 
-    // Persist Step-i DOS and trajectory in repository (§8.1, §12.13)
     await this.gitHarness.writeFilesAndCommit(
       `Step-i DOS for Global Update ${updateNumber}`,
       [
@@ -1774,7 +1685,6 @@ export class DeepthinkPipelineOrchestrator {
       ]
     );
 
-    // ii. Deterministic Code Computes Decisions (§4.6 ii, §6.3, §6.5)
     const evaluatedRecords: Array<{ report: BsrReport; computed: BsrComputedScores }> = [];
     const consolidatedDecisions: Array<{
       slotId: string;
@@ -1830,7 +1740,6 @@ export class DeepthinkPipelineOrchestrator {
       });
     }
 
-    // iii. Strategy Generation for Changed Slots Only (§4.6 iii, §4.1)
     const changedSlots = consolidatedDecisions.filter(d => d.decision !== 'CONTINUE');
     if (changedSlots.length > 0) {
       const priorProximityHistory = buildStrategyProximityHistoryWithNotes(
@@ -1862,7 +1771,6 @@ export class DeepthinkPipelineOrchestrator {
               throw new Error(`Missing required new strategy for PRUNE slot ${prId}.`);
             }
           }
-          // Enforce: CONTINUE slots must not be present (§4.1, §4.6)
           const allTouched = [...evolved.map(e => e.slot_id), ...pruned.map(p => p.slot_id)];
           for (const id of allTouched) {
             if (!evolveSlotIds.includes(id) && !pruneSlotIds.includes(id)) {
@@ -1956,9 +1864,7 @@ export class DeepthinkPipelineOrchestrator {
         if (reviewIndex < targetGuProximityReviews) {
           const existingProx = currentGuTurns.find(t => t.role === 'proximity' && t.turnNumber === turn);
           if (existingProx) {
-            // Already completed proximity review for this turn
           } else {
-            // Proximity review turn receives the exact same full context as the generator (§4.1, §7)
             const proxPrompt = buildContextForStrategyGlobalUpdate(
               this.state.challenge,
               updateNumber,
@@ -2023,7 +1929,6 @@ export class DeepthinkPipelineOrchestrator {
         });
       }
 
-      // Apply surgical slot changes onto active strategies (§4.1)
       if (parsedStrat.evolved_slots) {
         for (const ev of parsedStrat.evolved_slots) {
           const branch = this.state.initialStrategies.find(b => b.id === ev.slot_id);
@@ -2055,7 +1960,6 @@ export class DeepthinkPipelineOrchestrator {
         }
       }
 
-      // Commit strategy generator and proximity review histories and strategies used so far (§8.1)
       const guGenTurns = currentGuTurns.filter(t => t.role === 'generator');
       const guProxTurns = currentGuTurns.filter(t => t.role === 'proximity');
       const guGenMarkdown = [
@@ -2088,7 +1992,6 @@ export class DeepthinkPipelineOrchestrator {
       await this.updateStrategiesUsedSoFarFile();
     }
 
-    // iv. Apply Decisions to Repository (§4.6 iv, §8.2)
     const newBranchSlotIds: string[] = [];
     const survivingBranches: DeepthinkMainStrategyData[] = [];
 
@@ -2108,13 +2011,11 @@ export class DeepthinkPipelineOrchestrator {
             : (dec.rollbackTo as number);
 
           if (dec.rollbackTo === 'window_start') {
-            // Rollback to window beginning (§6.3, §6.6, §8.2)
             const startCommit = this.commitHashesPerIteration.get(`${slotIdx}:start_${windowStart}`);
             if (startCommit) {
               await this.gitHarness.rollbackStrategy(slotIdx, startCommit);
             }
           } else {
-            // Rollback to specific iteration
             const commitKey = `${slotIdx}:${dec.rollbackTo}`;
             const targetCommit = this.commitHashesPerIteration.get(commitKey);
             if (targetCommit) {
@@ -2122,12 +2023,10 @@ export class DeepthinkPipelineOrchestrator {
             }
           }
 
-          // Drop discarded events after rollback point from ledger (§6.8)
           this.state.branchLedgers[branch.id] = (this.state.branchLedgers[branch.id] || []).filter(
             e => e.iteration <= cutoffIteration
           );
 
-          // Trim branch iteration history and restore branch state to the rollback point
           if (branch.iterationHistory?.iterations) {
             branch.iterationHistory.iterations = branch.iterationHistory.iterations.filter(
               it => it.iterationNumber <= cutoffIteration
@@ -2151,13 +2050,10 @@ export class DeepthinkPipelineOrchestrator {
             branch.solutionAttemptExecutionTraceText = undefined;
           }
         } else {
-          // In place: keep standing ledger
           this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
         }
       } else if (dec.decision === 'PRUNE') {
-        // Archive folder under ordinal name (§8.2)
         await this.gitHarness.pruneStrategy(slotIdx);
-        // Archive pruned branch data for UI transparency before ledger is wiped
         if (!this.state.prunedBranches) this.state.prunedBranches = [];
         this.state.prunedBranches.push({
           id: `${branch.id}-pruned-it${iteration}`,
@@ -2181,7 +2077,6 @@ export class DeepthinkPipelineOrchestrator {
             status: 'completed',
           },
         });
-        // PRUNE permanently closes ledger; new branch starts with empty ledger (§6.8)
         this.state.branchLedgers[branch.id] = [];
         branch.iterationHistory = { iterations: [], status: 'idle' };
         branch.memoryBank = undefined;
@@ -2189,11 +2084,8 @@ export class DeepthinkPipelineOrchestrator {
       }
     }
 
-    // v. Memory Bank Distillation on Survivors + First Execution & Critique on New Branches (§4.6 v)
     const distillationPromise = Promise.all(survivingBranches.map(async (branch) => {
       const dec = consolidatedDecisions.find(d => d.slotId === branch.id);
-      // NOTE (§6.6): When none of the window is retained (rollbackTo === 'window_start'),
-      // the previous memory bank stands and no new distillation runs.
       if (dec?.form === 'rollback' && dec.rollbackTo === 'window_start') {
         return;
       }
@@ -2230,7 +2122,6 @@ export class DeepthinkPipelineOrchestrator {
 
       branch.memoryBank = memOutput;
 
-      // Write memory bank and trajectory to Strategy-N/history/memory_bank_NN.md & .jsonl (§8.1)
       await this.gitHarness.writeFilesAndCommit(
         `Memory Bank distillation for ${branch.id} at update ${updateNumber}`,
         [
@@ -2250,7 +2141,6 @@ export class DeepthinkPipelineOrchestrator {
       const branch = this.state.initialStrategies.find(b => b.id === slotId)!;
       const slotIndex = this.state.initialStrategies.findIndex(b => b.id === slotId);
 
-      // First execution
       const attemptPrompt = [
         `# Core Challenge\n${this.state.challenge}`,
         `Assigned Strategy: ${branch.id}\n${branch.strategyText}`,
@@ -2275,7 +2165,7 @@ export class DeepthinkPipelineOrchestrator {
       branch.refinedSolution = attemptOutput;
       branch.iterationHistory = {
         iterations: [{
-          iterationNumber: iteration, // Global iteration number (§3, §12.12)
+          iterationNumber: iteration,
           correctedSolution: attemptOutput,
           critique: '',
           timestamp: Date.now(),
@@ -2284,7 +2174,6 @@ export class DeepthinkPipelineOrchestrator {
         status: 'processing',
       };
 
-      // Critique
       const historyContext = buildCritiqueCorrectionMemoryBankHistory(
         branch.memoryBank,
         branch.iterationHistory.iterations
@@ -2331,7 +2220,6 @@ export class DeepthinkPipelineOrchestrator {
 
     await Promise.all([distillationPromise, newBranchesPromise]);
 
-    // Checkpoint next window_start for every active strategy folder (§6.3, §8.2)
     const nextWindowStart = iteration + 1;
     for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
       const strat = this.state.initialStrategies[slotIdx];
@@ -2345,7 +2233,6 @@ export class DeepthinkPipelineOrchestrator {
       this.commitHashesPerIteration.set(`${slotIdx}:start_${nextWindowStart}`, commit);
     }
 
-    // vi. Step-ii DOS on Post-Update State (§4.6 vi, §5.1)
     let stepIiDosOutput: DosOutput | undefined;
     if (config.modulesCount > 0) {
       const postUpdateState = this.state.initialStrategies.map(s => ({
@@ -2393,7 +2280,6 @@ export class DeepthinkPipelineOrchestrator {
       stepIiDosOutput = this.parseJsonStrict<DosOutput>(rawStepIiDos, `Step-ii DOS (Global Update ${updateNumber})`);
       this.state.dosOutputs.push({ callType: 'step_ii', iteration, output: stepIiDosOutput });
 
-      // Save Step-ii DOS and trajectory to repository (§8.1, §12.13)
       await this.gitHarness.writeFilesAndCommit(
         `Step-ii DOS for Global Update ${updateNumber}`,
         [
@@ -2408,79 +2294,15 @@ export class DeepthinkPipelineOrchestrator {
         ]
       );
 
-      // Attach realized module feedback for the previous heartbeat (§5.1, §5.4)
       const previousHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
       if (stepIiDosOutput.module_feedback && previousHeartbeat) {
         await this.attachRealizedDosFeedback(stepIiDosOutput.module_feedback, previousHeartbeat.heartbeat_no);
       }
     }
 
-    // vii. Run Curated Context Heartbeat, reusing Step-ii DOS (§4.6 vii, §4.5)
     const stepIiDosFilePath = `DOS_history/DOS_global_update_${String(updateNumber).padStart(2, '0')}_step_ii.md`;
     await this.runCuratedContextHeartbeat(iteration, heartbeatNo, stepIiDosOutput, stepIiDosFilePath);
   }
-
-  // ==========================================================================
-  // Final Judge (§7, §8.3, §9)
-  // ==========================================================================
-
-  private async runFinalJudge(): Promise<void> {
-    const candidates = this.state.initialStrategies.map(s => {
-      const latestIteration = s.iterationHistory?.iterations?.[s.iterationHistory.iterations.length - 1];
-      return {
-        branchId: s.id,
-        strategyText: s.strategyText,
-        finalSolution: s.refinedSolution || latestIteration?.correctedSolution || s.solutionAttempt || 'No solution recorded.',
-        finalCritique: s.solutionCritique || latestIteration?.critique || 'No critique recorded.',
-      };
-    });
-
-    // NOTE: Final judge direct context receives each active branch's final correction-critique pair (§7, §9)
-    const judgePrompt = buildContextForFinalJudge(this.state.challenge, candidates);
-
-    this.state.finalJudgingStatus = 'processing';
-    this.callbacks.onStateChange?.(this.state);
-
-    const validIds = candidates.map(c => c.branchId);
-    const judgeContract: OutputValidationContract<{ best_solution_id: string; final_reasoning: string }> = {
-      name: 'FinalJudgeContract',
-      validate: (parsed) => {
-        if (!parsed || !validIds.includes(parsed.best_solution_id)) {
-          throw new Error(`Final judge selected invalid or unknown candidate ID: ${parsed?.best_solution_id}`);
-        }
-      },
-    };
-
-    const rawJudge = await this.callAgentModelWithRetry({
-      kind: 'finalJudge',
-      promptText: judgePrompt,
-      stepDescription: 'Final Judge Evaluation',
-      jsonResponse: true,
-      isCritical: true,
-      contract: judgeContract,
-      executionGroupId: 'group-final-judge',
-      executionGroupName: 'Final Judge Evaluation',
-    });
-
-    const parsed = this.parseJsonStrict<{
-      best_solution_id: string;
-      final_reasoning: string;
-    }>(rawJudge, 'Final Judge Evaluation');
-
-    const winningCandidate = candidates.find(c => c.branchId === parsed.best_solution_id);
-    if (!winningCandidate) {
-      throw new Error(`Final judge selected unknown candidate '${parsed.best_solution_id}'. Available candidates: ${candidates.map(c => c.branchId).join(', ')}`);
-    }
-
-    this.state.finalJudgingResponseText = parsed.final_reasoning;
-    this.state.finalJudgedBestSolution = winningCandidate.finalSolution;
-    this.state.finalJudgingStatus = 'completed';
-    this.callbacks.onStateChange?.(this.state);
-  }
-
-  // ==========================================================================
-  // Helpers & Execution with Retry (§9)
-  // ==========================================================================
 
   private async attachRealizedDosFeedback(
     dosFeedback: DosModuleFeedbackItem[],
@@ -2597,7 +2419,7 @@ export class DeepthinkPipelineOrchestrator {
           content: [
             `# Strategy ${branch.id} - Iteration ${iteration}`,
             `## Solution\n${historyEntry.correctedSolution}`,
-            `\n## Critique\n${historyEntry.critique}`,
+            ...(historyEntry.critique ? [`\n## Critique\n${historyEntry.critique}`] : []),
           ].join('\n\n'),
         });
         const solJsonl = (historyEntry as any).solutionTrajectoryJsonl || formatDirectCallTrajectoryJsonl({
@@ -2624,13 +2446,6 @@ export class DeepthinkPipelineOrchestrator {
     this.syncCheckpointState(iteration);
   }
 
-  /**
-   * Dispatches an agent model call with the unified failure, watchdog, and retry policy:
-   * - 4 total attempts (initial + 3m, 10m, 15m backoff retries on real errors)
-   * - 5-minute rolling silence watchdog (stops/pauses immediately on 5m total silence)
-   * - 1-hour wall-clock budget and 64 tool-call budget for sandboxed invocations
-   * - On terminal failure, cleanly pauses the Deepthink pipeline instead of skipping branches
-   */
   private async callAgentModelWithRetry<T = unknown>(args: {
     kind: DeepthinkAgentKind;
     promptText: string;
@@ -2833,7 +2648,6 @@ export class DeepthinkPipelineOrchestrator {
           throw new Error('Empty response received from model.');
         }
 
-        // Validate structured output contract if present (§9)
         if (args.contract) {
           const parsed = this.parseJsonStrict<T>(outputText, args.contract.name);
           args.contract.validate(parsed);
@@ -2871,8 +2685,6 @@ export class DeepthinkPipelineOrchestrator {
         lastError = err;
         const errMsg = err?.message || String(err);
 
-        // If the underlying inference layer already exhausted its 1m/3m/5m retries,
-        // fast-failed a permanent 4xx error, or hit the 5-minute silence timeout, pause Deepthink immediately.
         if (isTerminalInferenceError(err)) {
           this.emitEvent(displayAgentName, `${args.stepDescription} failed: ${errMsg}`, 'agent_error', {
             error: errMsg,

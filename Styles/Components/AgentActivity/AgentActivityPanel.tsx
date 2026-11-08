@@ -1,21 +1,210 @@
 import React, { useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { Icon } from '../../../UI/Icons';
+import RenderMathMarkdown from '../RenderMathMarkdown';
 import type { SandboxToolExecutionTrace, SandboxToolExecutionTraceMessage } from '../../../Core/SandboxToolRuntime';
-import { MessageCard, type AdaptiveMessage, type ResponseSegment, type SystemBlock } from '../../../AdaptiveDeepthink/AdaptiveDeepthinkMode';
+
+export type ResponseSegment =
+    | { kind: 'text'; text: string }
+    | { kind: 'tool'; tool: { type: string; rawType?: string; args?: any } };
+
+export type SystemBlock =
+    | { kind: 'error'; message: string }
+    | { kind: 'info'; message: string }
+    | { kind: 'tool_result'; tool: string; result: string };
+
+export interface ActivityMessage {
+    id: string;
+    role: 'agent' | 'system';
+    sender?: string;
+    content: string;
+    timestamp: number;
+    status?: 'processing' | 'success' | 'error';
+    segments?: ResponseSegment[];
+    blocks?: SystemBlock[];
+}
+
+const TOOL_METADATA: Record<string, { icon: string; name: string }> = {
+    sandbox_exec: { icon: 'terminal', name: 'Running sandbox command' },
+    shared_workspace: { icon: 'description', name: 'Updating shared workspace' },
+    final_output: { icon: 'check_circle', name: 'Submitting final output' }
+};
+
+const ToolArgumentsCard: React.FC<{ toolName: string; args?: any }> = ({ toolName, args }) => {
+    if (!args) return null;
+
+    if (toolName === 'sandbox_exec' && args.command) {
+        return (
+            <div className="tool-arguments-card">
+                <div className="tool-args-details">
+                    <div className="tool-args-row">
+                        <span className="tool-args-label">Command:</span>
+                        <code className="tool-args-code">{args.command}</code>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (toolName === 'shared_workspace') {
+        return (
+            <div className="tool-arguments-card">
+                <div className="tool-args-details">
+                    <div className="tool-args-row">
+                        <span className="tool-args-label">Action:</span>
+                        <code className="tool-args-code">{args.action || 'read'}</code>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (toolName === 'final_output' && typeof args.response === 'string' && args.response.trim()) {
+        return (
+            <div className="submitted-artifact-surface">
+                <RenderMathMarkdown content={args.response} />
+            </div>
+        );
+    }
+
+    return null;
+};
+
+const ToolCallCard: React.FC<{ toolCall: { type: string; rawType?: string; args?: any } }> = ({ toolCall }) => {
+    const toolName = toolCall.rawType || toolCall.type.replace('()', '');
+    const info = TOOL_METADATA[toolName] || { icon: 'build', name: toolName };
+    const parameterSummary = toolName === 'sandbox_exec' && typeof toolCall.args?.command === 'string'
+        ? toolCall.args.command
+        : toolName === 'shared_workspace' && typeof toolCall.args?.action === 'string'
+            ? toolCall.args.action
+            : null;
+    const hideGenericArgsCard = (toolName === 'sandbox_exec' || toolName === 'shared_workspace') && Boolean(parameterSummary);
+
+    return (
+        <div className="tool-call-container">
+            <div className="tool-call-display">
+                <div className="tool-call-indicator deepthink-tool-indicator">
+                    <Icon name={info.icon} className="tool-indicator-icon" />
+                    <span className="tool-name">{info.name}</span>
+                </div>
+                {parameterSummary && (
+                    <span className="tool-call-parameter-pill">{parameterSummary}</span>
+                )}
+            </div>
+            {!hideGenericArgsCard && <ToolArgumentsCard toolName={toolName} args={toolCall.args} />}
+        </div>
+    );
+};
+
+const ToolResultDisplay: React.FC<{ tool: string; result: string }> = ({ tool, result }) => {
+    if (result === 'Submitted') {
+        return (
+            <div className="system-block success">
+                <Icon name="check_circle" className="block-icon" />
+                <span>Final output submitted</span>
+            </div>
+        );
+    }
+
+    const isSandboxTool = tool === 'sandbox_exec' || tool === 'shared_workspace';
+    return (
+        <div className={`tool-result ${isSandboxTool ? 'deepthink-agent-result' : ''}`}>
+            <div className={`tool-result-header ${isSandboxTool ? 'deepthink-agent-header' : ''}`}>
+                {isSandboxTool && (
+                    <Icon name={tool === 'shared_workspace' ? 'description' : 'terminal'} className="deepthink-agent-icon" />
+                )}
+                <span>
+                    {tool === 'sandbox_exec'
+                        ? 'Command execution output'
+                        : tool === 'shared_workspace'
+                            ? 'Shared workspace result'
+                            : `Result from ${tool}`}
+                </span>
+            </div>
+            <div className="tool-result-content">
+                <RenderMathMarkdown content={result} />
+            </div>
+        </div>
+    );
+};
+
+const SystemBlockDisplay: React.FC<{ block: SystemBlock }> = ({ block }) => {
+    if (block.kind === 'error') {
+        return (
+            <div className="system-block error">
+                <Icon name="error" className="block-icon" />
+                <span>{block.message}</span>
+            </div>
+        );
+    }
+
+    if (block.kind === 'info') {
+        return (
+            <div className="system-block success">
+                <Icon name="check_circle" className="block-icon" />
+                <span>{block.message}</span>
+            </div>
+        );
+    }
+
+    if (block.kind === 'tool_result') {
+        return <ToolResultDisplay tool={block.tool} result={block.result} />;
+    }
+
+    return null;
+};
+
+export const MessageCard: React.FC<{ message: ActivityMessage }> = memo(({ message }) => {
+    const isAgent = message.role === 'agent';
+
+    return (
+        <div className={`activity-message-card ${message.role}-message ${message.status || ''}`}>
+            {isAgent && message.sender && (
+                <div className="message-header">
+                    <Icon name="psychology" className="message-icon" />
+                    <span className="message-role">{message.sender}</span>
+                </div>
+            )}
+
+            <div className="message-content">
+                {isAgent && message.segments && message.segments.length > 0 ? (
+                    <div className="message-inline-content">
+                        {message.segments.map((segment, idx) => (
+                            segment.kind === 'text' ? (
+                                <div key={`text-${idx}`} className="agent-text-segment">
+                                    <RenderMathMarkdown content={segment.text} />
+                                </div>
+                            ) : (
+                                <ToolCallCard key={`tool-${idx}`} toolCall={segment.tool} />
+                            )
+                        ))}
+                    </div>
+                ) : isAgent && message.content ? (
+                    <RenderMathMarkdown content={message.content} />
+                ) : null}
+
+                {!isAgent && message.blocks && message.blocks.length > 0 ? (
+                    <div className="system-blocks">
+                        {message.blocks.map((block, idx) => (
+                            <SystemBlockDisplay key={idx} block={block} />
+                        ))}
+                    </div>
+                ) : !isAgent && message.content ? (
+                    <RenderMathMarkdown content={message.content} />
+                ) : null}
+            </div>
+        </div>
+    );
+});
 
 export interface AgentActivityPanelProps {
     title?: string;
     isProcessing?: boolean;
-    error?: string | null;
-    onStop?: () => void;
     headerExtra?: React.ReactNode;
     className?: string;
     style?: React.CSSProperties;
     children?: React.ReactNode;
 }
 
-const STOP_ICON = <Icon name="stop_circle" />;
-const WARNING_ICON = <Icon name="warning" />;
 const PROCESSING_INDICATOR = (
     <div className="processing-indicator">
         <div className="spinner" />
@@ -26,8 +215,6 @@ const PROCESSING_INDICATOR = (
 export const AgentActivityPanel: React.FC<AgentActivityPanelProps> = memo(({
     title = 'Agent Activity',
     isProcessing = false,
-    error = null,
-    onStop,
     headerExtra,
     className = '',
     style,
@@ -62,24 +249,12 @@ export const AgentActivityPanel: React.FC<AgentActivityPanelProps> = memo(({
                 <h3>{title}</h3>
                 <div className="header-info">
                     {headerExtra}
-                    {isProcessing && onStop && (
-                        <button className="stop-button" onClick={onStop}>
-                            {STOP_ICON}
-                            Stop
-                        </button>
-                    )}
                 </div>
             </div>
             <div className="agent-messages-container custom-scrollbar" ref={listRef} onScroll={handleScroll}>
                 {children}
                 {isProcessing && PROCESSING_INDICATOR}
             </div>
-            {error && (
-                <div className="error-message">
-                    {WARNING_ICON}
-                    {error}
-                </div>
-            )}
         </div>
     );
 });
@@ -103,7 +278,7 @@ function toolResultContent(message: SandboxToolExecutionTraceMessage, content: s
     return images ? `${output}\n\n${images}` : output;
 }
 
-function activityMessages(executionTraceText?: string): AdaptiveMessage[] {
+function activityMessages(executionTraceText?: string): ActivityMessage[] {
     if (!executionTraceText) return [];
     let trace: SandboxToolExecutionTrace;
     try {
@@ -114,7 +289,7 @@ function activityMessages(executionTraceText?: string): AdaptiveMessage[] {
     if (trace.schema !== 'sandbox_tool_execution_trace.v1' || !Array.isArray(trace.messages)) return [];
 
     const toolResults = new Set(trace.messages.filter(m => m.role === 'tool' && m.tool_call_id).map(m => m.tool_call_id));
-    const activity: AdaptiveMessage[] = [];
+    const activity: ActivityMessage[] = [];
 
     trace.messages.forEach((message, index) => {
         const id = message.id || `sandbox-activity-${index}`;
@@ -132,7 +307,7 @@ function activityMessages(executionTraceText?: string): AdaptiveMessage[] {
                 activity.push({ id, role: 'agent', sender: trace.agent.name, content, timestamp: index, status: 'success', segments });
             }
             calls.forEach(call => {
-                if ((call.name === 'final_output' || call.name === 'submit_final_output') && (!call.id || !toolResults.has(call.id))) {
+                if (call.name === 'final_output' && (!call.id || !toolResults.has(call.id))) {
                     activity.push({
                         id: `${id}-submitted`,
                         role: 'system',
@@ -149,7 +324,7 @@ function activityMessages(executionTraceText?: string): AdaptiveMessage[] {
         if (message.role === 'tool') {
             const tool = message.name || 'tool';
             const isError = message.status === 'error';
-            const isFinalOutput = tool === 'final_output' || tool === 'submit_final_output';
+            const isFinalOutput = tool === 'final_output';
             const blocks: SystemBlock[] = isError && isFinalOutput
                 ? [{ kind: 'error', message: content }]
                 : isFinalOutput

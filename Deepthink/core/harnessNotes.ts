@@ -1,17 +1,5 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * MANDATORY REFERENCE: Read Deepthink_Consolidated_Specification.md before modifying!
- * The specification document (Deepthink/docs/Deepthink_Consolidated_Specification.md)
- * is the absolute source of truth (§7, §8.5).
- */
-
 import type { BsrAction, BsrEvolveForm } from './types.ts';
 
-/**
- * Builds the active note injected before strategy generator & proximity global update turns (§7).
- */
 export function buildStrategyGlobalUpdateNote(j: number): string {
   return [
     `These strategies were actually finalized and were executed, critiqued, and corrected for ${j} iterations.`,
@@ -22,9 +10,6 @@ export function buildStrategyGlobalUpdateNote(j: number): string {
   ].join(' ');
 }
 
-/**
- * Builds the reframed note injected between earlier historical global update turns in strategy proximity history (§7).
- */
 export function buildStrategyReframedHistoricalNote(
   updateNumber: number,
   j: number,
@@ -39,10 +24,6 @@ export function buildStrategyReframedHistoricalNote(
   ].join(' ');
 }
 
-/**
- * Assembles the historical strategy proximity transcript with dynamically injected reframed notes
- * between historical turns (§7).
- */
 export function buildStrategyProximityHistoryWithNotes(
   seedHistory: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>,
   globalUpdateHistories: Array<{
@@ -70,9 +51,6 @@ export function buildStrategyProximityHistoryWithNotes(
   return sections.join('\n\n');
 }
 
-/**
- * Builds the active note injected before Modules Generator & Modules Impact Reviewer heartbeat turns (§7).
- */
 export function buildModuleHeartbeatNote(heartbeatNo: number): string {
   if (heartbeatNo <= 1) {
     return [
@@ -92,9 +70,6 @@ export function buildModuleHeartbeatNote(heartbeatNo: number): string {
   ].join(' ');
 }
 
-/**
- * Builds the reframed note that replaces a completed heartbeat's heavy context in modules impact review history (§7).
- */
 export function buildModuleReframedHistoricalNote(
   heartbeatNo: number,
   dosFilePath?: string
@@ -115,10 +90,6 @@ export function buildModuleReframedHistoricalNote(
   ].join(' ');
 }
 
-/**
- * Assembles the historical modules impact review transcript across prior heartbeats with dynamically
- * injected reframed notes (§7).
- */
 export function buildModulesImpactReviewHistoryWithNotes(
   priorHeartbeats: Array<{
     heartbeatNo: number;
@@ -140,9 +111,6 @@ export function buildModulesImpactReviewHistoryWithNotes(
   return sections.join('\n\n');
 }
 
-/**
- * DOS Heartbeat note (§7).
- */
 export const DOS_HEARTBEAT_NOTE = [
   'The modules below were generated at the previous heartbeat, tested independently and mapped to branches,',
   'and the branches then ran corrections with those mapped packets.',
@@ -151,18 +119,12 @@ export const DOS_HEARTBEAT_NOTE = [
   'whether the packet was used, and whether the later critique gives real counterevidence against the tester\'s verdict.'
 ].join(' ');
 
-/**
- * DOS Step-i note (§7).
- */
 export const DOS_STEP_I_NOTE = [
   'Your output is going to the strategy agents that are about to decide which strategies to continue, evolve or replace in this global update.',
   'So write it for them: where exactly each branch is failing, what the branches share, what looks worth keeping.',
   'Here you only receive the latest correction and critique of every branch, so there is no module feedback to produce in this call.'
 ].join(' ');
 
-/**
- * Builds the DOS Step-ii note with dynamically populated slot statuses (§7).
- */
 export function buildDosStepIiNote(
   slotStatuses: Array<{
     slotId: string;

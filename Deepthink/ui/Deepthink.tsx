@@ -854,24 +854,6 @@ export const ModulesExplorerTab: React.FC<{ process: DeepthinkPipelineState; onV
     );
 };
 
-export const FinalResultTab: React.FC<{ process: DeepthinkPipelineState; escapeHtml: (s: string) => string }> = ({ process, escapeHtml }) => (
-    <div className="deepthink-final-result">
-        {process.finalJudgingStatus === 'completed' && process.finalJudgedBestSolution
-            ? <div className="judged-solution-container final-judged-solution"><MathHTML content={process.finalJudgedBestSolution} /></div>
-            : process.finalJudgingStatus === 'processing'
-                ? <div className="loading">Final judging in progress...</div>
-                : process.finalJudgingStatus === 'error'
-                    ? <div className="status-message error"><p>Error during final judging:</p><pre>{escapeHtml(process.finalJudgingError || 'Unknown error')}</pre></div>
-                    : process.status === 'completed'
-                        ? <div className="status-message">Final result not available</div>
-                        : <div className="status-message">Waiting for solution completion...</div>}
-    </div>
-);
-
-// ============================================================================
-// Deepthink Module Runtime & Tab Coordination
-// ============================================================================
-
 const moduleState = {
     tabsNavContainer: null as HTMLElement | null,
     pipelinesContentContainer: null as HTMLElement | null,
@@ -984,7 +966,7 @@ async function openDeepthinkSolutionModal(strategyId: string) {
     header.appendChild(closeBtn);
 
     const body = document.createElement('div');
-    body.className = 'modal-body contextual-mode-container';
+    body.className = 'modal-body branch-history-modal-container';
     body.style.padding = '0';
     body.style.height = 'calc(100vh - 80px)';
     body.style.overflow = 'hidden';
@@ -1047,7 +1029,7 @@ async function updateSolutionModalContent(modalBody: HTMLElement, strategyId: st
         || ['processing', 'pending'].includes(strategy.correctionStatus || '')
         || strategy.iterationHistory?.status === 'processing';
 
-    const { renderBranchHistoryUI } = await import('../../Contextual/Contextual');
+    const { renderBranchHistoryUI } = await import('./DeepthinkBranchHistoryModal');
     await renderBranchHistoryUI(modalBody, originalSolution, currentBestSolution, allIterations, isProcessing);
 }
 
@@ -1093,7 +1075,7 @@ export function renderActiveDeepthinkPipeline() {
     tabs.forEach(tab => {
         const btn = document.createElement('button');
         btn.id = `deepthink-tab-${tab.id}`;
-        btn.className = `tab-button deepthink-mode-tab ${deepthinkProcess.activeTabId === tab.id ? 'active' : ''} ${tab.statusClass} ${tab.alignRight ? 'align-right' : ''}`;
+        btn.className = `tab-button deepthink-mode-tab ${deepthinkProcess.activeTabId === tab.id ? 'active' : ''} ${tab.statusClass}`;
         btn.innerHTML = `${renderIconMarkup(tab.icon)}${tab.label}`;
         btn.addEventListener('click', () => {
             deepthinkProcess.activeTabId = tab.id;
@@ -1123,46 +1105,35 @@ export function renderActiveDeepthinkPipeline() {
     pipelineContentRoot.render(tabContent);
 }
 
-export function getVisibleDeepthinkTabs(process: DeepthinkPipelineState) {
+function getVisibleDeepthinkTabs(process: DeepthinkPipelineState) {
     const showCuratedContext = process.runConfig ? process.runConfig.modulesCount > 0 : true;
     return [
         { id: 'live', label: 'Live', icon: 'terminal', visible: true },
         { id: 'filesystem', label: 'Filesystem', icon: 'folder', visible: true },
         { id: 'strategic-solver', label: 'Branches', icon: 'psychology', visible: true },
         { id: 'modules-explorer', label: 'Curated Context', icon: 'science', visible: showCuratedContext },
-        { id: 'final-result', label: 'Final Result', icon: 'flag', visible: true, alignRight: true },
     ]
         .filter(tab => tab.visible)
         .map(({ visible, ...tab }) => ({ ...tab, statusClass: getTabStatusClass(tab.id, process) }));
 }
 
-export function createDeepthinkTabContent(
-    process: DeepthinkPipelineState,
-    callbacks: {
-        onStrategyTabClick?: (idx: number) => void;
-        onViewSolution?: (id: string) => void;
-        onViewArgument?: (id: string) => void;
-        hideStopButton?: boolean;
-    } = {}
-): React.ReactElement {
-    const onStrategyTabClick = callbacks.onStrategyTabClick ?? ((idx: number) => {
+function createDeepthinkTabContent(process: DeepthinkPipelineState): React.ReactElement {
+    const onStrategyTabClick = (idx: number) => {
         process.activeStrategyTab = idx;
         renderActiveDeepthinkPipeline();
-    });
-    const onViewSolution = callbacks.onViewSolution ?? ((id: string) => openDeepthinkSolutionModal(id));
-    const onViewArgument = callbacks.onViewArgument ?? ((id: string) => openModuleArgumentModal(id));
+    };
+    const onViewSolution = (id: string) => openDeepthinkSolutionModal(id);
+    const onViewArgument = (id: string) => openModuleArgumentModal(id);
 
     switch (process.activeTabId) {
         case 'live':
-            return <DeepthinkLiveTab process={process} hideStopButton={callbacks.hideStopButton} />;
+            return <DeepthinkLiveTab process={process} />;
         case 'filesystem':
             return <DeepthinkFilesystemTab key={process.id} repositoryId={process.id} />;
         case 'strategic-solver':
             return <StrategicSolverTab process={process} escapeHtml={moduleState.escapeHtml} onStrategyTabClick={onStrategyTabClick} onViewSolution={onViewSolution} />;
         case 'modules-explorer':
             return <ModulesExplorerTab process={process} onViewArgument={onViewArgument} />;
-        case 'final-result':
-            return <FinalResultTab process={process} escapeHtml={moduleState.escapeHtml} />;
         default:
             return <DeepthinkLiveTab process={process} />;
     }
@@ -1182,10 +1153,6 @@ function getTabStatusClass(tabId: string, process: DeepthinkPipelineState): stri
             return process.modules?.some(m => m.testerStatus === 'error') ? 'status-deepthink-error'
                 : process.modules?.some(m => m.testerStatus === 'processing') ? 'status-deepthink-processing'
                 : process.modules?.some(m => m.testerStatus === 'completed') || process.modulesExplorerComplete ? 'status-deepthink-completed' : '';
-        case 'final-result':
-            return process.finalJudgingStatus === 'completed' ? 'status-deepthink-completed'
-                : process.finalJudgingStatus === 'error' ? 'status-deepthink-error'
-                : process.finalJudgingStatus === 'processing' ? 'status-deepthink-processing' : '';
         default:
             return '';
     }

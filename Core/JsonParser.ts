@@ -1,27 +1,16 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-/**
- * Extracts a candidate JSON string from markdown code blocks or surrounding text.
- */
 export function extractJsonString(raw: string): string {
     if (!raw || typeof raw !== 'string') return '';
     let text = raw.trim();
 
-    // 1. If wrapped in markdown code fence, extract the block
     const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/i);
     if (fenceMatch && fenceMatch[1].trim()) {
         text = fenceMatch[1].trim();
     }
 
-    // 2. If it already starts with { or [, return it
     if (text.startsWith('{') || text.startsWith('[')) {
         return text;
     }
 
-    // 3. Find the outermost { ... } or [ ... ]
     const firstBrace = text.indexOf('{');
     const firstBracket = text.indexOf('[');
     let startIdx = -1;
@@ -45,22 +34,14 @@ export function extractJsonString(raw: string): string {
     return text;
 }
 
-/**
- * Strict JSON parsing for AI outputs.
- * Extracts the candidate JSON from markdown code fences or outermost JSON delimiters,
- * and parses strictly via standard JSON.parse.
- * If JSON parsing fails, throws immediately without relaxed or fallback parsing.
- */
 export function parseJsonSafe(raw: string, context: string): any {
     if (!raw || typeof raw !== 'string') {
         throw new Error(`Invalid input for ${context}: ${typeof raw}`);
     }
 
-    // Try native JSON.parse directly
     try {
         return JSON.parse(raw);
     } catch {
-        // Continue to code fence / delimiter extraction
     }
 
     const extracted = extractJsonString(raw);

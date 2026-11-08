@@ -71,7 +71,6 @@ function findMessage(value: unknown, visited = new Set<unknown>(), depth = 0): s
     return null;
 }
 
-/** Returns an HTTP-like status code when the provider SDK exposed one. */
 export function getProviderErrorStatus(error: unknown, visited = new Set<unknown>()): number | null {
     const record = asRecord(error);
     if (!record || visited.has(record)) return null;
@@ -105,12 +104,6 @@ const NON_RETRYABLE_PROVIDER_STATUSES = new Set([
     'UNIMPLEMENTED',
 ]);
 
-/**
- * Returns true when an error is a permanent client/configuration failure
- * (e.g., 400/401/403/404/422, invalid API key, unknown model ID, or uninitialized client)
- * that should fail immediately instead of waiting through backoff retries.
- * Rate limits (429), timeouts (408), concurrency conflicts (409), and 5xx/network errors remain retryable.
- */
 export function isNonRetryableProviderError(error: unknown, visited = new Set<unknown>()): boolean {
     if (!error || typeof error !== 'object' || visited.has(error)) return false;
     visited.add(error);
@@ -159,12 +152,6 @@ export function isNonRetryableProviderError(error: unknown, visited = new Set<un
     return false;
 }
 
-/**
- * Extracts the provider's actionable error text without exposing request
- * payloads. Some gateways nest their upstream failure under
- * `error.metadata.raw` while the top-level message is only "Provider returned
- * error".
- */
 export function describeProviderError(error: unknown): string {
     const record = asRecord(error);
     const apiError = asRecord(record?.error);
@@ -187,11 +174,6 @@ export function describeProviderError(error: unknown): string {
     ].filter(Boolean).join(' ');
 }
 
-/**
- * Gives every OpenAI-compatible runtime a stable, actionable error prefix.
- * Provider SDKs use different error classes and nesting, but the user-facing
- * checks are the same: endpoint URL, API compatibility, credentials, or model.
- */
 export function normalizeOpenAICompatibleProviderError(
     error: unknown,
     endpoint: string,
@@ -209,10 +191,6 @@ export function normalizeOpenAICompatibleProviderError(
     }
     return normalized;
 }
-
-// ============================================================================
-// Unified Inference Resilience: 1m -> 3m -> 5m Backoff & 5m Silence Watchdog
-// ============================================================================
 
 export const INFERENCE_RETRY_DELAYS_MS = [
     1 * 60_000,
@@ -282,12 +260,6 @@ export interface SilenceWatchdogOptions {
     externalSignal?: AbortSignal;
 }
 
-/**
- * Runs an async streaming operation with a rolling silence watchdog.
- * Calling `touch()` on any incoming stream chunk (reasoning, text, or tool call)
- * resets the 5-minute silence timer. If no chunk arrives within `silenceTimeoutMs`,
- * the operation aborts immediately with `InferenceSilenceTimeoutError` (no retry).
- */
 export async function withSilenceWatchdog<T>(
     options: SilenceWatchdogOptions,
     fn: (watchdog: { signal: AbortSignal; touch: () => void }) => Promise<T>
@@ -318,7 +290,6 @@ export async function withSilenceWatchdog<T>(
             try {
                 controller.abort(err);
             } catch {
-                // Ignore abort errors
             }
             rejectOnSilence?.(err);
         }, silenceTimeoutMs);
@@ -330,7 +301,6 @@ export async function withSilenceWatchdog<T>(
         try {
             controller.abort(reason);
         } catch {
-            // Ignore
         }
     };
 
@@ -388,11 +358,6 @@ async function sleepWithAbort(delayMs: number, signal?: AbortSignal): Promise<vo
     });
 }
 
-/**
- * Executes an inference call with the unified 1-minute -> 3-minute -> 5-minute
- * backoff retry sequence on transient inference errors (429, 5xx, network).
- * Does NOT retry on user aborts, 5-minute silence timeouts, or permanent 4xx/configuration errors.
- */
 export async function executeWithInferenceRetry<T>(
     options: InferenceRetryOptions,
     fn: (attempt: number) => Promise<T>
@@ -440,5 +405,4 @@ export async function executeWithInferenceRetry<T>(
 
     throw new InferenceRetriesExhaustedError(options.label, lastError, maxRetries + 1);
 }
-
 

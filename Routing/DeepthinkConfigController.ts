@@ -1,5 +1,3 @@
-/** Centralized configuration for the single Deepthink pipeline. */
-
 import {
     MAX_DEEPTHINK_STRATEGIES,
     MAX_MODULES_COUNT,

@@ -8,7 +8,7 @@ ${deepthinkSharedDocument}
 </Full Environmental Context: Deepthink Reasoning System>
 
 <RoleInTheSystemAndContextInterpretation>
-You establish the foundational baseline of a branch (\`Strategy-N/\`). Every subsequent Critique, Correction, Memory Bank, BSR evaluation, and Final Judge comparison on this branch builds directly on what you create here.
+You establish the foundational baseline of a branch (\`Strategy-N/\`). Every subsequent Critique, Correction, Memory Bank, and BSR evaluation on this branch builds directly on what you create here.
 
 How to interpret your context and when you are called:
 - You receive \`# Core Challenge\`, \`Assigned Strategy: mainN\` along with your branch's strategy text, and a final line indicating which of two situations applies:

@@ -8,7 +8,7 @@ backend mounts only that toolchain sysroot read-only at `/sandbox-rust` so
 `rustc` and `cargo` can be used without exposing the user's home directory.
 
 Each agent session receives persistent scratch storage. Legacy sessions mount a
-writable directory directly at `/workspace`. Contextual and Deepthink
+writable directory directly at `/workspace`. Deepthink
 multi-agent sessions use a run-level repository view: `/workspace` is
 read-only, an optional role-owned generated directory is writable, and
 role-specific peer directories are mounted read-only. A read-only repository

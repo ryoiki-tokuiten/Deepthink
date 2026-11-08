@@ -43,7 +43,7 @@ Deterministic formulas in code combine that window report with the branch's life
 
 At the same time, every surviving branch distills its window history into a compact memory bank covering what worked, what improved, and what critique patterns kept recurring, so future iterations stay focused without losing hard-won lessons.
 
-After all `i` iterations complete, the runner sends the final solutions and critiques from the surviving branches to the Final Judge, which evaluates the candidates and selects the best execution.
+In the final iteration (`i`), all active branches run their final corrections in parallel without generating subsequent critiques. Once the final corrections complete, the pipeline finishes and every surviving strategy branch provides a complete final output.
 
 | Deterministic BSR window scoring and slot decisions | Full multi-window memory folding and branch control loop |
 |---|---|
@@ -62,14 +62,6 @@ Every agent can read across the entire repository, use the untracked `/workspace
 Agents never run `git commit` or `git checkout` themselves. The runner serializes all git commits between agent turns when nothing is writing, committing each `Strategy-N/` directory at the end of every iteration and at the start of every window. Restoring one rolled-back branch folder from an earlier commit never touches the other branches. The runner also writes a compressed state checkpoint to `latest.gz` after every step so you can stop and resume a run without losing finished work.
 
 ![Git repository and file system layout](Deepthink/docs/diagrams/Git-File-System.png)
-
-## Adaptive Deepthink
-
-Adaptive Deepthink is basically deepthink mode access given to an orchestrator agent. It is still very brittle and I haven't really spent time observing its failures.
-
-A central orchestrator running inside a LangGraph state loop decides at each pass when to generate or replace strategies with `generate_strategies`, when to formulate and independently test modules from critiques with `generate_modules` and `test_modules`, which branches to execute, critique, and correct in parallel with `execute`, and which promising branches to save permanently with `save`. Before a correction agent runs on an unsaved branch, the system takes a git snapshot of that branch directory. If the orchestrator decides not to save the branch after seeing the correction, the directory rolls back to that pre-correction snapshot before the next pass.
-
-Long reasoning runs fall apart when the orchestrator's context fills up with old transcripts. To prevent that, the orchestrator calls `finalize_pass_and_execute` when a pass finishes. That writes the completed pass outputs into markdown files under `/workspace/Results` and moves a compaction boundary forward in the orchestrator's message history. Verbose transcripts from earlier passes drop out of the prompt and get replaced by file links that the orchestrator can read on demand with `read_files`. The orchestrator also has root read and write access to `/workspace` through `virtual_environment` and submits the final answer directly through `submit_final_output`.
 
 ---
 
@@ -179,7 +171,6 @@ one that the models are very good at certain harnesses because they have been tr
 See the full documentation for complete details:
 - [Deepthink Architecture and Context Flow](Deepthink/docs/DeepthinkDocs.md)
 - [Architecture Visuals](Deepthink/docs/deepthink_architecture.html)
-- [Adaptive Deepthink Architecture](AdaptiveDeepthink/AdaptiveDeepthinkDocs.md)
 - [Sandbox Tool Environment](Backend/README.md)
 
 ## License

@@ -1,12 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * MANDATORY REFERENCE: Read Deepthink_Consolidated_Specification.md before modifying!
- * The specification document (Deepthink/docs/Deepthink_Consolidated_Specification.md)
- * is the absolute source of truth (§8.3, §9).
- */
-
 import {
   createDefaultCustomPromptsDeepthink,
   type CustomizablePromptsDeepthink,
@@ -93,13 +84,6 @@ export const DEEPTHINK_AGENT_REGISTRY = {
     sandboxRole: 'Branch State Representation',
     systemPromptKey: 'sys_deepthink_bsr',
     modelKey: 'model_bsr',
-    maxOutputTokens: 5000,
-  },
-  finalJudge: {
-    label: 'Final Judge',
-    sandboxRole: 'Final Judge',
-    systemPromptKey: 'sys_deepthink_finalJudge',
-    modelKey: 'model_finalJudge',
     maxOutputTokens: 5000,
   },
 } as const satisfies Record<string, {

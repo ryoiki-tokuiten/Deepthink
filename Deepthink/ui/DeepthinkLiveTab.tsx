@@ -7,7 +7,6 @@ import { SandboxAgentActivity } from '../../Styles/Components/AgentActivity/Agen
 
 interface DeepthinkLiveTabProps {
     process: DeepthinkPipelineState;
-    hideStopButton?: boolean;
 }
 
 export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) => {
@@ -81,7 +80,7 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) =
         if (text.includes('bsr') || text.includes('branch state')) return 'redteam';
         if (text.includes('dos') || text.includes('synthesis') || text.includes('critique') || text.includes('critic')) return 'critique';
         if (text.includes('correction')) return 'correction';
-        if (text.includes('memory') || text.includes('judge')) return 'strategy';
+        if (text.includes('memory')) return 'strategy';
         if (text.includes('modules') || text.includes('tester')) return 'modules';
         if (text.includes('strategy') || text.includes('attempt') || text.includes('execution') || text.includes('solver') || text.includes('proximity')) return 'strategy';
         return 'general';
@@ -100,7 +99,6 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) =
 
         if (lowerName.includes('solution attempt')) return withParts('Initial Execution', [target, meta]);
         if (lowerName.includes('solution correction')) return withParts('Correction Agent', [target, meta]);
-        if (lowerName.includes('final judge')) return 'Final Judge Agent';
         if (lowerName.includes('solution critique')) return withParts('Critique Agent', [target, meta]);
         if (lowerName.includes('dissected observations') || lowerName.includes('synthesis')) {
             const prefix = desc.toLowerCase().includes('step-i') ? 'step-i, For ' : 'For ';

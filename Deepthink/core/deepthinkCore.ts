@@ -165,8 +165,6 @@ export async function saveLatestDeepthinkState(pipeline: DeepthinkPipelineState)
                 modeState: { pipeline: pruned, activeTabId: pruned.activeTabId || 'live' },
                 customPrompts: {
                     deepthink: deps?.getCustomPromptsDeepthinkState?.() ?? globalState.customPromptsDeepthinkState,
-                    contextual: globalState.customPromptsContextualState,
-                    adaptiveDeepthink: globalState.customPromptsAdaptiveDeepthinkState,
                 },
                 modelParameters: {
                     strategiesCount: pipeline.runConfig?.strategiesCount ?? deps?.getSelectedStrategiesCount?.() ?? 3,
@@ -214,7 +212,6 @@ export function resetInFlightPipelineExecution(pipeline: DeepthinkPipelineState)
             if (branch.solutionCritiqueStatus === 'processing') branch.solutionCritiqueStatus = branch.solutionCritique ? 'completed' : 'pending';
         }
     }
-    if (pipeline.finalJudgingStatus === 'processing') pipeline.finalJudgingStatus = 'pending';
     if (pipeline.solutionCritiquesStatus === 'processing') pipeline.solutionCritiquesStatus = 'pending';
     if (pipeline.modulesGenStatus === 'processing') pipeline.modulesGenStatus = 'pending';
 }

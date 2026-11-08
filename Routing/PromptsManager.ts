@@ -1,7 +1,4 @@
 import { CustomizablePromptsDeepthink } from '../Deepthink/prompts';
-import { CustomizablePromptsContextual, createDefaultCustomPromptsContextual } from '../Contextual/ContextualPrompts';
-import { CustomizablePromptsAdaptiveDeepthink, createDefaultCustomPromptsAdaptiveDeepthink } from '../AdaptiveDeepthink/AdaptiveDeepthinkPrompt';
-import { globalState } from '../Core/State';
 
 export class ScopedPromptsManager<T extends object> {
     private ref: { current: T };
@@ -59,32 +56,14 @@ export class ScopedPromptsManager<T extends object> {
     }
 }
 
-export const globalAdaptiveDeepthinkPromptsManager = new ScopedPromptsManager<CustomizablePromptsAdaptiveDeepthink>(
-    {
-        get current() { return globalState.customPromptsAdaptiveDeepthinkState; },
-        set current(prompts) { globalState.customPromptsAdaptiveDeepthinkState = prompts; }
-    },
-    createDefaultCustomPromptsAdaptiveDeepthink
-);
-
 export class PromptsManager {
     private deepthinkPromptsManager: ScopedPromptsManager<CustomizablePromptsDeepthink>;
-    private contextualPromptsManager?: ScopedPromptsManager<CustomizablePromptsContextual>;
 
-    constructor(
-        deepthinkPromptsRef: { current: CustomizablePromptsDeepthink },
-        contextualPromptsRef?: { current: CustomizablePromptsContextual }
-    ) {
+    constructor(deepthinkPromptsRef: { current: CustomizablePromptsDeepthink }) {
         this.deepthinkPromptsManager = new ScopedPromptsManager(deepthinkPromptsRef);
-        if (contextualPromptsRef) {
-            if (!contextualPromptsRef.current.sys_contextual_mainGenerator) {
-                contextualPromptsRef.current = createDefaultCustomPromptsContextual();
-            }
-            this.contextualPromptsManager = new ScopedPromptsManager(contextualPromptsRef, createDefaultCustomPromptsContextual);
-        }
     }
 
     public getDeepthinkPromptsManager() { return this.deepthinkPromptsManager; }
     public getDeepthinkPrompts() { return this.deepthinkPromptsManager.getPrompts(); }
-    public getContextualPromptsManager() { return this.contextualPromptsManager; }
 }
+

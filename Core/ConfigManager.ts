@@ -1,18 +1,11 @@
 import { encode, decode } from '@msgpack/msgpack';
 import { globalState } from './State';
-import type { ApplicationMode } from './Types';
 import { activateTab, updateUIAfterModeChange } from './AppRouter';
 import {
-    ensureAdaptiveDeepthinkInitialized,
-    ensureContextualInitialized,
     ensureDeepthinkInitialized,
-    getLoadedAdaptiveDeepthinkModule,
-    getLoadedContextualModule,
     getLoadedDeepthinkModule
 } from './ModeLoader';
 import { createDefaultCustomPromptsDeepthink } from '../Deepthink/prompts';
-import { createDefaultCustomPromptsContextual } from '../Contextual/ContextualPrompts';
-import { createDefaultCustomPromptsAdaptiveDeepthink } from '../AdaptiveDeepthink/AdaptiveDeepthinkPrompt';
 import {
     routingManager,
     getSelectedModel,
@@ -29,15 +22,12 @@ import { updateControlsState } from '../UI/Controls';
 const CURRENT_STATE_VERSION = 4;
 
 interface ExportedConfig {
-    currentMode: ApplicationMode;
+    currentMode: 'deepthink';
     initialIdea: string;
     selectedModel: string;
     modeState: unknown;
-    embeddedStates?: Record<string, unknown>;
     customPrompts: {
         deepthink?: unknown;
-        contextual?: unknown;
-        adaptiveDeepthink?: unknown;
     };
     modelParameters: {
         strategiesCount: number;
@@ -55,7 +45,7 @@ interface ExportedConfig {
 interface VersionedState {
     _version: number;
     _exportedAt: string;
-    _mode: ApplicationMode;
+    _mode: 'deepthink';
     data: ExportedConfig;
 }
 
@@ -76,14 +66,11 @@ const STATUS_RESET_MAP: Record<string, string> = {
     retrying: 'pending',
     running: 'stopped',
     stopping: 'stopped',
-    orchestrating: 'idle',
-    processing_workers: 'idle',
-    orchestrating_retrying: 'idle',
 };
 
 const BOOLEAN_RESET_PATTERNS = [/^is.*Running$/, /^is.*Processing$/, /^isStopRequested$/, /^isGenerating$/];
 const NON_SERIALIZABLE_FIELDS = new Set([
-    'abortController', 'tabButtonElement', 'contentElement', 'stopButtonElement', 'uiRoot', 'root', 'containerElement'
+    'abortController'
 ]);
 
 function sanitizeRecursive(obj: unknown, seen = new WeakMap()): unknown {
@@ -112,94 +99,64 @@ function sanitizeRecursive(obj: unknown, seen = new WeakMap()): unknown {
 }
 
 let pendingDeepthinkState: any = null;
-let pendingAdaptiveState: any = null;
-let pendingContextualState: any = null;
 
-const modeHandlers: Record<ApplicationMode, ModeStateHandler> = {
-    deepthink: {
-        getFullState() {
-            const pipeline = getLoadedDeepthinkModule()?.getActiveDeepthinkPipeline();
-            return pipeline ? { pipeline, activeTabId: pipeline.activeTabId || 'strategic-solver' } : null;
-        },
-        restoreState(state) {
-            if (state?.pipeline) {
-                if (state.pipeline.status !== 'completed' && state.pipeline.status !== 'error') state.pipeline.status = 'stopped';
-                state.pipeline.isStopRequested = false;
+const deepthinkStateHandler: ModeStateHandler = {
+    getFullState() {
+        const pipeline = getLoadedDeepthinkModule()?.getActiveDeepthinkPipeline();
+        return pipeline ? { pipeline, activeTabId: pipeline.activeTabId || 'strategic-solver' } : null;
+    },
+    restoreState(state) {
+        if (state?.pipeline) {
+            if (state.pipeline.status !== 'completed' && state.pipeline.status !== 'error') state.pipeline.status = 'stopped';
+            state.pipeline.isStopRequested = false;
+        }
+        pendingDeepthinkState = state;
+    },
+    renderAfterImport() {
+        void ensureDeepthinkInitialized().then(async mod => {
+            const state = pendingDeepthinkState;
+            pendingDeepthinkState = null;
+            if (!state?.pipeline) {
+                mod.setActiveDeepthinkPipelineForImport(null);
+                ['deepthinkPipelineUpdated', 'deepthinkPipelineStateChanged', 'controlsStateUpdated'].forEach(ev => window.dispatchEvent(new CustomEvent(ev)));
+                return;
             }
-            pendingDeepthinkState = state;
-        },
-        renderAfterImport() {
-            void ensureDeepthinkInitialized().then(async mod => {
-                const state = pendingDeepthinkState;
-                pendingDeepthinkState = null;
-                if (!state?.pipeline) {
-                    mod.setActiveDeepthinkPipelineForImport(null);
-                    ['deepthinkPipelineUpdated', 'deepthinkPipelineStateChanged', 'controlsStateUpdated'].forEach(ev => window.dispatchEvent(new CustomEvent(ev)));
-                    return;
-                }
-                if (state.pipeline.status !== 'completed' && state.pipeline.status !== 'error') state.pipeline.status = 'stopped';
-                state.pipeline.isStopRequested = false;
-                try {
-                    const files = state.pipeline.directContextFiles || globalState.directContextFiles || [];
-                    for (const file of files) {
-                        if (!file.base64) {
-                            const targetPath = file.relativePath || `user_uploaded/${file.name}`;
-                            let res = await fetch(`/api/sandbox/workspace/file?repositoryId=${encodeURIComponent(state.pipeline.id)}&path=${encodeURIComponent(targetPath)}&scope=repository`);
-                            if (!res.ok && targetPath.startsWith('direct_context/')) {
-                                res = await fetch(`/api/sandbox/workspace/file?repositoryId=${encodeURIComponent(state.pipeline.id)}&path=${encodeURIComponent(targetPath.replace('direct_context/', 'user_uploaded/'))}&scope=repository`);
-                            }
-                            if (res.ok) {
-                                const bytes = new Uint8Array(await res.arrayBuffer());
-                                let binary = '';
-                                for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                                file.base64 = btoa(binary);
-                            }
+            if (state.pipeline.status !== 'completed' && state.pipeline.status !== 'error') state.pipeline.status = 'stopped';
+            state.pipeline.isStopRequested = false;
+            try {
+                const files = state.pipeline.directContextFiles || globalState.directContextFiles || [];
+                for (const file of files) {
+                    if (!file.base64) {
+                        const targetPath = file.relativePath || `user_uploaded/${file.name}`;
+                        let res = await fetch(`/api/sandbox/workspace/file?repositoryId=${encodeURIComponent(state.pipeline.id)}&path=${encodeURIComponent(targetPath)}&scope=repository`);
+                        if (!res.ok && targetPath.startsWith('direct_context/')) {
+                            res = await fetch(`/api/sandbox/workspace/file?repositoryId=${encodeURIComponent(state.pipeline.id)}&path=${encodeURIComponent(targetPath.replace('direct_context/', 'user_uploaded/'))}&scope=repository`);
+                        }
+                        if (res.ok) {
+                            const bytes = new Uint8Array(await res.arrayBuffer());
+                            let binary = '';
+                            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                            file.base64 = btoa(binary);
                         }
                     }
-                    globalState.directContextFiles = files;
-                    if (typeof state.pipeline.challenge === 'string') {
-                        state.pipeline.challenge = state.pipeline.challenge.replace(
-                            /<!-- EXECUTION_IMAGE_REF:\s*([^\s|]+)\s*\|\s*MIME_TYPE:\s*([^\s]+)\s*-->/g,
-                            (match: string, refPath: string, mime: string) => {
-                                const cleanName = refPath.replace(/^(user_uploaded|direct_context)\//, '');
-                                const matched = files.find((f: any) => f.relativePath === refPath || f.name === cleanName);
-                                return matched?.base64 ? `<!-- EXECUTION_IMAGE_START -->\n<!-- MIME_TYPE: ${mime} -->\n${matched.base64}\n<!-- EXECUTION_IMAGE_END -->` : match;
-                            }
-                        );
-                    }
-                } catch {}
-                mod.setActiveDeepthinkPipelineForImport(state.pipeline);
-                mod.renderActiveDeepthinkPipeline();
-                if (state.activeTabId) activateTab(state.activeTabId);
-                ['deepthinkPipelineUpdated', 'deepthinkPipelineStateChanged', 'controlsStateUpdated'].forEach(ev => window.dispatchEvent(new CustomEvent(ev)));
-            });
-        }
-    },
-    'adaptive-deepthink': {
-        getFullState: () => getLoadedAdaptiveDeepthinkModule()?.getAdaptiveDeepthinkState() ?? null,
-        restoreState: state => { pendingAdaptiveState = state; },
-        renderAfterImport() {
-            void ensureAdaptiveDeepthinkInitialized().then(mod => {
-                if (pendingAdaptiveState) {
-                    mod.setAdaptiveDeepthinkStateForImport(pendingAdaptiveState);
-                    pendingAdaptiveState = null;
                 }
-                mod.renderAdaptiveDeepthinkMode();
-            });
-        }
-    },
-    contextual: {
-        getFullState: () => getLoadedContextualModule()?.getContextualState() ?? null,
-        restoreState: state => { pendingContextualState = state; },
-        renderAfterImport() {
-            void ensureContextualInitialized().then(mod => {
-                if (pendingContextualState) {
-                    mod.setContextualStateForImport(pendingContextualState);
-                    pendingContextualState = null;
+                globalState.directContextFiles = files;
+                if (typeof state.pipeline.challenge === 'string') {
+                    state.pipeline.challenge = state.pipeline.challenge.replace(
+                        /<!-- EXECUTION_IMAGE_REF:\s*([^\s|]+)\s*\|\s*MIME_TYPE:\s*([^\s]+)\s*-->/g,
+                        (match: string, refPath: string, mime: string) => {
+                            const cleanName = refPath.replace(/^(user_uploaded|direct_context)\//, '');
+                            const matched = files.find((f: any) => f.relativePath === refPath || f.name === cleanName);
+                            return matched?.base64 ? `<!-- EXECUTION_IMAGE_START -->\n<!-- MIME_TYPE: ${mime} -->\n${matched.base64}\n<!-- EXECUTION_IMAGE_END -->` : match;
+                        }
+                    );
                 }
-                mod.renderContextualMode();
-            });
-        }
+            } catch {}
+            mod.setActiveDeepthinkPipelineForImport(state.pipeline);
+            mod.renderActiveDeepthinkPipeline();
+            if (state.activeTabId) activateTab(state.activeTabId);
+            ['deepthinkPipelineUpdated', 'deepthinkPipelineStateChanged', 'controlsStateUpdated'].forEach(ev => window.dispatchEvent(new CustomEvent(ev)));
+        });
     }
 };
 
@@ -239,20 +196,17 @@ export async function exportConfiguration(format: 'auto' | 'json' | 'msgpack' = 
         return;
     }
     const initialIdeaInput = document.getElementById('initial-idea') as HTMLTextAreaElement | null;
-    const handler = modeHandlers[globalState.currentMode];
     const config: VersionedState = {
         _version: CURRENT_STATE_VERSION,
         _exportedAt: new Date().toISOString(),
-        _mode: globalState.currentMode,
+        _mode: 'deepthink',
         data: {
-            currentMode: globalState.currentMode,
+            currentMode: 'deepthink',
             initialIdea: initialIdeaInput?.value ?? '',
             selectedModel: getSelectedModel(),
-            modeState: handler?.getFullState() ?? null,
+            modeState: deepthinkStateHandler.getFullState(),
             customPrompts: {
                 deepthink: globalState.customPromptsDeepthinkState,
-                contextual: globalState.customPromptsContextualState,
-                adaptiveDeepthink: globalState.customPromptsAdaptiveDeepthinkState,
             },
             modelParameters: {
                 strategiesCount: getSelectedStrategiesCount(),
@@ -302,19 +256,14 @@ export async function handleImportConfiguration(event: Event): Promise<void> {
             throw new Error(`Unsupported configuration version ${raw._version}. Expected version ${CURRENT_STATE_VERSION}.`);
         }
         const { data } = raw as VersionedState;
-        globalState.currentMode = data.currentMode;
-        const modeRadio = document.querySelector(`input[name="app-mode"][value="${globalState.currentMode}"]`) as HTMLInputElement | null;
-        if (modeRadio) modeRadio.checked = true;
         const initialIdeaInput = document.getElementById('initial-idea') as HTMLTextAreaElement | null;
         if (initialIdeaInput) initialIdeaInput.value = data.initialIdea || '';
-        globalState.directContextFiles = globalState.currentMode === 'deepthink' && Array.isArray(data.directContextFiles) ? (data.directContextFiles as any) : [];
+        globalState.directContextFiles = Array.isArray(data.directContextFiles) ? (data.directContextFiles as any) : [];
         updateUIAfterModeChange();
         (window as any).reinitializeSidebarControls?.();
 
         const prompts = data.customPrompts || {};
         globalState.customPromptsDeepthinkState = JSON.parse(JSON.stringify(prompts.deepthink || createDefaultCustomPromptsDeepthink()));
-        globalState.customPromptsAdaptiveDeepthinkState = JSON.parse(JSON.stringify(prompts.adaptiveDeepthink || createDefaultCustomPromptsAdaptiveDeepthink()));
-        globalState.customPromptsContextualState = JSON.parse(JSON.stringify(prompts.contextual || createDefaultCustomPromptsContextual()));
 
         setTimeout(() => {
             const modelConfig = routingManager.getModelConfigManager();
@@ -325,10 +274,9 @@ export async function handleImportConfiguration(event: Event): Promise<void> {
             routingManager.getDeepthinkConfigController().emitFullStateUpdate();
         }, 150);
 
-        const handler = modeHandlers[data.currentMode];
-        if (handler && data.modeState) {
-            handler.restoreState(sanitizeRecursive(data.modeState));
-            handler.renderAfterImport();
+        if (data.modeState) {
+            deepthinkStateHandler.restoreState(sanitizeRecursive(data.modeState));
+            deepthinkStateHandler.renderAfterImport();
         }
         updateControlsState();
     } catch (error) {
@@ -337,3 +285,4 @@ export async function handleImportConfiguration(event: Event): Promise<void> {
         input.value = '';
     }
 }
+

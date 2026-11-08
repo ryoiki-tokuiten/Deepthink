@@ -14,11 +14,8 @@ interface ControlsDisabledState {
 }
 
 function computeIsGenerating(): boolean {
-    const { activeDeepthinkPipeline, isContextualRunning, isAdaptiveDeepthinkRunning } = globalState;
-
-    const deepthinkPipelineRunningOrStopping = activeDeepthinkPipeline?.status === 'processing' || activeDeepthinkPipeline?.status === 'stopping';
-
-    return deepthinkPipelineRunningOrStopping || isContextualRunning || isAdaptiveDeepthinkRunning;
+    const { activeDeepthinkPipeline } = globalState;
+    return activeDeepthinkPipeline?.status === 'processing' || activeDeepthinkPipeline?.status === 'stopping';
 }
 
 function computeControlsDisabledState(): ControlsDisabledState {
@@ -27,7 +24,7 @@ function computeControlsDisabledState(): ControlsDisabledState {
     const isDeepthinkRunning = globalState.activeDeepthinkPipeline?.status === 'processing' || globalState.activeDeepthinkPipeline?.status === 'stopping';
 
     let generateButtonDisabled = isGenerating || !isApiKeyReady;
-    if (globalState.currentMode === 'deepthink' && isDeepthinkRunning) {
+    if (isDeepthinkRunning) {
         generateButtonDisabled = false;
     }
 

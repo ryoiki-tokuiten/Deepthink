@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import Sidebar from './Styles/Components/Sidebar/Sidebar';
 import { PromptsModalManager } from './Styles/Components/PromptContent';
@@ -18,15 +18,7 @@ const AppInitializer: React.FC = () => {
 };
 
 const MainContent: React.FC = () => {
-    const [currentMode, setCurrentMode] = useState(globalState.currentMode);
-
-    useEffect(() => {
-        const handleModeChange = (e: any) => setCurrentMode(e.detail.mode);
-        window.addEventListener('appModeChanged', handleModeChange);
-        return () => window.removeEventListener('appModeChanged', handleModeChange);
-    }, []);
-
-    const showTabs = !(currentMode === 'deepthink' && !globalState.activeDeepthinkPipeline);
+    const showTabs = Boolean(globalState.activeDeepthinkPipeline);
 
     return (
         <main id="main-content" className="flow-canvas-wrapper" aria-labelledby="main-content-heading">

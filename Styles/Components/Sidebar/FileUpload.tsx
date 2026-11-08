@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { getEncoding } from 'js-tiktoken';
 import { Icon } from '../../../UI/Icons';
 import { getProviderForCurrentModel, getRoutingManager, getSelectedModel } from '../../../Routing';
-import { FileData, ApplicationMode } from '../../../Core/Types';
+import { FileData } from '../../../Core/Types';
 import { globalState } from '../../../Core/State';
 
 interface FileTypeConfig {
@@ -66,8 +66,8 @@ const TEXT_MIME_BY_EXTENSION: Record<string, string> = {
 
 const ACCEPTED_FILES = ['image/*', 'text/*', ...TEXT_FILE_EXTENSIONS].join(',');
 const SIZE_WARNING_THRESHOLD = 15 * 1024 * 1024;
-export const DIRECT_CONTEXT_TOKEN_LIMIT = 50_000;
-const DIRECT_CONTEXT_MEDIA_LIMIT_IMAGES = 20;
+export const DIRECT_CONTEXT_TOKEN_LIMIT = 10_000;
+const DIRECT_CONTEXT_MEDIA_LIMIT_IMAGES = 5;
 export const DIRECT_CONTEXT_MEDIA_LIMITS = { images: DIRECT_CONTEXT_MEDIA_LIMIT_IMAGES };
 
 const isImage = (mimeType: string) => mimeType.startsWith('image/');
@@ -206,27 +206,21 @@ export const FileUpload: React.FC = () => {
     const dragTarget = useRef<'direct' | 'filesystem' | null>(null);
     const [, setModelCapabilityRevision] = useState(0);
 
-    const [currentMode, setCurrentMode] = useState<ApplicationMode>(globalState.currentMode as ApplicationMode);
     const [deepthinkSandboxEnabled, setDeepthinkSandboxEnabled] = useState(false);
-    const [adaptiveSandboxEnabled, setAdaptiveSandboxEnabled] = useState(globalState.virtualEnvironmentEnabled);
 
     React.useEffect(() => {
         try { setDeepthinkSandboxEnabled(getRoutingManager().getDeepthinkConfigController().isCodeExecutionEnabled()); } catch {}
         const refreshCapability = () => setModelCapabilityRevision(r => r + 1);
         const pm = getRoutingManager().getApiKeyManager().getProviderManager();
-        const handleModeChange = () => setCurrentMode(globalState.currentMode as ApplicationMode);
         const handleSandboxToggle = () => {
-            setAdaptiveSandboxEnabled(globalState.virtualEnvironmentEnabled);
             try { setDeepthinkSandboxEnabled(getRoutingManager().getDeepthinkConfigController().isCodeExecutionEnabled()); } catch {}
         };
         window.addEventListener('selectedModelChanged', refreshCapability);
         pm.addModelUpdateListener(refreshCapability);
-        window.addEventListener('appModeChanged', handleModeChange);
         window.addEventListener('sandboxToggled', handleSandboxToggle);
         return () => {
             window.removeEventListener('selectedModelChanged', refreshCapability);
             pm.removeModelUpdateListener(refreshCapability);
-            window.removeEventListener('appModeChanged', handleModeChange);
             window.removeEventListener('sandboxToggled', handleSandboxToggle);
         };
     }, []);
@@ -383,7 +377,7 @@ export const FileUpload: React.FC = () => {
         );
     };
 
-    const showFilesystemSection = currentMode !== 'contextual' && (currentMode === 'deepthink' ? deepthinkSandboxEnabled : currentMode === 'adaptive-deepthink' ? adaptiveSandboxEnabled : false);
+    const showFilesystemSection = deepthinkSandboxEnabled;
 
     return (
         <>

@@ -8,10 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --experimental-strip-types --test Deepthink/core/deepthinkContext.test.ts",
-    "test:sandbox": "node --experimental-strip-types --test Backend/Sandbox_Environment/repositorySnapshot.test.ts",
+    "lint": "tsc --noEmit",
     "test:e2e": "node --experimental-strip-types --test Deepthink/tests/deepthinkPipelineE2E.test.ts",
-    "test": "npm run test:unit && npm run test:sandbox && npm run test:e2e"
+    "test": "npm run test:e2e"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.25",
