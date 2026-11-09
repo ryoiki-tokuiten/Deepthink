@@ -63,7 +63,6 @@ import {
 } from '../../Core/ProviderError.ts';
 
 async function getSandboxRuntime() {
-  if (typeof window === 'undefined') return null;
   try {
     return await import('../../Core/SandboxToolRuntime.ts');
   } catch {
@@ -73,28 +72,9 @@ async function getSandboxRuntime() {
 
 export class GitRepositoryHarness {
   private readonly repositoryId: string;
-  private readonly committedFiles: Map<string, string> = new Map();
-  private readonly archivedDirectories: string[] = [];
-  private readonly rollbacks: Array<{ slotIndex: number; commitHash: string }> = [];
 
   constructor(repositoryId: string) {
     this.repositoryId = repositoryId;
-  }
-
-  public getCommittedFiles(): Map<string, string> {
-    return new Map(this.committedFiles);
-  }
-
-  public getCommittedFile(path: string): string | undefined {
-    return this.committedFiles.get(path);
-  }
-
-  public getArchivedDirectories(): string[] {
-    return [...this.archivedDirectories];
-  }
-
-  public getRollbacks(): Array<{ slotIndex: number; commitHash: string }> {
-    return [...this.rollbacks];
   }
 
   public async initializeRepository(_strategyCount?: number): Promise<string | undefined> {
@@ -112,7 +92,6 @@ export class GitRepositoryHarness {
 
   public async writeFilesAndCommit(commitMessage: string, files: DeepthinkResultsContextFile[]): Promise<void> {
     if (!files.length) return;
-    for (const file of files) this.committedFiles.set(file.path, file.content);
     try {
       const rt = await getSandboxRuntime();
       if (rt?.snapshotDeepthinkResultsRepository) {
@@ -157,7 +136,6 @@ export class GitRepositoryHarness {
   }
 
   public async rollbackStrategy(slotIndex: number, commitHash: string): Promise<void> {
-    this.rollbacks.push({ slotIndex, commitHash });
     const rt = await getSandboxRuntime();
     if (rt?.restoreSandboxRepositoryStrategy) {
       await rt.restoreSandboxRepositoryStrategy(this.repositoryId, `Strategy-${slotIndex + 1}`, commitHash);
@@ -166,17 +144,12 @@ export class GitRepositoryHarness {
 
   public async pruneStrategy(slotIndex: number): Promise<string | undefined> {
     const strategyDir = `Strategy-${slotIndex + 1}`;
-    const ordinal = String(this.archivedDirectories.length + 1).padStart(2, '0');
-    const targetArchived = `Pruned_Strategies/${strategyDir}_pruned_${ordinal}`;
     const rt = await getSandboxRuntime();
     if (rt?.archiveSandboxRepositoryStrategy) {
       const res = await rt.archiveSandboxRepositoryStrategy(this.repositoryId, strategyDir);
-      const dir = res?.archivedDirectory || targetArchived;
-      this.archivedDirectories.push(dir);
-      return dir;
+      return res?.archivedDirectory;
     }
-    this.archivedDirectories.push(targetArchived);
-    return targetArchived;
+    return undefined;
   }
 }
 
@@ -356,7 +329,6 @@ export interface PipelineExecutionCallbacks {
   onStateChange?: (state: DeepthinkPipelineState) => void;
   retryDelaysMs?: number[];
   silenceTimeoutMs?: number;
-  runSandboxToolAgent?: typeof import('../../Core/SandboxToolRuntime.ts').runSandboxToolAgent;
 }
 
 export class PipelineStopRequestedError extends Error {
@@ -470,14 +442,6 @@ export class DeepthinkPipelineOrchestrator {
     void this.sharedWorkspace.read().then(content => {
       (this.state as any).sharedWorkspaceContent = content;
     }).catch(() => {});
-  }
-
-  public getSharedWorkspace(): SharedWorkspaceManager {
-    return this.sharedWorkspace;
-  }
-
-  public getGitHarness(): GitRepositoryHarness {
-    return this.gitHarness;
   }
 
   public parseJsonStrict<T>(raw: string, context?: string): T {
@@ -2540,7 +2504,7 @@ export class DeepthinkPipelineOrchestrator {
             const sharedWorkspaceHandler = (input: SharedWorkspaceToolInput) =>
               this.sharedWorkspace.handleToolCall(input);
 
-            const runAgent = this.callbacks.runSandboxToolAgent ?? (await getSandboxToolAgentRunner());
+            const runAgent = await getSandboxToolAgentRunner();
             if (!runAgent) {
               throw new Error('Sandbox tool agent runtime is not available in this environment');
             }

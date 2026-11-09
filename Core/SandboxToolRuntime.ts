@@ -64,12 +64,7 @@ export interface SandboxRepositoryAccess {
     repositoryId: string;
     agentDirectory?: string;
     agentDirectoryReadOnly?: boolean;
-    readableDirectories?: string[];
-    liveReadableDirectories?: string[];
-    hiddenDirectories?: string[];
     fullRepositoryRead?: boolean;
-    fullRepositoryWrite?: boolean;
-    revision?: string;
 }
 
 export interface SandboxFinalOutputContract {
@@ -250,6 +245,43 @@ export async function archiveSandboxRepositoryStrategy(
     );
     dispatchSnapshotEvent(repositoryId);
     return payload;
+}
+
+export interface SandboxEnvSecretEntry {
+    key: string;
+    maskedValue: string;
+}
+
+export async function fetchSandboxEnvSecrets(): Promise<SandboxEnvSecretEntry[]> {
+    const response = await fetch(`${getSandboxApiBasePath()}/env-secrets`, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.error || `Failed to load Secret Store (${response.status}).`);
+    return Array.isArray(payload?.secrets) ? payload.secrets : [];
+}
+
+export async function saveSandboxEnvSecret(key: string, value: string): Promise<SandboxEnvSecretEntry[]> {
+    const payload = await postSandboxJson<{ secrets?: SandboxEnvSecretEntry[] }>(
+        '/env-secrets',
+        { key, value },
+        'Failed to save Secret Store key'
+    );
+    sandboxEnvironmentProfilePromise = null;
+    return Array.isArray(payload?.secrets) ? payload.secrets : [];
+}
+
+export async function deleteSandboxEnvSecret(key: string): Promise<SandboxEnvSecretEntry[]> {
+    const response = await fetch(`${getSandboxApiBasePath()}/env-secrets`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.error || `Failed to remove Secret Store key (${response.status}).`);
+    sandboxEnvironmentProfilePromise = null;
+    return Array.isArray(payload?.secrets) ? payload.secrets : [];
 }
 
 const READ_ONLY_BASH_COMMANDS = new Set([
@@ -503,53 +535,25 @@ function buildEnvironmentProfileText(environmentProfile: SandboxEnvironmentProfi
 }
 
 function buildRepositoryFilesystemRules(access: SandboxRepositoryAccess): string[] {
-    const readableDirectories = Array.from(new Set(access.readableDirectories || []))
-        .filter(directory => directory && directory !== access.agentDirectory);
     const writableDirectory = access.agentDirectoryReadOnly ? undefined : access.agentDirectory;
-    const fullRepositoryWrite = access.fullRepositoryWrite === true;
-    const readableScope = fullRepositoryWrite
-        ? '- You may read and write the complete repository. This is the orchestrator-only global workspace.'
-        : access.fullRepositoryRead
-            ? '- You may read every directory and file in this repository. The complete repository is mounted read-only except for your explicitly assigned writable directory, if any.'
-            : readableDirectories.length
-                ? `- You may read these peer directories, mounted read-only: ${readableDirectories.map(directory => `/workspace/${directory}`).join(', ')}.`
-                : '- No peer agent directories are visible for this call.';
-    const hiddenScope = (access.hiddenDirectories || []).length
-        ? `- The following role-owned child directories are intentionally hidden: ${(access.hiddenDirectories || []).map(directory => `/workspace/${directory}`).join(', ')}.`
-        : '';
 
     return [
-        fullRepositoryWrite
-            ? '- This run uses one shared repository mounted read/write at /workspace.'
-            : writableDirectory
-                ? `- This run uses a shared repository mounted at /workspace. Your writable working directory is /workspace/${writableDirectory}, and you also have full read/write access to the shared workspace-root /workspace/tmp (also mounted at /tmp).`
-                : `- This run uses a shared repository mounted read-only at /workspace${access.agentDirectory ? ` (starting in /workspace/${access.agentDirectory})` : ''}, with full read/write access to the shared workspace-root /workspace/tmp (also mounted at /tmp).`,
-        fullRepositoryWrite
-            ? '- Every sandbox command starts in the repository root.'
-            : writableDirectory
-                ? '- Every sandbox command starts inside your writable directory.'
-                : `- Every sandbox command starts in the read-only ${access.agentDirectory ? `/workspace/${access.agentDirectory} directory` : 'repository root'}. Use /workspace/tmp (or /tmp) for temporary scripts, shared verification harnesses, caches, or experimental files.`,
-        fullRepositoryWrite
-            ? '- /workspace is writable for this orchestrator session; preserve strategy branch boundaries.'
-            : '- /workspace itself is read-only except for your assigned writable directory (if any) and the shared /workspace/tmp (/tmp) directory.',
-        fullRepositoryWrite
-            ? '- You may create, modify, and delete repository files anywhere under /workspace.'
-            : writableDirectory
-                ? `- You may create, modify, and delete repository files under /workspace/${writableDirectory} and in the shared untracked /workspace/tmp (/tmp) directory.`
-                : '- You may create, modify, and delete files in the shared untracked /workspace/tmp (/tmp) directory, which is accessible to all agents for verification harnesses and scratch work.',
-        '- All direct-context files and additional filesystem uploads are mounted read-only at /workspace/user_uploaded.',
-        readableScope,
-        hiddenScope,
-        fullRepositoryWrite
-            ? '- Changes are shared repository state. Do not overwrite branch artifacts unless the orchestration decision explicitly requires it.'
-            : access.fullRepositoryRead
-                ? '- Repository files outside your writable directory and /workspace/tmp are mounted read-only. Treat them as shared evidence.'
-                : '- Directories other than the locations listed above are not mounted into your sandbox view. Treat absent directories as unavailable context, not as empty evidence.',
-        fullRepositoryWrite
-            ? '- Keep strategy-local artifacts in their Strategy-N directory whenever possible.'
-            : writableDirectory
-                ? '- If you need to modify a readable peer file, copy it into your own writable directory or /workspace/tmp first and edit the copy.'
-                : '- If you need to experiment with a readable file or build a shared verification loop, use /workspace/tmp (/tmp) and keep tracked repository directories unchanged.',
+        writableDirectory
+            ? `- This run uses a shared repository mounted at /workspace. Your writable working directory is /workspace/${writableDirectory}, and you also have full read/write access to the shared workspace-root /workspace/tmp (also mounted at /tmp).`
+            : `- This run uses a shared repository mounted read-only at /workspace${access.agentDirectory ? ` (starting in /workspace/${access.agentDirectory})` : ''}, with full read/write access to the shared workspace-root /workspace/tmp (also mounted at /tmp).`,
+        writableDirectory
+            ? '- Every sandbox command starts inside your writable directory.'
+            : `- Every sandbox command starts in the read-only ${access.agentDirectory ? `/workspace/${access.agentDirectory} directory` : 'repository root'}. Use /workspace/tmp (or /tmp) for temporary scripts, shared verification harnesses, caches, or experimental files.`,
+        '- /workspace itself is read-only except for your assigned writable directory (if any) and the shared /workspace/tmp (/tmp) directory.',
+        writableDirectory
+            ? `- L2 Mutable Workspace: You may create, modify, and delete working files under /workspace/${writableDirectory} (excluding its L3 read-only /workspace/${writableDirectory}/history/ directory and /workspace/${writableDirectory}/strategy.md) and in the shared untracked /workspace/tmp (/tmp) directory.`
+            : '- L2 Mutable Workspace: You may create, modify, and delete files in the shared untracked /workspace/tmp (/tmp) directory, which is accessible to all agents for verification harnesses and scratch work.',
+        '- L3 Immutable Kernel: All past histories (.md, .jsonl, .json in Strategy-N/history/, DOS_history/, strategies_history/, Pruned_Strategies/, and Modules/), strategy.md, /workspace/user_uploaded, and /workspace/.git are mounted read-only (0444 / ro-bind). Do not attempt to modify or delete L3 history files.',
+        '- You may read every directory and file in this repository. The complete repository is mounted read-only except for your explicitly assigned writable directory, if any.',
+        '- Repository files outside your writable L2 directory and /workspace/tmp are mounted read-only in L3. Treat them as shared evidence.',
+        writableDirectory
+            ? '- If you need to modify a readable peer or L3 file, copy it into your own writable L2 directory or /workspace/tmp first and edit the copy.'
+            : '- If you need to experiment with a readable file or build a shared verification loop, use /workspace/tmp (/tmp) and keep tracked repository directories unchanged.',
     ];
 }
 
@@ -765,7 +769,7 @@ function normalizeWorkspaceReferencePath(rawPath: string, access?: SandboxReposi
     if (!parts.length) return null;
 
     if (access?.agentDirectory && !fromWorkspaceRoot && !fromRelativeRoot) {
-        const visible = new Set([access.agentDirectory, ...(access.readableDirectories || []), 'tmp', 'direct_context', 'user_uploaded']);
+        const visible = new Set([access.agentDirectory, 'tmp', 'user_uploaded']);
         if (!visible.has(parts[0]) && (!access.fullRepositoryRead || parts.length === 1)) {
             parts.unshift(access.agentDirectory);
         }

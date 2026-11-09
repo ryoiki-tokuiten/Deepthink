@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, constants as fsConstants, createReadStream } from 'node:fs';
+import { accessSync, constants as fsConstants, createReadStream, readFileSync } from 'node:fs';
 import { access, chmod, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import os from 'node:os';
@@ -70,12 +70,7 @@ interface SandboxRepositoryAccessRequest {
     repositoryId: string;
     agentDirectory?: string;
     agentDirectoryReadOnly?: boolean;
-    readableDirectories?: string[];
-    liveReadableDirectories?: string[];
-    hiddenDirectories?: string[];
     fullRepositoryRead?: boolean;
-    fullRepositoryWrite?: boolean;
-    revision?: string;
 }
 
 interface SandboxSessionMetadata {
@@ -120,7 +115,10 @@ interface SandboxExecutionResult {
 
 type SandboxRuntime = 'docker' | 'bwrap';
 
+export type SandboxProtectionLayer = 'L0' | 'L1' | 'L2' | 'L3';
+
 interface SandboxNestedMount {
+    layer?: SandboxProtectionLayer;
     source: string;
     target: string;
     readonly: boolean;
@@ -191,7 +189,6 @@ function parsePositiveIntEnv(value: string | undefined, fallback: number): numbe
 
 const VFS_ROOT = path.join(os.tmpdir(), 'iterative-studio-sandbox-vfs');
 const REPOSITORY_ROOT = path.join(os.tmpdir(), 'iterative-studio-sandbox-repos');
-const REPOSITORY_VIEW_ROOT = path.join(os.tmpdir(), 'iterative-studio-sandbox-views');
 const ARTIFACT_ROOT = path.join(os.tmpdir(), 'iterative-studio-sandbox-artifacts');
 const RESULTS_ROOT = process.env.ITERATIVE_STUDIO_RESULTS_ROOT || path.join(process.cwd(), 'Results');
 const DEEPTHINK_RESULTS_METADATA_ROOT = path.join(os.tmpdir(), 'iterative-studio-deepthink-results');
@@ -400,56 +397,214 @@ async function ensureDeepthinkResultsRepository(repositoryId: string): Promise<s
     return resultPath;
 }
 
-function getRepositoryViewPath(sessionId: string): string {
-    if (!isSafeSessionId(sessionId)) throw new Error('Invalid sandbox session id.');
-    return path.join(REPOSITORY_VIEW_ROOT, sessionId);
-}
-
 function sanitizeRepositoryAccess(accessRequest?: SandboxRepositoryAccessRequest): SandboxRepositoryAccessRequest | undefined {
     if (!accessRequest) return undefined;
     if (!isSafeRepositoryId(accessRequest.repositoryId)) throw new Error('Invalid sandbox repository id.');
     if (accessRequest.agentDirectory !== undefined && !isSafeRepositoryDirectory(accessRequest.agentDirectory)) {
         throw new Error('Invalid sandbox agent directory.');
     }
-    if (accessRequest.revision !== undefined && !/^[0-9a-f]{7,64}$/i.test(accessRequest.revision)) {
-        throw new Error('Invalid sandbox repository revision.');
-    }
-
-    const validateDirs = (dirs: string[] | undefined, label: string, extraCheck?: (d: string) => boolean) =>
-        Array.from(new Set(dirs || [])).map(d => {
-            if (!isSafeRepositoryDirectory(d) || (extraCheck && !extraCheck(d))) {
-                throw new Error(`Invalid ${label} sandbox directory: ${d}`);
-            }
-            return d;
-        });
-
-    const readableDirectories = validateDirs(
-        (accessRequest.readableDirectories || []).filter(d => d !== accessRequest.agentDirectory),
-        'readable'
-    );
-    const liveReadableDirectories = validateDirs(
-        accessRequest.liveReadableDirectories,
-        'live-readable',
-        d => readableDirectories.includes(d)
-    );
-    const hiddenDirectories = validateDirs(accessRequest.hiddenDirectories, 'hidden');
 
     return {
         repositoryId: accessRequest.repositoryId,
         ...(accessRequest.agentDirectory ? { agentDirectory: accessRequest.agentDirectory } : {}),
         ...(accessRequest.agentDirectoryReadOnly ? { agentDirectoryReadOnly: true } : {}),
-        readableDirectories,
-        liveReadableDirectories,
-        hiddenDirectories,
-        fullRepositoryRead: accessRequest.fullRepositoryRead === true,
-        fullRepositoryWrite: accessRequest.fullRepositoryWrite === true,
-        ...(accessRequest.revision ? { revision: accessRequest.revision } : {}),
+        fullRepositoryRead: accessRequest.fullRepositoryRead !== false,
     };
+}
+
+// ============================================================================
+// L0–L3 OS-Inspired Sandbox & Harness Protection Hierarchy
+// - L0: LLM Model Weights (Immutable Substrate)
+// - L1: Direct Prompt Context (Assembled per turn by Harness)
+// - L2: Mutable Agent Workspace (/workspace/Strategy-N, /workspace/Modules/.../Module-M, /workspace/tmp, shared_workspace.md)
+// - L3: Harness Kernel & Immutable Ledger (.git, user_uploaded, Strategy-N/history, Strategy-N/strategy.md,
+//       DOS_history, strategies_history, Pruned_Strategies, Modules/**/*.md|*.jsonl|*.json, root .env Secret Store)
+// ============================================================================
+
+const L3_IMMUTABLE_FILE_MODE = 0o444;
+const L3_UNLOCKED_FILE_MODE = 0o644;
+
+const L3_RESERVED_ENV_KEYS = new Set([
+    'PATH', 'HOME', 'TMPDIR', 'USER', 'SHELL', 'PWD',
+    'NODE_PATH', 'ELAN_HOME', 'CARGO_HOME', 'CARGO_TARGET_DIR',
+    'PYTHONUSERBASE', 'PIP_CACHE_DIR', 'PYTHONUNBUFFERED', 'PYTHONDONTWRITEBYTECODE',
+    'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME',
+    'MPLBACKEND', 'MPLCONFIGDIR',
+]);
+
+function getL3EnvFilePath(): string {
+    return path.join(process.cwd(), '.env');
+}
+
+function parseL3DotEnvText(raw: string): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const rawLine of raw.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#')) continue;
+        const match = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+        if (!match) continue;
+        const key = match[1];
+        let val = match[2].trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1);
+        }
+        map.set(key, val);
+    }
+    return map;
+}
+
+function formatL3DotEnvValue(value: string): string {
+    if (/[\s#"']/.test(value)) {
+        return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    }
+    return value;
+}
+
+function maskL3SecretValue(value: string): string {
+    if (!value) return 'Empty';
+    return value.length > 4 ? `••••${value.slice(-4)}` : '••••';
+}
+
+function readL3EnvSecretStoreMapSync(): Map<string, string> {
+    try {
+        const raw = readFileSync(getL3EnvFilePath(), 'utf8');
+        return parseL3DotEnvText(raw);
+    } catch {
+        return new Map();
+    }
+}
+
+export async function listL3EnvSecrets(): Promise<Array<{ key: string; maskedValue: string }>> {
+    const envPath = getL3EnvFilePath();
+    try {
+        const raw = await readFile(envPath, 'utf8');
+        const map = parseL3DotEnvText(raw);
+        return Array.from(map.entries()).map(([key, value]) => ({
+            key,
+            maskedValue: maskL3SecretValue(value),
+        }));
+    } catch {
+        return [];
+    }
+}
+
+export async function setL3EnvSecret(rawKey: string, rawValue: string): Promise<Array<{ key: string; maskedValue: string }>> {
+    const key = rawKey.trim();
+    const value = rawValue.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        throw new Error('Environment key must match ^[A-Za-z_][A-Za-z0-9_]*$ (e.g. HF_TOKEN, WANDB_API_KEY).');
+    }
+    if (L3_RESERVED_ENV_KEYS.has(key)) {
+        throw new Error(`Environment key "${key}" is reserved by the sandbox runtime.`);
+    }
+    if (!value) {
+        throw new Error('Secret value cannot be empty.');
+    }
+
+    const envPath = getL3EnvFilePath();
+    await mkdir(path.dirname(envPath), { recursive: true });
+    const existingRaw = await readFile(envPath, 'utf8').catch(() => '');
+    const lines = existingRaw ? existingRaw.split(/\r?\n/) : [];
+    const formattedLine = `${key}=${formatL3DotEnvValue(value)}`;
+    const keyRegex = new RegExp(`^(?:export\\s+)?${key}\\s*=`);
+    let replaced = false;
+    const nextLines = lines.map(line => {
+        if (keyRegex.test(line.trim())) {
+            replaced = true;
+            return formattedLine;
+        }
+        return line;
+    });
+    if (!replaced) {
+        if (nextLines.length > 0 && nextLines[nextLines.length - 1] === '') {
+            nextLines.splice(nextLines.length - 1, 0, formattedLine);
+        } else {
+            nextLines.push(formattedLine);
+        }
+    }
+    const output = `${nextLines.join('\n').replace(/\n+$/, '')}\n`;
+    await writeFile(envPath, output, 'utf8');
+    await chmod(envPath, 0o600).catch(() => undefined);
+    process.env[key] = value;
+    sandboxEnvironmentPromise = null;
+    return listL3EnvSecrets();
+}
+
+export async function removeL3EnvSecret(rawKey: string): Promise<Array<{ key: string; maskedValue: string }>> {
+    const key = rawKey.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        throw new Error('Invalid environment key name.');
+    }
+    const envPath = getL3EnvFilePath();
+    const existingRaw = await readFile(envPath, 'utf8').catch(() => '');
+    if (existingRaw) {
+        const keyRegex = new RegExp(`^(?:export\\s+)?${key}\\s*=`);
+        const nextLines = existingRaw.split(/\r?\n/).filter(line => !keyRegex.test(line.trim()));
+        const trimmed = nextLines.join('\n').replace(/\n+$/, '');
+        await writeFile(envPath, trimmed ? `${trimmed}\n` : '', 'utf8');
+    }
+    delete process.env[key];
+    sandboxEnvironmentPromise = null;
+    return listL3EnvSecrets();
+}
+
+function maskL3SecretsInOutput(text: string, secrets: Map<string, string>): string {
+    if (!text || secrets.size === 0) return text;
+    let masked = text;
+    for (const [key, value] of secrets.entries()) {
+        if (!value || value.length < 4) continue;
+        if (masked.includes(value)) {
+            masked = masked.split(value).join(`[REDACTED_L3_SECRET:${key}]`);
+        }
+    }
+    return masked;
+}
+
+async function writeL3ImmutableFile(destination: string, content: string | Buffer): Promise<void> {
+    await mkdir(path.dirname(destination), { recursive: true });
+    await chmod(destination, L3_UNLOCKED_FILE_MODE).catch(() => undefined);
+    if (typeof content === 'string') {
+        await writeFile(destination, content, 'utf8');
+    } else {
+        await writeFile(destination, content);
+    }
+    await chmod(destination, L3_IMMUTABLE_FILE_MODE).catch(() => undefined);
+}
+
+async function unlockL3TreeForRestore(dirPath: string): Promise<void> {
+    if (!(await fileExists(dirPath))) return;
+    const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+        const childPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+            await chmod(childPath, 0o755).catch(() => undefined);
+            await unlockL3TreeForRestore(childPath);
+        } else if (entry.isFile()) {
+            await chmod(childPath, L3_UNLOCKED_FILE_MODE).catch(() => undefined);
+        }
+    }
+}
+
+async function restampL3StrategyArtifacts(strategyDirPath: string): Promise<void> {
+    if (!(await fileExists(strategyDirPath))) return;
+    const strategyMd = path.join(strategyDirPath, 'strategy.md');
+    if (await fileExists(strategyMd)) {
+        await chmod(strategyMd, L3_IMMUTABLE_FILE_MODE).catch(() => undefined);
+    }
+    const historyDir = path.join(strategyDirPath, 'history');
+    if (await fileExists(historyDir)) {
+        const entries = await readdir(historyDir, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+            if (entry.isFile()) {
+                await chmod(path.join(historyDir, entry.name), L3_IMMUTABLE_FILE_MODE).catch(() => undefined);
+            }
+        }
+    }
 }
 
 async function createActiveStrategyDirectory(repoRoot: string, strategyDirectory: string): Promise<void> {
     const activeDirectory = safeJoin(repoRoot, strategyDirectory);
-    await mkdir(path.join(activeDirectory, 'Critique'), { recursive: true });
+    await mkdir(path.join(activeDirectory, 'history'), { recursive: true });
 }
 
 async function archiveStrategyRepositoryDirectory(repositoryId: string, strategyDirectory: string): Promise<{
@@ -470,7 +625,9 @@ async function archiveStrategyRepositoryDirectory(repositoryId: string, strategy
         const existing = await readdir(prunedRoot, { withFileTypes: true }).catch(() => []);
         const count = existing.filter(e => e.isDirectory() && new RegExp(`^${strategyDirectory}_pruned_\\d+`).test(e.name)).length;
         const archiveName = `${strategyDirectory}_pruned_${String(count + 1).padStart(2, '0')}`;
-        await rename(activeDirectory, safeJoin(prunedRoot, archiveName));
+        const archivedTarget = safeJoin(prunedRoot, archiveName);
+        await rename(activeDirectory, archivedTarget);
+        await restampL3StrategyArtifacts(archivedTarget);
         archivedDirectory = `Pruned_Strategies/${archiveName}`;
     }
 
@@ -973,6 +1130,11 @@ function buildAgentEnvironmentSummary(profile: Omit<SandboxEnvironmentProfile, '
         lines.push(`- Some optional package preinstalls failed: ${failed.join(', ')}. Install alternatives in /workspace if needed.`);
     }
 
+    const secretKeys = Array.from(readL3EnvSecretStoreMapSync().keys()).filter(k => !L3_RESERVED_ENV_KEYS.has(k));
+    if (secretKeys.length > 0) {
+        lines.push(`- L3 Secret Store (.env): ${secretKeys.length} environment key(s) configured (${secretKeys.map(k => `$${k}`).join(', ')}). Available in sandbox commands; raw secret values are automatically redacted from command output.`);
+    }
+
     return lines.join('\n');
 }
 
@@ -1062,76 +1224,10 @@ async function seedWorkspaceFiles(workspace: string, files?: SeedFile[]) {
         usedNames.add(keyFor(filename));
 
         const destination = safeJoin(workspace, requestedDirectory === '.' ? filename : `${requestedDirectory}/${filename}`);
-        await mkdir(path.dirname(destination), { recursive: true });
         if (!(await fileExists(destination))) {
-            await writeFile(destination, Buffer.from(file.base64, 'base64'));
+            await writeL3ImmutableFile(destination, Buffer.from(file.base64, 'base64'));
         }
     }
-}
-
-async function copyRepositoryRootFiles(repoRoot: string, viewRoot: string): Promise<void> {
-    await mkdir(viewRoot, { recursive: true });
-    const entries = await readdir(repoRoot, { withFileTypes: true }).catch(() => []);
-    await Promise.all(entries.map(async entry => {
-        if (!entry.isFile()) return;
-        const destination = path.join(viewRoot, entry.name);
-        await copyFile(path.join(repoRoot, entry.name), destination);
-        await chmod(destination, 0o400).catch(() => undefined);
-    }));
-}
-
-async function copyReadOnlyDirectory(source: string, destination: string, excludedRelativePaths: string[] = [], relativePath = ''): Promise<void> {
-    const entries = await readdir(source, { withFileTypes: true }).catch(() => []);
-    await mkdir(destination, { recursive: true });
-    for (const entry of entries) {
-        if (entry.name === '.git') continue;
-        const childRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-        if (excludedRelativePaths.some(ex => childRelativePath === ex || childRelativePath.startsWith(`${ex}/`))) continue;
-        const from = path.join(source, entry.name);
-        const to = path.join(destination, entry.name);
-        if (entry.isDirectory()) {
-            await copyReadOnlyDirectory(from, to, excludedRelativePaths, childRelativePath);
-        } else if (entry.isFile()) {
-            await copyFile(from, to);
-            await chmod(to, 0o400).catch(() => undefined);
-        }
-    }
-}
-
-async function ensureRepositoryRevisionView(repoRoot: string, revision: string, privateScratchRoot: string): Promise<string> {
-    const revisionRoot = path.join(privateScratchRoot, 'repository-revision');
-    const markerPath = path.join(privateScratchRoot, '.repository-revision');
-    if ((await readFile(markerPath, 'utf8').catch(() => '')).trim() === revision && await fileExists(revisionRoot)) {
-        return revisionRoot;
-    }
-    await rm(revisionRoot, { recursive: true, force: true });
-    await mkdir(revisionRoot, { recursive: true });
-    const tree = await runGitCommandBuffer(repoRoot, ['ls-tree', '-r', '-z', '--name-only', revision]);
-    for (const relativePath of tree.toString('utf8').split('\0').filter(Boolean)) {
-        if (path.isAbsolute(relativePath) || relativePath.split('/').includes('..')) {
-            throw new Error(`Unsafe path in sandbox repository revision: ${relativePath}`);
-        }
-        const content = await runGitCommandBuffer(repoRoot, ['show', `${revision}:${relativePath}`]);
-        const destination = safeJoin(revisionRoot, relativePath);
-        await mkdir(path.dirname(destination), { recursive: true });
-        await writeFile(destination, content);
-        await chmod(destination, 0o400).catch(() => undefined);
-    }
-    await writeFile(markerPath, revision);
-    return revisionRoot;
-}
-
-function buildLegacyWorkspace(sessionId: string, workspace: string): SandboxCommandWorkspace {
-    return {
-        sessionId,
-        rootHostPath: workspace,
-        rootReadonly: false,
-        tmpDir: path.join(workspace, '.tmp'),
-        commandCwd: '/workspace',
-        nestedMounts: [],
-        visibleRootPath: workspace,
-        writablePath: workspace,
-    };
 }
 
 async function prepareSandboxWorkspace(
@@ -1144,19 +1240,35 @@ async function prepareSandboxWorkspace(
         const workspace = getWorkspacePath(sessionId);
         await mkdir(workspace, { recursive: true });
         await seedWorkspaceFiles(workspace, files);
-        return buildLegacyWorkspace(sessionId, workspace);
+        const nestedMounts: SandboxNestedMount[] = [];
+        const sourceGit = path.join(workspace, '.git');
+        const sourceUploads = path.join(workspace, 'user_uploaded');
+        if (await fileExists(sourceGit)) {
+            nestedMounts.push({ layer: 'L3', source: sourceGit, target: '/workspace/.git', readonly: true });
+        }
+        if (await fileExists(sourceUploads)) {
+            nestedMounts.push({ layer: 'L3', source: sourceUploads, target: '/workspace/user_uploaded', readonly: true });
+        }
+        return {
+            sessionId,
+            rootHostPath: workspace,
+            rootReadonly: false,
+            tmpDir: path.join(workspace, '.tmp'),
+            commandCwd: '/workspace',
+            nestedMounts,
+            visibleRootPath: workspace,
+            writablePath: workspace,
+        };
     }
 
     const repoRoot = await resolveRepositoryPath(repositoryAccess.repositoryId);
     const sharedTmpDir = path.join(repoRoot, 'tmp');
     const ownDirectory = repositoryAccess.agentDirectory ? safeJoin(repoRoot, repositoryAccess.agentDirectory) : undefined;
-    const viewRoot = getRepositoryViewPath(sessionId);
-    const privateScratchRoot = getWorkspacePath(sessionId);
 
     await mkdir(repoRoot, { recursive: true });
     await mkdir(sharedTmpDir, { recursive: true });
     if (ownDirectory) {
-        const strategyMatch = repositoryAccess.agentDirectory?.match(/^(Strategy-\d+)(?:\/(Critique))?$/);
+        const strategyMatch = repositoryAccess.agentDirectory?.match(/^(Strategy-\d+)$/);
         if (strategyMatch) {
             await createActiveStrategyDirectory(repoRoot, strategyMatch[1]);
         } else {
@@ -1164,92 +1276,69 @@ async function prepareSandboxWorkspace(
         }
         await mkdir(path.join(ownDirectory, '.tmp'), { recursive: true });
     }
-    await mkdir(path.join(privateScratchRoot, '.tmp'), { recursive: true });
     await seedWorkspaceFiles(repoRoot, files);
 
     if (!(await fileExists(path.join(repoRoot, '.git')))) {
         await initAndCommitWorkspace(repoRoot, 'Initial shared workspace seed');
     }
-    const readRoot = repositoryAccess.revision
-        ? await ensureRepositoryRevisionView(repoRoot, repositoryAccess.revision, privateScratchRoot)
-        : repoRoot;
-    await mkdir(path.join(readRoot, 'tmp'), { recursive: true });
 
-    const sourceDirectContext = safeJoin(readRoot, 'direct_context');
-    const sourceUploads = safeJoin(readRoot, 'user_uploaded');
-    const readableDirectories = Array.from(new Set(repositoryAccess.readableDirectories || []));
-    const liveReadableDirectories = new Set(repositoryAccess.liveReadableDirectories || []);
-    const readableExistingDirectories = (await Promise.all(readableDirectories.map(async directory => ({
-        directory,
-        exists: await fileExists(safeJoin(liveReadableDirectories.has(directory) ? repoRoot : readRoot, directory)),
-    })))).filter(i => i.exists).map(i => i.directory);
-    const hiddenDirectories = repositoryAccess.hiddenDirectories || [];
-    const fullRepositoryRead = repositoryAccess.fullRepositoryRead === true || repositoryAccess.fullRepositoryWrite === true;
-    const fullRepositoryWrite = repositoryAccess.fullRepositoryWrite === true;
-    const usesFilteredFullRepository = fullRepositoryRead && hiddenDirectories.length > 0;
-    const hasActiveExecution = (activeSessionExecutions.get(sessionId) ?? 0) > 0;
+    const sourceUploads = safeJoin(repoRoot, 'user_uploaded');
+    const sourceGit = safeJoin(repoRoot, '.git');
 
-    if (!fullRepositoryRead || usesFilteredFullRepository) {
-        if (!hasActiveExecution) await rm(viewRoot, { recursive: true, force: true });
-        await mkdir(viewRoot, { recursive: true });
-        if (usesFilteredFullRepository) {
-            await copyReadOnlyDirectory(readRoot, viewRoot, [...hiddenDirectories, 'tmp', '.tmp']);
-        } else {
-            await copyRepositoryRootFiles(readRoot, viewRoot);
-            if (await fileExists(sourceDirectContext)) await copyReadOnlyDirectory(sourceDirectContext, path.join(viewRoot, 'direct_context'));
-            if (await fileExists(sourceUploads)) await copyReadOnlyDirectory(sourceUploads, path.join(viewRoot, 'user_uploaded'));
-            for (const directory of [...readableExistingDirectories, ...(repositoryAccess.agentDirectory ? [repositoryAccess.agentDirectory] : []), ...hiddenDirectories]) {
-                await mkdir(path.join(viewRoot, directory), { recursive: true });
-            }
+    // L3 Read-Only Overlays on top of L2 writable Strategy-N directory
+    const l3StrategyOverlays: SandboxNestedMount[] = [];
+    if (
+        ownDirectory &&
+        repositoryAccess.agentDirectory &&
+        /^Strategy-\d+$/.test(repositoryAccess.agentDirectory) &&
+        repositoryAccess.agentDirectoryReadOnly !== true
+    ) {
+        const strategyHistoryDir = path.join(ownDirectory, 'history');
+        await mkdir(strategyHistoryDir, { recursive: true });
+        l3StrategyOverlays.push({
+            layer: 'L3',
+            source: strategyHistoryDir,
+            target: `/workspace/${repositoryAccess.agentDirectory}/history`,
+            readonly: true,
+        });
+        const strategyMdPath = path.join(ownDirectory, 'strategy.md');
+        if (await fileExists(strategyMdPath)) {
+            l3StrategyOverlays.push({
+                layer: 'L3',
+                source: strategyMdPath,
+                target: `/workspace/${repositoryAccess.agentDirectory}/strategy.md`,
+                readonly: true,
+            });
         }
-        await mkdir(path.join(viewRoot, 'tmp'), { recursive: true });
     }
 
-    const readonlyMountRoot = path.join(privateScratchRoot, 'readonly-mounts');
-    if (!hasActiveExecution) await rm(readonlyMountRoot, { recursive: true, force: true });
-    const readableMounts = await Promise.all(readableExistingDirectories.map(async directory => {
-        const excluded = hiddenDirectories.filter(h => h.startsWith(`${directory}/`)).map(h => h.slice(directory.length + 1));
-        const sourceRoot = liveReadableDirectories.has(directory) ? repoRoot : readRoot;
-        if (!excluded.length) return { directory, source: safeJoin(sourceRoot, directory) };
-        const filteredSource = safeJoin(readonlyMountRoot, directory);
-        await copyReadOnlyDirectory(safeJoin(sourceRoot, directory), filteredSource, excluded);
-        return { directory, source: filteredSource };
-    }));
-    const isDescendant = (d: string) => !!repositoryAccess.agentDirectory && d.startsWith(`${repositoryAccess.agentDirectory}/`);
-    const beforeWritableMounts = readableMounts.filter(m => !isDescendant(m.directory));
-    const readonlyChildMounts = readableMounts.filter(m => isDescendant(m.directory));
-    const hiddenChildMounts = await Promise.all(hiddenDirectories.filter(isDescendant).map(async directory => {
-        const source = safeJoin(readonlyMountRoot, `hidden/${directory}`);
-        await mkdir(source, { recursive: true });
-        return { directory, source };
-    }));
-
     await writeSessionMetadata(sessionId, { schema: 'iterative_studio_sandbox_session.v1', repositoryAccess });
-    const rootHostPath = fullRepositoryRead && !usesFilteredFullRepository ? readRoot : viewRoot;
-    const needsWorkspaceTmpMount = !fullRepositoryWrite || rootHostPath !== repoRoot;
 
     return {
         sessionId,
-        rootHostPath,
+        rootHostPath: repoRoot,
         repositoryRootPath: repoRoot,
-        rootReadonly: !fullRepositoryWrite,
+        rootReadonly: true,
         tmpDir: sharedTmpDir,
         commandCwd: repositoryAccess.agentDirectory ? `/workspace/${repositoryAccess.agentDirectory}` : '/workspace',
         nestedMounts: [
-            ...(needsWorkspaceTmpMount ? [{ source: sharedTmpDir, target: '/workspace/tmp', readonly: false }] : []),
-            ...((!fullRepositoryRead && await fileExists(sourceDirectContext)) ? [{ source: sourceDirectContext, target: '/workspace/direct_context', readonly: true }] : []),
-            ...((!fullRepositoryRead && await fileExists(sourceUploads)) ? [{ source: sourceUploads, target: '/workspace/user_uploaded', readonly: true }] : []),
-            ...beforeWritableMounts.map(m => ({ source: m.source, target: `/workspace/${m.directory}`, readonly: true })),
+            // L2: Shared scratch & verification harness directory
+            { layer: 'L2', source: sharedTmpDir, target: '/workspace/tmp', readonly: false },
+            // L3: Immutable Git repository & user_uploaded directory
+            ...(await fileExists(sourceGit) ? [{ layer: 'L3' as const, source: sourceGit, target: '/workspace/.git', readonly: true }] : []),
+            ...(await fileExists(sourceUploads) ? [{ layer: 'L3' as const, source: sourceUploads, target: '/workspace/user_uploaded', readonly: true }] : []),
+            // L2 (or L3 when agentDirectoryReadOnly === true): Agent's own working directory
             ...(repositoryAccess.agentDirectory ? [{
+                layer: (repositoryAccess.agentDirectoryReadOnly === true ? 'L3' : 'L2') as SandboxProtectionLayer,
                 source: safeJoin(repoRoot, repositoryAccess.agentDirectory),
                 target: `/workspace/${repositoryAccess.agentDirectory}`,
                 readonly: repositoryAccess.agentDirectoryReadOnly === true,
             }] : []),
-            ...readonlyChildMounts.map(m => ({ source: m.source, target: `/workspace/${m.directory}`, readonly: true })),
-            ...hiddenChildMounts.map(m => ({ source: m.source, target: `/workspace/${m.directory}`, readonly: true })),
+            // L3: Read-only overlays over L2 (Strategy-N/history and Strategy-N/strategy.md)
+            ...l3StrategyOverlays,
         ],
-        visibleRootPath: usesFilteredFullRepository ? viewRoot : readRoot,
-        writablePath: fullRepositoryWrite ? repoRoot : ((!repositoryAccess.agentDirectoryReadOnly && ownDirectory) || sharedTmpDir),
+        visibleRootPath: repoRoot,
+        writablePath: (!repositoryAccess.agentDirectoryReadOnly && ownDirectory) || sharedTmpDir,
         repositoryAccess,
     };
 }
@@ -1263,25 +1352,33 @@ async function getWorkspaceContextForSession(sessionId: string): Promise<Sandbox
     const repositoryAccess = sanitizeRepositoryAccess(metadata?.repositoryAccess);
     if (!repositoryAccess) {
         const workspace = getWorkspacePath(sessionId);
-        return (await fileExists(workspace)) ? buildLegacyWorkspace(sessionId, workspace) : null;
+        if (!(await fileExists(workspace))) return null;
+        return {
+            sessionId,
+            rootHostPath: workspace,
+            rootReadonly: false,
+            tmpDir: path.join(workspace, '.tmp'),
+            commandCwd: '/workspace',
+            nestedMounts: [],
+            visibleRootPath: workspace,
+            writablePath: workspace,
+        };
     }
 
     const repoRoot = await resolveRepositoryPath(repositoryAccess.repositoryId);
     if (!(await fileExists(repoRoot))) return null;
     const sharedTmpDir = path.join(repoRoot, 'tmp');
-    const readRoot = repositoryAccess.revision ? path.join(getWorkspacePath(sessionId), 'repository-revision') : repoRoot;
     const ownDirectory = repositoryAccess.agentDirectory ? safeJoin(repoRoot, repositoryAccess.agentDirectory) : undefined;
-    const hasHidden = !!(repositoryAccess.hiddenDirectories || []).length;
     return {
         sessionId,
-        rootHostPath: repositoryAccess.fullRepositoryRead && !hasHidden ? readRoot : getRepositoryViewPath(sessionId),
+        rootHostPath: repoRoot,
         repositoryRootPath: repoRoot,
-        rootReadonly: repositoryAccess.fullRepositoryWrite !== true,
+        rootReadonly: true,
         tmpDir: sharedTmpDir,
         commandCwd: repositoryAccess.agentDirectory ? `/workspace/${repositoryAccess.agentDirectory}` : '/workspace',
         nestedMounts: [],
-        visibleRootPath: repositoryAccess.fullRepositoryRead && hasHidden ? getRepositoryViewPath(sessionId) : readRoot,
-        writablePath: repositoryAccess.fullRepositoryWrite ? repoRoot : ((!repositoryAccess.agentDirectoryReadOnly && ownDirectory) || sharedTmpDir),
+        visibleRootPath: repoRoot,
+        writablePath: (!repositoryAccess.agentDirectoryReadOnly && ownDirectory) || sharedTmpDir,
         repositoryAccess,
     };
 }
@@ -1324,66 +1421,17 @@ async function listImageFiles(workspace: string, sessionId: string, includeBase6
     return images.sort((a, b) => a.filename.localeCompare(b.filename));
 }
 
-function visibleRepositoryDirectories(context: SandboxCommandWorkspace): string[] {
-    if (!context.repositoryAccess || context.repositoryAccess.fullRepositoryRead) return [];
-    return Array.from(new Set([
-        ...(context.repositoryAccess.agentDirectory ? [context.repositoryAccess.agentDirectory] : []),
-        ...(context.repositoryAccess.readableDirectories || []),
-        'tmp', 'direct_context', 'user_uploaded',
-    ]));
-}
-
-function isVisibleRepositoryPath(relativePath: string, visibleDirectories: string[]): boolean {
-    return visibleDirectories.some(d => relativePath === d || relativePath.startsWith(`${d}/`));
-}
-
-function isHiddenRepositoryPath(context: SandboxCommandWorkspace, relativePath: string): boolean {
-    return (context.repositoryAccess?.hiddenDirectories || []).some(d => relativePath === d || relativePath.startsWith(`${d}/`));
-}
-
 function resolveVisiblePath(context: SandboxCommandWorkspace, relativePath: string): string {
     if (!context.repositoryAccess) return safeJoin(context.visibleRootPath, relativePath);
     const normalized = relativePath.replace(/\\/g, '/');
     if (!normalized || normalized.includes('\0') || normalized.startsWith('/') || normalized.split('/').includes('..')) {
         throw new Error('Invalid virtual filesystem path.');
     }
-    if (isHiddenRepositoryPath(context, normalized)) throw new Error('Path is not visible in this sandbox session.');
-    if ((normalized === 'tmp' || normalized.startsWith('tmp/')) && context.repositoryRootPath) {
-        return safeJoin(context.repositoryRootPath, normalized);
-    }
-    if (context.repositoryAccess.fullRepositoryRead) return safeJoin(context.visibleRootPath, normalized);
-    if (normalized.includes('/') && !isVisibleRepositoryPath(normalized, visibleRepositoryDirectories(context))) {
-        throw new Error('Path is not visible in this sandbox session.');
-    }
-    const liveDirectories = ['tmp', context.repositoryAccess.agentDirectory, ...(context.repositoryAccess.liveReadableDirectories || [])].filter((d): d is string => !!d);
-    const resolvesFromLive = context.repositoryAccess.fullRepositoryWrite || liveDirectories.some(d => normalized === d || normalized.startsWith(`${d}/`));
-    return safeJoin(resolvesFromLive && context.repositoryRootPath ? context.repositoryRootPath : context.visibleRootPath, normalized);
-}
-
-async function listRepositoryRootFiles(repoRoot: string): Promise<Array<{ path: string; size: number; mtime: number }>> {
-    const entries = await readdir(repoRoot, { withFileTypes: true }).catch(() => []);
-    const files: Array<{ path: string; size: number; mtime: number }> = [];
-    for (const entry of entries) {
-        if (!entry.isFile() || EXCLUDE_FILES.has(entry.name)) continue;
-        const fileStat = await stat(path.join(repoRoot, entry.name));
-        files.push({ path: entry.name, size: fileStat.size, mtime: fileStat.mtimeMs });
-    }
-    return files;
+    return safeJoin(context.visibleRootPath, normalized);
 }
 
 async function listVisibleFiles(context: SandboxCommandWorkspace): Promise<Array<{ path: string; size: number; mtime: number }>> {
-    if (!context.repositoryAccess || context.repositoryAccess.fullRepositoryRead) {
-        return walkDir(context.visibleRootPath, context.visibleRootPath);
-    }
-    const rootFiles = await listRepositoryRootFiles(context.visibleRootPath);
-    const directoryFiles = await Promise.all(visibleRepositoryDirectories(context).map(async directory => {
-        const hostDirectory = safeJoin(context.visibleRootPath, directory);
-        if (!(await fileExists(hostDirectory))) return [];
-        return walkDir(hostDirectory, context.visibleRootPath, rel => !isHiddenRepositoryPath(context, rel));
-    }));
-    const byPath = new Map<string, { path: string; size: number; mtime: number }>();
-    [...rootFiles, ...directoryFiles.flat()].forEach(f => byPath.set(f.path, f));
-    return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+    return walkDir(context.visibleRootPath, context.visibleRootPath);
 }
 
 async function listVisibleImageFiles(context: SandboxCommandWorkspace, includeBase64: boolean): Promise<VisibleImage[]> {
@@ -1531,7 +1579,7 @@ const dockerMount = (source: string, target: string, readonly = false) =>
     `type=bind,source=${source},target=${target}${readonly ? ',readonly' : ''}`;
 
 function getSandboxEnvEntries(workspaceHome: string, hostRustSysroot: string | null): Array<[string, string]> {
-    return [
+    const baseEntries: Array<[string, string]> = [
         ['HOME', workspaceHome],
         ['TMPDIR', '/tmp'],
         ['XDG_CACHE_HOME', `${workspaceHome}/.cache`],
@@ -1549,6 +1597,13 @@ function getSandboxEnvEntries(workspaceHome: string, hostRustSysroot: string | n
         ['CARGO_TARGET_DIR', `${workspaceHome}/target`],
         ['PATH', getSandboxPath(hostRustSysroot, workspaceHome)],
     ];
+    const l3Secrets = readL3EnvSecretStoreMapSync();
+    for (const [key, value] of l3Secrets.entries()) {
+        if (!L3_RESERVED_ENV_KEYS.has(key) && value) {
+            baseEntries.push([key, value]);
+        }
+    }
+    return baseEntries;
 }
 
 function buildShellViewCommand(viewDir: string, command: string): string {
@@ -1669,8 +1724,11 @@ async function runSandboxCommand(
         child.on('error', error => {
             spawnFailed = true;
             clearTimeout(timer);
+            const l3Secrets = readL3EnvSecretStoreMapSync();
             resolve({
-                ok: false, exitCode: 127, stdout, stderr,
+                ok: false, exitCode: 127,
+                stdout: maskL3SecretsInOutput(stdout, l3Secrets),
+                stderr: maskL3SecretsInOutput(stderr, l3Secrets),
                 error: `Failed to start sandbox runtime '${runtime}' (${invocation.executable}): ${error.message}`,
                 durationMs: Date.now() - startedAt, readOnlyCommand,
             });
@@ -1681,9 +1739,12 @@ async function runSandboxCommand(
             const truncSuffix = ` tokens; redirect command output to an explicit workspace file when the full log matters]`;
             if (stdoutTruncated) stdout += `\n[stdout truncated after ${MAX_TOOL_RESULT_OUTPUT_TOKENS}${truncSuffix}`;
             if (stderrTruncated) stderr += `\n[stderr truncated after ${MAX_TOOL_RESULT_OUTPUT_TOKENS}${truncSuffix}`;
+            const l3Secrets = readL3EnvSecretStoreMapSync();
             const exitCode = timedOut ? 124 : (code ?? 1);
             resolve({
-                ok: exitCode === 0, exitCode, stdout, stderr,
+                ok: exitCode === 0, exitCode,
+                stdout: maskL3SecretsInOutput(stdout, l3Secrets),
+                stderr: maskL3SecretsInOutput(stderr, l3Secrets),
                 error: timedOut ? `Sandbox command timed out after ${Math.round(boundedTimeout / 1000)} seconds. Files already written inside the workspace may remain.` : null,
                 timedOut, durationMs: Date.now() - startedAt, readOnlyCommand,
             });
@@ -1765,11 +1826,10 @@ async function syncDeepthinkResultsSnapshot(payload: DeepthinkResultsSnapshotReq
     for (const file of payload.contextFiles || []) {
         if (!file || !isSafeResultsContextPath(file.path)) throw new Error('Invalid Results context file.');
         const destination = safeJoin(repository, file.path);
-        await mkdir(path.dirname(destination), { recursive: true });
         if (file.base64) {
-            await writeFile(destination, Buffer.from(file.base64, 'base64'));
+            await writeL3ImmutableFile(destination, Buffer.from(file.base64, 'base64'));
         } else if (typeof file.content === 'string') {
-            await writeFile(destination, file.content, 'utf8');
+            await writeL3ImmutableFile(destination, file.content);
         }
     }
     await initAndCommitWorkspace(repository, payload.commitMessage || 'Deepthink Results snapshot');
@@ -2008,9 +2068,37 @@ export async function handleSandboxBackendRequest(req: IncomingMessage, res: Ser
                 if (!payload.commit || !/^[0-9a-f]{7,64}$/i.test(payload.commit)) throw new Error('A valid Git checkpoint is required.');
                 const repository = await resolveRepositoryPath(payload.repositoryId);
                 if (!(await fileExists(path.join(repository, '.git')))) throw new Error('Sandbox repository was not found.');
-                await runGitCommand(repository, ['restore', `--source=${payload.commit}`, '--staged', '--worktree', '--', payload.strategyDirectory]);
-                await runGitCommand(repository, ['clean', '-fd', '--', payload.strategyDirectory]);
+                const strategyPath = safeJoin(repository, payload.strategyDirectory);
+                await unlockL3TreeForRestore(strategyPath);
+                try {
+                    await runGitCommand(repository, ['restore', `--source=${payload.commit}`, '--staged', '--worktree', '--', payload.strategyDirectory]);
+                    await runGitCommand(repository, ['clean', '-fd', '--', payload.strategyDirectory]);
+                } finally {
+                    await restampL3StrategyArtifacts(strategyPath);
+                }
                 sendJson(res, 200, { ok: true });
+                return true;
+            }
+
+            case '/api/sandbox/env-secrets': {
+                if (req.method === 'GET') {
+                    const secrets = await listL3EnvSecrets();
+                    sendJson(res, 200, { ok: true, secrets });
+                    return true;
+                }
+                if (req.method === 'POST') {
+                    const payload = JSON.parse(await readRequestBody(req)) as { key?: string; value?: string };
+                    const secrets = await setL3EnvSecret(String(payload?.key || ''), String(payload?.value || ''));
+                    sendJson(res, 200, { ok: true, secrets });
+                    return true;
+                }
+                if (req.method === 'DELETE') {
+                    const payload = JSON.parse(await readRequestBody(req)) as { key?: string };
+                    const secrets = await removeL3EnvSecret(String(payload?.key || ''));
+                    sendJson(res, 200, { ok: true, secrets });
+                    return true;
+                }
+                sendJson(res, 405, { ok: false, error: 'Method not allowed.' });
                 return true;
             }
 

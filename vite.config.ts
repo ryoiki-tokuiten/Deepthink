@@ -130,6 +130,7 @@ export default defineConfig(({ mode }) => {
           '**/.venv/**',
           '**/__pycache__/**',
           '**/*.pyc',
+          '**/.env',
         ],
       },
     },

@@ -1,5 +1,11 @@
 import { isOpenAICompatibleProvider, ProviderManager, ProviderConfig } from './ProviderManager';
 import { renderIconMarkup } from '../UI/Icons';
+import {
+    deleteSandboxEnvSecret,
+    fetchSandboxEnvSecrets,
+    saveSandboxEnvSecret,
+    type SandboxEnvSecretEntry,
+} from '../Core/SandboxToolRuntime';
 
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1';
 
@@ -20,6 +26,7 @@ export class ProviderManagementUI {
         content: null as HTMLElement | null,
     };
     private onModelsChangedCallback?: () => void;
+    private envSecrets: SandboxEnvSecretEntry[] = [];
 
     constructor(private providerManager: ProviderManager, private promptsModal?: any) {
         this.createModal();
@@ -86,6 +93,7 @@ export class ProviderManagementUI {
     public show(): void {
         if (!this.elements.overlay) return;
         this.renderProviderCards();
+        void this.refreshEnvSecrets();
         this.elements.overlay.style.display = 'flex';
         setTimeout(() => this.elements.overlay!.classList.add('is-visible'), 10);
     }
@@ -107,11 +115,90 @@ export class ProviderManagementUI {
             <div class="provider-cards-grid">
                 ${providers.map(p => this.renderProviderCard(p)).join('')}
                 ${this.renderOpenAICompatibleCard(openAICompatibleProviders)}
+                ${this.renderSecretStoreCard()}
             </div>
         `;
         providers.forEach(p => this.attachProviderCardListeners(p));
         openAICompatibleProviders.forEach(p => this.attachProviderCardListeners(p));
         this.attachOpenAICompatibleCardListeners();
+        this.attachSecretStoreCardListeners();
+    }
+
+    private async refreshEnvSecrets(): Promise<void> {
+        try {
+            this.envSecrets = await fetchSandboxEnvSecrets();
+            if (this.elements.overlay?.style.display === 'flex') {
+                this.renderProviderCards();
+            }
+        } catch {
+            // Ignore when backend is not active
+        }
+    }
+
+    private renderSecretStoreCard(): string {
+        const configuredCount = this.envSecrets.length;
+        return `
+            <div class="provider-card openai-compatible-card secret-store-card" data-provider-id="l3-secret-store" style="min-height: auto;">
+                <div class="provider-card-header">
+                    <div class="provider-info">
+                        <h3 class="provider-name">Secret Store (Global .env)</h3>
+                        <div class="provider-status ${configuredCount > 0 ? 'configured' : 'not-configured'}">
+                            ${configuredCount > 0 ? `${configuredCount} Configured` : 'Add Secret Key'}
+                        </div>
+                    </div>
+                    <div class="provider-icon">${renderIconMarkup('security')}</div>
+                </div>
+                <div class="provider-card-body openai-compatible-card-body">
+                    <div class="openai-compatible-content">
+                        <div class="openai-compatible-instances">
+                            ${configuredCount > 0
+                                ? this.envSecrets.map(s => this.renderSecretStoreInstance(s)).join('')
+                                : '<div class="openai-compatible-empty">No global .env secret keys configured yet.</div>'}
+                        </div>
+                        <div class="openai-compatible-add-form secret-store-add-form">
+                            <div class="openai-compatible-form-title-row">
+                                <div class="openai-compatible-form-title">Add or update global .env environment key (L3 Secret Store)</div>
+                            </div>
+                            <div class="openai-compatible-form-fields">
+                                <div class="input-group">
+                                    <input type="text" class="secret-store-key-input" placeholder="Environment Key (e.g., HF_TOKEN, WANDB_API_KEY)">
+                                    <small class="input-help">Saved in the root .env file (L3) and injected into the agent sandbox environment.</small>
+                                </div>
+                                <div class="input-group">
+                                    <input type="password" class="secret-store-value-input" placeholder="Secret Value">
+                                    <small class="input-help">Agents can use $KEY in commands, but cannot read or edit .env (values are redacted from output).</small>
+                                </div>
+                            </div>
+                            <button class="configure-provider-btn add-secret-store-btn">
+                                ${renderIconMarkup('add')} Save Secret Key to .env
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    private renderSecretStoreInstance(secret: SandboxEnvSecretEntry): string {
+        return `
+            <div class="openai-compatible-instance" data-secret-key="${escapeHtml(secret.key)}">
+                <div class="openai-compatible-instance-header">
+                    <div>
+                        <div class="openai-compatible-instance-name">${escapeHtml(secret.key)}</div>
+                        <div class="openai-compatible-instance-endpoint">$${escapeHtml(secret.key)} · Root .env (L3)</div>
+                    </div>
+                    <span class="provider-status configured">Configured</span>
+                </div>
+                <div class="openai-compatible-instance-key">${escapeHtml(secret.maskedValue)}</div>
+                <div class="add-model-section">
+                    <div class="add-model-and-actions" style="justify-content: flex-end;">
+                        <div class="provider-actions">
+                            <button class="remove-provider-btn remove-secret-store-btn" data-secret-key="${escapeHtml(secret.key)}">Remove</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
     }
 
     private renderOpenAICompatibleCard(providers: ProviderConfig[]): string {
@@ -328,6 +415,61 @@ export class ProviderManagementUI {
         form?.querySelectorAll('input').forEach(input => {
             input.addEventListener('keypress', event => { if (event.key === 'Enter') this.handleAddOpenAICompatibleProvider(); });
         });
+    }
+
+    private attachSecretStoreCardListeners(): void {
+        if (!this.elements.content) return;
+        const card = this.elements.content.querySelector('.secret-store-card');
+        if (!card) return;
+        card.querySelector('.add-secret-store-btn')?.addEventListener('click', () => {
+            void this.handleAddSecretStoreKey();
+        });
+        card.querySelectorAll('.secret-store-add-form input').forEach(input => {
+            input.addEventListener('keypress', event => {
+                if ((event as KeyboardEvent).key === 'Enter') void this.handleAddSecretStoreKey();
+            });
+        });
+        card.querySelectorAll('.remove-secret-store-btn').forEach(btn => {
+            btn.addEventListener('click', e => {
+                const button = (e.target as HTMLElement).closest('.remove-secret-store-btn') as HTMLElement | null;
+                const key = button?.dataset.secretKey;
+                if (key) void this.handleRemoveSecretStoreKey(key);
+            });
+        });
+    }
+
+    private async handleAddSecretStoreKey(): Promise<void> {
+        const card = this.elements.content?.querySelector('.secret-store-card');
+        if (!card) return;
+        const keyInput = card.querySelector('.secret-store-key-input') as HTMLInputElement | null;
+        const valueInput = card.querySelector('.secret-store-value-input') as HTMLInputElement | null;
+        const key = (keyInput?.value || '').trim();
+        const value = (valueInput?.value || '').trim();
+
+        if (!key) return this.showError(card, 'Error: Environment key name is required.');
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+            return this.showError(card, 'Error: Key must contain only letters, numbers, and underscores, and cannot start with a number.');
+        }
+        if (!value) return this.showError(card, 'Error: Secret value is required.');
+
+        try {
+            this.envSecrets = await saveSandboxEnvSecret(key, value);
+            if (keyInput) keyInput.value = '';
+            if (valueInput) valueInput.value = '';
+            this.renderProviderCards();
+        } catch (error) {
+            this.showError(card, error instanceof Error ? error.message : 'Failed to save Secret Store key.');
+        }
+    }
+
+    private async handleRemoveSecretStoreKey(key: string): Promise<void> {
+        const card = this.elements.content?.querySelector('.secret-store-card');
+        try {
+            this.envSecrets = await deleteSandboxEnvSecret(key);
+            this.renderProviderCards();
+        } catch (error) {
+            if (card) this.showError(card, error instanceof Error ? error.message : 'Failed to remove Secret Store key.');
+        }
     }
 
     private handleConfigureProvider(providerName: string): void {

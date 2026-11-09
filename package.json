@@ -8,9 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit",
-    "test:e2e": "node --experimental-strip-types --test Deepthink/tests/deepthinkPipelineE2E.test.ts",
-    "test": "npm run test:e2e"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.25",

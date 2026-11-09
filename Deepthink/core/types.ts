@@ -231,9 +231,6 @@ export interface SandboxRepositoryAccess {
     repositoryId: string;
     agentDirectory?: string;
     agentDirectoryReadOnly?: boolean;
-    readableDirectories?: string[];
-    liveReadableDirectories?: string[];
-    blockedDirectories?: string[];
     fullRepositoryRead?: boolean;
 }
 
