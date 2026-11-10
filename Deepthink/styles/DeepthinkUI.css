@@ -1,8 +1,8 @@
 .embedded-modal-overlay, .embedded-modal-content .iteration-indicator, .embedded-modal-content .modal-nav-btn, .embedded-modal-content .modal-header .close-modal-btn, .bsr-change-col, .total-llm-calls-icon-wrapper, .total-llm-calls-icon-wrapper .icon-slot, .bsr-bar-layout, .figure4-container, .dt-config-warning-overlay, .dt-config-warning-icon-circle, .dt-config-warning-icon-circle .icon-slot, .tree-chevron, .tree-file-spacer, .vfs-code-loading, .vfs-editor-placeholder, .vfs-empty-state, .vfs-code-viewport.has-media, .vfs-media-preview, .vfs-compare-trigger-footer, .vfs-filemanager-btn-footer, .git-diff-empty-state, .node-icon-wrapper, .waiting-wrapper, .inspector-empty, .info-icon-badge, .inspector-empty-prompt { display: flex; align-items: center; justify-content: center; }
-.expandable-text-actions, .modal-header, .agent-header, .agent-panel-header, .dos-header-bar, .dos-branch-meter-row, .bsr-panel-header, .bsr-graph-top-bar, .deepthink-config-panel :is(.window-header, .section-header, .evolution-filter-options-header), .window-header, .evolution-filter-options-header, .curated-subfeature-header, .bsr-preset-top, .vfs-editor-header, .node-header, .section-header, .terminal-header { display: flex; align-items: center; justify-content: space-between; }
-.strategy-history-button, .branch-tab-button, .modules-target-circle, .dos-title-icon, .change-chip.multiline, .timeline-step, .dt-config-warning-close, .response-toggle-option, .console-tab-button { display: inline-flex; align-items: center; justify-content: center; }
-#pipelines-content-container, .pipeline-content.active, .branch-tabs-nav, .modules-round-pills, .curated-context-modules, .modules-agent-grid .agent-card, .modules-agent-grid .agent-results, .modules-agent-grid .modules-text-container, .modal-content, .fullscreen-modal .modal-body, .embedded-modal-content, .deepthink-embedded-response, .token-estimation-modal-content, .estimation-stat-card, .token-usage-graph-card, .token-usage-graph-card .window-content, .token-usage-graph-card .token-volume-estimator, .token-usage-graph-card .token-estimator-layout, .agent-activity-panel-container, .agent-messages-container, .message-inline-content, .system-blocks, .tool-args-executions, .tool-args-details, .dos-container, .dos-unified-text-scroll, .dos-utilization-panel, .dos-branch-meter-list, .bsr-visual-container, .bsr-side-panel, .bsr-window-graph-card, .change-chips-cluster, .bsr-event-evidence-right-pane, .bsr-event-evidence-expand, .deepthink-config-react-root, .deepthink-config-panel, .deepthink-config-scroll-container, .config-left-col, .config-right-col, .code-execution-toggle-info, .token-estimator-layout, .token-chart-column, .loop-schedule-vis, .loop-timeline-overview, .loop-controls-inputs, .section-body, .curated-subfeature-card, .curated-subfeature-body, .bsr-parameters-window, .bsr-window-content, .bsr-vertical-bar-col, .bsr-preset-card, .dt-config-warning-popup, .vfs-filesystem-tab, .vfs-sidebar, .vfs-editor-area, .vfs-editor-wrapper, .vfs-sidebar-footer, .git-diff-container, .deepthink-pipeline-react-root, .deepthink-live-container, .timeline-header-panel, .live-sidebar, .agent-timeline, .node-content, .live-main-content, .live-inspector-panel, .inspector-content, .inspector-column, .left-column, .unified-prompt-panel, .system-instruction-section, .user-prompt-section, .borderless-card, .right-column, .inspector-info-card, .live-terminal-panel, .terminal-body, .parallel-active-window, .parallel-window-body { display: flex; flex-direction: column; }
-.strategy-branch-version-switcher, .strategy-text-context-controls, .curated-modules-header, .modules-target-circles, .expandable-text-left-actions, .expandable-text-right-actions, .embedded-modal-content .embedded-modal-header-actions, .stat-card-header, .stat-card-icon, .stat-card-footnote, .header-info, .stop-button, .processing-indicator, .error-message, .message-header, .tool-call-display, .deepthink-agent-header, .system-block, .tool-args-row, .dos-title-group, .dos-util-panel-title, .dos-meter-wrapper, .telemetry-pill, .bsr-change-overlay-row, .window-left, .code-execution-toggle-container, .loop-timeline-bar, .section-title-wrapper, .bsr-vertical-bar-col .bsr-change-description, .tree-node, .vfs-select-arrow, .vfs-file-info, .vfs-sidebar-footer-row, .git-diff-file-header, .timeline-header-row-bottom, .stat-item, .selected-agent-config, .card-title, .terminal-actions-left, .terminal-actions-right, .search-box, .parallel-window-header { display: flex; align-items: center; }
+.expandable-text-actions, .modal-header, .agent-header, .agent-panel-header, .state-synthesis-header-bar, .state-synthesis-branch-meter-row, .bsr-panel-header, .bsr-graph-top-bar, .deepthink-config-panel :is(.window-header, .section-header, .evolution-filter-options-header), .window-header, .evolution-filter-options-header, .curated-subfeature-header, .bsr-preset-top, .vfs-editor-header, .node-header, .section-header, .terminal-header { display: flex; align-items: center; justify-content: space-between; }
+.strategy-history-button, .branch-tab-button, .modules-target-circle, .state-synthesis-title-icon, .change-chip.multiline, .timeline-step, .dt-config-warning-close, .response-toggle-option, .console-tab-button { display: inline-flex; align-items: center; justify-content: center; }
+#pipelines-content-container, .pipeline-content.active, .branch-tabs-nav, .modules-round-pills, .curated-context-modules, .modules-agent-grid .agent-card, .modules-agent-grid .agent-results, .modules-agent-grid .modules-text-container, .modal-content, .fullscreen-modal .modal-body, .embedded-modal-content, .deepthink-embedded-response, .token-estimation-modal-content, .estimation-stat-card, .token-usage-graph-card, .token-usage-graph-card .window-content, .token-usage-graph-card .token-volume-estimator, .token-usage-graph-card .token-estimator-layout, .agent-activity-panel-container, .agent-messages-container, .message-inline-content, .system-blocks, .tool-args-executions, .tool-args-details, .state-synthesis-container, .state-synthesis-unified-text-scroll, .state-synthesis-utilization-panel, .state-synthesis-branch-meter-list, .bsr-visual-container, .bsr-side-panel, .bsr-window-graph-card, .change-chips-cluster, .bsr-event-evidence-right-pane, .bsr-event-evidence-expand, .deepthink-config-react-root, .deepthink-config-panel, .deepthink-config-scroll-container, .config-left-col, .config-right-col, .code-execution-toggle-info, .token-estimator-layout, .token-chart-column, .loop-schedule-vis, .loop-timeline-overview, .loop-controls-inputs, .section-body, .curated-subfeature-card, .curated-subfeature-body, .bsr-parameters-window, .bsr-window-content, .bsr-vertical-bar-col, .bsr-preset-card, .dt-config-warning-popup, .vfs-filesystem-tab, .vfs-sidebar, .vfs-editor-area, .vfs-editor-wrapper, .vfs-sidebar-footer, .git-diff-container, .deepthink-pipeline-react-root, .deepthink-live-container, .timeline-header-panel, .live-sidebar, .agent-timeline, .node-content, .live-main-content, .live-inspector-panel, .inspector-content, .inspector-column, .left-column, .unified-prompt-panel, .system-instruction-section, .user-prompt-section, .borderless-card, .right-column, .inspector-info-card, .live-terminal-panel, .terminal-body, .parallel-active-window, .parallel-window-body { display: flex; flex-direction: column; }
+.strategy-branch-version-switcher, .strategy-text-context-controls, .curated-modules-header, .modules-target-circles, .expandable-text-left-actions, .expandable-text-right-actions, .embedded-modal-content .embedded-modal-header-actions, .stat-card-header, .stat-card-icon, .stat-card-footnote, .header-info, .stop-button, .processing-indicator, .error-message, .message-header, .tool-call-display, .deepthink-agent-header, .system-block, .tool-args-row, .state-synthesis-title-group, .state-synthesis-util-panel-title, .state-synthesis-meter-wrapper, .telemetry-pill, .bsr-change-overlay-row, .window-left, .code-execution-toggle-container, .loop-timeline-bar, .section-title-wrapper, .bsr-vertical-bar-col .bsr-change-description, .tree-node, .vfs-select-arrow, .vfs-file-info, .vfs-sidebar-footer-row, .git-diff-file-header, .timeline-header-row-bottom, .stat-item, .selected-agent-config, .card-title, .terminal-actions-left, .terminal-actions-right, .search-box, .parallel-window-header { display: flex; align-items: center; }
 .status-badge, .strategy-history-controls, .strategy-history-label, .view-solution-button, .show-more-btn, .view-argument-button, .tool-call-indicator, .tool-call-parameter-pill, .token-legend-item, .vfs-compare-select-wrapper, .duration-pill, .status-pill, .config-badge, .response-view-toggle, .system-instruction-pill { display: inline-flex; align-items: center; }
 #pipelines-content-container { overflow: auto; padding: 1rem; gap: 3rem; flex-grow: 1; background: var(--bg-color); }
 .status-badge { padding: .5rem 1rem; border-radius: 9999px; font-weight: 700; font-size: .75rem; line-height: 1.25; letter-spacing: .1em; text-transform: uppercase; gap: .5rem; transition: all .6s cubic-bezier(.16, 1, .3, 1); border: 1.5px solid transparent; box-shadow: 0 2px 8px rgba(0, 0, 0, .04), inset 0 1px 0 rgba(255, 255, 255, .08), inset 0 -1px 0 rgba(0, 0, 0, .1); filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .05)); }
@@ -246,34 +246,34 @@ to { opacity: 1; transform: translateY(0); } }
 .tool-args-row { gap: .5rem; flex-wrap: wrap; }
 .tool-args-label { font-weight: 600; color: var(--text-tertiary-color); text-transform: uppercase; font-size: .75rem; letter-spacing: .02em; }
 .tool-args-code { font-family: var(--font-family-mono); background: rgba(0, 0, 0, .25); padding: 2px 4px; border-radius: 3px; word-break: break-all; }
-.dos-container { margin-bottom: 1.25rem; background: rgba(var(--card-bg-base-rgb), .35); border: 1px solid var(--border-color); border-radius: 24px; padding: 0 1.15rem .85rem; gap: .5rem; height: 320px; overflow: hidden; }
-.dos-header-bar { min-height: 3.5rem; margin-inline: -1.15rem; padding: .75rem 1.15rem; background: var(--sub-panel-bg-color); border-bottom: 1px solid rgba(var(--border-color-rgb), .08); }
-.dos-title-group { gap: .5rem; }
-.dos-title-icon { flex: 0 0 auto; font-size: 1.25rem; color: #f59e0b; line-height: 1; }
-.dos-pinned-title { margin: 0; font-size: 1.1rem; line-height: 1.25; font-weight: 600; color: var(--text-color); }
-.dos-pinned-body { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(240px, 1fr); gap: 1rem; flex: 1 1 auto; min-height: 0; }
-@media (max-width: 900px) { .dos-container { height: 380px; }
-.dos-pinned-body { grid-template-columns: 1fr; } }
-.dos-unified-text-scroll { overflow-y: auto; padding-right: .5rem; gap: .65rem; font-size: .825rem; line-height: 1.55; color: var(--text-color); }
-.dos-paragraph-item { margin: 0; }
-.dos-paragraph-lead { font-weight: 700; letter-spacing: .01em; }
-.dos-paragraph-content { color: var(--text-color); opacity: .92; }
-.dos-muted-text { color: var(--text-secondary-color); font-style: italic; }
-.dos-utilization-panel { background: rgba(0, 0, 0, .22); border: 1px solid rgba(var(--border-color-rgb), .08); border-radius: 6px; padding: .65rem .75rem; gap: .5rem; overflow-y: auto; }
-.dos-util-panel-title { gap: .35rem; font-size: .725rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-secondary-color); }
-.dos-panel-icon { font-size: .9rem; color: var(--accent-purple); }
-.dos-branch-meter-list { gap: .4rem; }
-.dos-branch-meter-row { padding: .3rem .5rem; background: rgba(255, 255, 255, .03); border: 1px solid rgba(255, 255, 255, .06); border-radius: 4px; font-size: .75rem; }
-.dos-branch-name { font-weight: 500; color: var(--text-color); }
-.dos-meter-wrapper { gap: .45rem; }
-.dos-signal-meter { display: flex; align-items: flex-end; gap: 2px; height: 12px; }
+.state-synthesis-container { margin-bottom: 1.25rem; background: rgba(var(--card-bg-base-rgb), .35); border: 1px solid var(--border-color); border-radius: 24px; padding: 0 1.15rem .85rem; gap: .5rem; height: 320px; overflow: hidden; }
+.state-synthesis-header-bar { min-height: 3.5rem; margin-inline: -1.15rem; padding: .75rem 1.15rem; background: var(--sub-panel-bg-color); border-bottom: 1px solid rgba(var(--border-color-rgb), .08); }
+.state-synthesis-title-group { gap: .5rem; }
+.state-synthesis-title-icon { flex: 0 0 auto; font-size: 1.25rem; color: #f59e0b; line-height: 1; }
+.state-synthesis-pinned-title { margin: 0; font-size: 1.1rem; line-height: 1.25; font-weight: 600; color: var(--text-color); }
+.state-synthesis-pinned-body { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(240px, 1fr); gap: 1rem; flex: 1 1 auto; min-height: 0; }
+@media (max-width: 900px) { .state-synthesis-container { height: 380px; }
+.state-synthesis-pinned-body { grid-template-columns: 1fr; } }
+.state-synthesis-unified-text-scroll { overflow-y: auto; padding-right: .5rem; gap: .65rem; font-size: .825rem; line-height: 1.55; color: var(--text-color); }
+.state-synthesis-paragraph-item { margin: 0; }
+.state-synthesis-paragraph-lead { font-weight: 700; letter-spacing: .01em; }
+.state-synthesis-paragraph-content { color: var(--text-color); opacity: .92; }
+.state-synthesis-muted-text { color: var(--text-secondary-color); font-style: italic; }
+.state-synthesis-utilization-panel { background: rgba(0, 0, 0, .22); border: 1px solid rgba(var(--border-color-rgb), .08); border-radius: 6px; padding: .65rem .75rem; gap: .5rem; overflow-y: auto; }
+.state-synthesis-util-panel-title { gap: .35rem; font-size: .725rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-secondary-color); }
+.state-synthesis-panel-icon { font-size: .9rem; color: var(--accent-purple); }
+.state-synthesis-branch-meter-list { gap: .4rem; }
+.state-synthesis-branch-meter-row { padding: .3rem .5rem; background: rgba(255, 255, 255, .03); border: 1px solid rgba(255, 255, 255, .06); border-radius: 4px; font-size: .75rem; }
+.state-synthesis-branch-name { font-weight: 500; color: var(--text-color); }
+.state-synthesis-meter-wrapper { gap: .45rem; }
+.state-synthesis-signal-meter { display: flex; align-items: flex-end; gap: 2px; height: 12px; }
 .meter-segment { width: 3px; background: rgba(255, 255, 255, .15); border-radius: 1px; transition: background .2s ease; }
 .meter-segment.seg-1 { height: 4px; }
 .meter-segment.seg-2 { height: 8px; }
 .meter-segment.seg-3 { height: 12px; }
 .meter-segment.active { background: #10b981; }
-.dos-branch-meter-row.status-partial .meter-segment.active { background: #f59e0b; }
-.dos-branch-meter-row.status-misused .meter-segment.active { background: #ef4444; }
+.state-synthesis-branch-meter-row.status-partial .meter-segment.active { background: #f59e0b; }
+.state-synthesis-branch-meter-row.status-misused .meter-segment.active { background: #ef4444; }
 .bsr-visual-container { --bsr-panel-radius: 16px; margin-top: 3.5rem; padding: .85rem; background: var(--background-secondary, #0c0c0c); border: 1px solid var(--border-color); border-radius: var(--bsr-panel-radius); gap: .75rem; width: 100%; }
 .bsr-side-by-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .85rem; align-items: stretch; }
 @media (max-width: 900px) { .bsr-side-by-side { grid-template-columns: 1fr; } }
@@ -637,6 +637,20 @@ border-top: 2px solid currentColor;
 .loop-controls-inputs { gap: 12px; }
 #dt-i-value, #dt-j-value { color: var(--accent-pink); font-weight: 600; }
 #dt-k-value { color: var(--accent-blue); font-weight: 600; }
+.mosaic-slider-container { position: relative; width: 100%; height: 34px; margin: 6px 0 2px; user-select: none; }
+.mosaic-slider-container.is-disabled { opacity: .5; pointer-events: none; }
+.mosaic-slider-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; z-index: 4; }
+.mosaic-slider-track { position: relative; width: 100%; height: 100%; border-radius: 10px; background: rgba(255, 255, 255, .045); border: 1px solid rgba(255, 255, 255, .1); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .35); overflow: hidden; box-sizing: border-box; transition: border-color .18s cubic-bezier(.4, 0, .2, 1), box-shadow .18s cubic-bezier(.4, 0, .2, 1); }
+.mosaic-slider-container:hover .mosaic-slider-track { border-color: rgba(var(--dt-pink-rgb), .38); }
+.mosaic-slider-input:focus-visible + .mosaic-slider-track { border-color: var(--accent-pink); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .35), 0 0 0 2px rgba(var(--dt-pink-rgb), .25); }
+.mosaic-slider-fill { position: absolute; top: 1px; bottom: 1px; left: 1px; border-radius: 8.5px 6px 6px 8.5px; background: linear-gradient(90deg, rgba(162, 156, 168, .28) 0%, rgba(var(--dt-pink-rgb), .32) 22%, rgba(var(--dt-pink-rgb), .62) 58%, rgba(var(--dt-pink-rgb), .92) 100%); overflow: hidden; pointer-events: none; z-index: 1; }
+.mosaic-slider-svg { display: block; width: 100%; height: 100%; pointer-events: none; }
+.mosaic-slider-thumb { position: absolute; top: 1px; bottom: 1px; width: 28px; border-radius: 8.5px; background: #ffffff; border: 1px solid rgba(0, 0, 0, .14); box-shadow: -1px 0 0 rgba(var(--dt-pink-rgb), .45), 0 1px 4px rgba(0, 0, 0, .38), 0 0 10px rgba(var(--dt-pink-rgb), .25); pointer-events: none; z-index: 2; transition: transform .12s cubic-bezier(.4, 0, .2, 1), box-shadow .15s cubic-bezier(.4, 0, .2, 1); }
+.mosaic-slider-container:hover .mosaic-slider-thumb { box-shadow: -1px 0 0 rgba(var(--dt-pink-rgb), .65), 0 2px 6px rgba(0, 0, 0, .45), 0 0 14px rgba(var(--dt-pink-rgb), .38); }
+.mosaic-slider-input:active + .mosaic-slider-track .mosaic-slider-thumb { transform: scale(.97); }
+body.light-mode .mosaic-slider-track { background: rgba(0, 0, 0, .06); border-color: rgba(0, 0, 0, .12); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .06); }
+body.light-mode .mosaic-slider-fill { background: linear-gradient(90deg, rgba(206, 203, 210, .9) 0%, rgba(var(--dt-pink-rgb), .36) 24%, rgba(var(--dt-pink-rgb), .66) 60%, rgba(var(--dt-pink-rgb), .92) 100%); }
+body.light-mode .mosaic-slider-thumb { background: #ffffff; border-color: rgba(0, 0, 0, .16); box-shadow: -1px 0 0 rgba(var(--dt-pink-rgb), .5), 0 1px 3px rgba(0, 0, 0, .18); }
 .curated-toggle-label { font-size: 14px; font-weight: 600; color: var(--text-color); cursor: pointer; user-select: none; transition: color .15s ease; }
 .curated-toggle-label:hover { color: var(--accent-blue); }
 .config-error-text { font-size: 11px; color: var(--dt-red); margin-top: 4px; line-height: 1.4; }
@@ -999,7 +1013,7 @@ body.light-mode {
   & .modules-agent-grid .modules-card-header { background: var(--background-secondary); }
   & .sidebar-toggle-button:hover { background: rgba(0, 0, 0, .05) !important; border-color: rgba(0, 0, 0, .1) !important; }
   & .sidebar-toggle-button .icon-slot { color: #666 !important; }
-  & .dos-header-bar { background: var(--background-secondary) !important; }
+  & .state-synthesis-header-bar { background: var(--background-secondary) !important; }
   & .bsr-visual-container .bsr-grid-line { stroke: rgba(20, 20, 19, .12); }
   & .bsr-visual-container .bsr-grid-line.zero { stroke: rgba(20, 20, 19, .4); }
   & .bsr-visual-container .bsr-final-total-line { stroke: rgba(20, 20, 19, .5); }

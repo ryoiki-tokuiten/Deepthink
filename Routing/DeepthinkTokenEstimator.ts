@@ -14,15 +14,14 @@ export const SANDBOX_API_CALL_MULTIPLIER = { min: 12, max: 36 } as const;
 export interface DeepthinkApiCallBreakdown {
     initialStrategy: { min: number; max: number };
     strategyProximity: { min: number; max: number };
-    solutionCritique: { min: number; max: number };
-    solutionCorrection: { min: number; max: number };
-    dos: number;
+    critiqueAgent: { min: number; max: number };
+    executionAgent: { min: number; max: number };
+    stateSynthesis: number;
     modulesGeneration: number;
     modulesImpactReview: number;
-    modulesTester: number;
+    modulesBuilding: number;
     bsr: number;
     memoryBank: { min: number; max: number };
-    standaloneHeartbeats: number;
     globalUpdates: number;
     totalHeartbeats: number;
 }
@@ -52,27 +51,25 @@ export function formatApiCallCount(value: number): string {
 export function calculateDeepthinkApiCallsFromParams(params: Partial<ModelParameters>): DeepthinkApiCallEstimate {
     const strategiesCount = Math.max(1, Math.min(params.strategiesCount ?? 3, 5));
     const i = Math.max(1, Math.min(params.i ?? params.deepthinkDepth ?? 10, MAX_DEEPTHINK_DEPTH));
-    const j = Math.max(3, Math.min(params.j ?? 4, 8));
-    const k = Math.max(2, Math.min(params.k ?? 4, j));
+    const j = 4;
     const strategyProximityLoops = Math.max(0, Math.min(MAX_STRATEGY_PROXIMITY_LOOPS, params.strategyProximityLoops ?? 1));
     const modulesCount = Math.max(0, Math.min(MAX_MODULES_COUNT, params.modulesCount ?? 0));
     const modulesImpactReviewLoops = Math.max(0, Math.min(MAX_MODULES_IMPACT_REVIEW_LOOPS, params.modulesImpactReviewLoops ?? 1));
 
     const curatedContextEnabled = modulesCount > 0;
-    const { standaloneHeartbeats, globalUpdates, totalHeartbeats } = calculateLoopSchedule(i, j, k, curatedContextEnabled);
+    const { globalUpdates, totalHeartbeats } = calculateLoopSchedule(i, j, curatedContextEnabled);
 
     const seedStrategyCalls = 1 + 2 * strategyProximityLoops;
-    const critiqueIterations = i > 1 ? i - 1 : 1;
+    const critiqueIterations = Math.max(0, i - 1);
     const branchIterationCalls = (i + critiqueIterations) * strategiesCount;
     const modCallsPerHeartbeat = modulesCount > 0 ? 1 + 2 * modulesImpactReviewLoops + modulesCount : 0;
-    const standaloneHeartbeatCalls = standaloneHeartbeats * ((modulesCount > 0 ? 1 : 0) + modCallsPerHeartbeat);
     const guHeartbeatCalls = curatedContextEnabled ? globalUpdates * modCallsPerHeartbeat : 0;
-    const guStepICalls = globalUpdates * (1 + strategiesCount);
-    const guStepViCalls = globalUpdates * (modulesCount > 0 ? 1 : 0);
+    const guStateSynthesisStrategiesAndBsrCalls = globalUpdates * (1 + strategiesCount);
+    const guStateSynthesisModulesCalls = globalUpdates * (modulesCount > 0 ? 1 : 0);
     const guMaintenanceMin = globalUpdates * strategiesCount;
     const guMaintenanceMax = globalUpdates * (seedStrategyCalls + 2 * strategiesCount);
 
-    const commonBase = seedStrategyCalls + branchIterationCalls + standaloneHeartbeatCalls + guHeartbeatCalls + guStepICalls + guStepViCalls;
+    const commonBase = seedStrategyCalls + branchIterationCalls + guHeartbeatCalls + guStateSynthesisStrategiesAndBsrCalls + guStateSynthesisModulesCalls;
     const baseMin = commonBase + guMaintenanceMin;
     const baseMax = commonBase + guMaintenanceMax;
 
@@ -90,21 +87,20 @@ export function calculateDeepthinkApiCallsFromParams(params: Partial<ModelParame
             min: strategyProximityLoops,
             max: strategyProximityLoops * (1 + globalUpdates),
         },
-        solutionCritique: {
+        critiqueAgent: {
             min: critiqueIterations * strategiesCount,
             max: (critiqueIterations + globalUpdates) * strategiesCount,
         },
-        solutionCorrection: {
+        executionAgent: {
             min: i * strategiesCount,
             max: (i + globalUpdates) * strategiesCount,
         },
-        dos: standaloneHeartbeats * (modulesCount > 0 ? 1 : 0) + globalUpdates * (1 + (modulesCount > 0 ? 1 : 0)),
+        stateSynthesis: globalUpdates * (1 + (modulesCount > 0 ? 1 : 0)),
         modulesGeneration: totalHeartbeatsWithMod * (1 + modulesImpactReviewLoops),
         modulesImpactReview: totalHeartbeatsWithMod * modulesImpactReviewLoops,
-        modulesTester: totalHeartbeatsWithMod * modulesCount,
+        modulesBuilding: totalHeartbeatsWithMod * modulesCount,
         bsr: globalUpdates * strategiesCount,
-        memoryBank: { min: globalUpdates * strategiesCount, max: 0 },
-        standaloneHeartbeats,
+        memoryBank: { min: 0, max: globalUpdates * strategiesCount },
         globalUpdates,
         totalHeartbeats,
     };
@@ -146,7 +142,6 @@ export interface DeepthinkTokenEstimateInput {
     deepthinkDepth?: number;
     i?: number;
     j?: number;
-    k?: number;
     isolateBranches?: boolean;
     codeExecutionEnabled?: boolean;
 }
@@ -177,6 +172,7 @@ export interface DeepthinkTokenEstimate {
 
 const DEFAULT_ROLE_MAX_OUTPUT_TOKENS = 5_000;
 const EXTENDED_ROLE_MAX_OUTPUT_TOKENS = 10_000;
+const MAX_FIRST_USER_PROMPT_TOKENS = 10_000;
 
 interface TokenProfile {
     promptBase: number;
@@ -185,13 +181,13 @@ interface TokenProfile {
     modulesGenerationOutputPerModule: number;
     strategyProximityOutput: number;
     modulesImpactReviewOutput: number;
-    solutionCorrectionOutput: number;
+    executionAgentOutput: number;
     critiqueOutput: number;
     memoryOutput: number;
-    modulesTestOutput: number;
-    dosStepIOutput: number;
-    dosFullOutput: number;
-    dosCoreSynthesisContext: number;
+    modulesBuildingOutput: number;
+    stateSynthesisForStrategiesOutput: number;
+    stateSynthesisForModulesOutput: number;
+    stateSynthesisCoreContext: number;
     bsrOutput: number;
     bsrLedgerGrowthPerUpdate: number;
     branchPacketShare: number;
@@ -209,19 +205,19 @@ export function getRandomSandboxIterationNoise(): number {
 }
 
 const WORST_PROFILE: TokenProfile = {
-    promptBase: 5_000,
+    promptBase: MAX_FIRST_USER_PROMPT_TOKENS,
     harnessNoteTokens: 400,
     strategyGenerationOutputPerStrategy: 1_000,
     modulesGenerationOutputPerModule: 800,
     strategyProximityOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     modulesImpactReviewOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
-    solutionCorrectionOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
+    executionAgentOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
     critiqueOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     memoryOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
-    modulesTestOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
-    dosStepIOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
-    dosFullOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
-    dosCoreSynthesisContext: 3_500,
+    modulesBuildingOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    stateSynthesisForStrategiesOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    stateSynthesisForModulesOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
+    stateSynthesisCoreContext: 3_500,
     bsrOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     bsrLedgerGrowthPerUpdate: 800,
     branchPacketShare: 1.0,
@@ -234,13 +230,13 @@ const AVERAGE_PROFILE: TokenProfile = {
     modulesGenerationOutputPerModule: 450,
     strategyProximityOutput: 2_000,
     modulesImpactReviewOutput: 2_000,
-    solutionCorrectionOutput: 6_000,
+    executionAgentOutput: 6_000,
     critiqueOutput: 2_400,
     memoryOutput: 5_500,
-    modulesTestOutput: 2_800,
-    dosStepIOutput: 2_200,
-    dosFullOutput: 3_000,
-    dosCoreSynthesisContext: 1_800,
+    modulesBuildingOutput: 2_800,
+    stateSynthesisForStrategiesOutput: 2_200,
+    stateSynthesisForModulesOutput: 3_000,
+    stateSynthesisCoreContext: 1_800,
     bsrOutput: 1_800,
     bsrLedgerGrowthPerUpdate: 400,
     branchPacketShare: 0.5,
@@ -297,7 +293,6 @@ function simulatePipelineTokens(
     modulesImpactReviewLoops: number,
     i: number,
     j: number,
-    k: number,
     isolateBranches: boolean,
     sampledDecisionsPerUpdate?: SampledBsrDecision[][]
 ): { input: number; output: number } {
@@ -323,19 +318,19 @@ function simulatePipelineTokens(
     }));
 
     const curatedContextEnabled = modulesCount > 0;
-    let sinceHeartbeat = 0, heartbeatNo = 0, globalUpdateNo = 0;
+    let heartbeatNo = 0, globalUpdateNo = 0;
 
-    const runHeartbeatModulesAndTesters = (currentHbNo: number) => {
+    const runHeartbeatModulesAndBuilders = (currentHbNo: number) => {
         let hbActiveContextTokens = profile.harnessNoteTokens;
         if (currentHbNo === 1) {
             const activeStrategiesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens, 0);
-            hbActiveContextTokens += activeStrategiesTokens + profile.dosCoreSynthesisContext;
+            hbActiveContextTokens += activeStrategiesTokens + profile.stateSynthesisCoreContext;
         } else {
-            const prevModAndTestsTokens = modulesCount * (moduleItemTokens + profile.modulesTestOutput);
+            const prevModAndTestsTokens = modulesCount * (moduleItemTokens + profile.modulesBuildingOutput);
             const mappedPacketsSchemaTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + 80, 0);
             const realizedFeedbackTokens = modulesCount * 350;
             const usedSoFarTokens = modulesFinalizedAndUsedCount * moduleItemTokens;
-            hbActiveContextTokens += prevModAndTestsTokens + mappedPacketsSchemaTokens + realizedFeedbackTokens + usedSoFarTokens + profile.dosCoreSynthesisContext;
+            hbActiveContextTokens += prevModAndTestsTokens + mappedPacketsSchemaTokens + realizedFeedbackTokens + usedSoFarTokens + profile.stateSynthesisCoreContext;
         }
 
         const hbBaseInput = profile.promptBase + hbActiveContextTokens;
@@ -347,26 +342,32 @@ function simulatePipelineTokens(
         modulesFinalizedAndUsedCount += modulesCount;
 
         totalInput += modulesCount * (profile.promptBase + moduleItemTokens);
-        totalOutput += modulesCount * profile.modulesTestOutput;
+        totalOutput += modulesCount * profile.modulesBuildingOutput;
     };
 
     for (let n = 1; n <= i; n++) {
         if (n === 1) {
             for (const branch of branches) {
                 const execInput = profile.promptBase + strategyTextTokens;
-                const execOutput = profile.solutionCorrectionOutput;
-                const critiqueInput = profile.promptBase + strategyTextTokens + execOutput;
-                const critiqueOutput = profile.critiqueOutput;
-                totalInput += execInput + critiqueInput;
-                totalOutput += execOutput + critiqueOutput;
+                const execOutput = profile.executionAgentOutput;
+                totalInput += execInput;
+                totalOutput += execOutput;
                 branch.latestSolutionTokens = execOutput;
-                branch.latestCritiqueTokens = critiqueOutput;
-                branch.windowHistoryTokens = execOutput + critiqueOutput;
+                branch.windowHistoryTokens = execOutput;
+
+                if (n < i) {
+                    const critiqueInput = profile.promptBase + strategyTextTokens + execOutput;
+                    const critiqueOutput = profile.critiqueOutput;
+                    totalInput += critiqueInput;
+                    totalOutput += critiqueOutput;
+                    branch.latestCritiqueTokens = critiqueOutput;
+                    branch.windowHistoryTokens += critiqueOutput;
+                }
             }
         } else {
             const totalAllBranchesLatestPairs = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
             const mappedPacketTokens = (curatedContextEnabled && heartbeatNo >= 1)
-                ? modulesCount * profile.branchPacketShare * (moduleItemTokens + profile.modulesTestOutput)
+                ? modulesCount * profile.branchPacketShare * (moduleItemTokens + profile.modulesBuildingOutput)
                 : 0;
 
             for (const branch of branches) {
@@ -376,15 +377,15 @@ function simulatePipelineTokens(
                 const preUpdateTokens = branch.preUpdatePairTokens;
                 const windowTokens = branch.windowHistoryTokens;
 
-                const correctionInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + mappedPacketTokens + windowTokens + peerContextTokens;
-                const correctionOutput = profile.solutionCorrectionOutput;
-                totalInput += correctionInput;
-                totalOutput += correctionOutput;
-                branch.latestSolutionTokens = correctionOutput;
-                branch.windowHistoryTokens += correctionOutput;
+                const executionInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + mappedPacketTokens + windowTokens + peerContextTokens;
+                const executionOutput = profile.executionAgentOutput;
+                totalInput += executionInput;
+                totalOutput += executionOutput;
+                branch.latestSolutionTokens = executionOutput;
+                branch.windowHistoryTokens += executionOutput;
 
                 if (n < i) {
-                    const critiqueInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + windowTokens + correctionOutput;
+                    const critiqueInput = profile.promptBase + strategyTextTokens + preUpdateTokens + memBankTokens + windowTokens + executionOutput;
                     const critiqueOutput = profile.critiqueOutput;
                     totalInput += critiqueInput;
                     totalOutput += critiqueOutput;
@@ -394,28 +395,17 @@ function simulatePipelineTokens(
             }
         }
 
-        const step = determinePostIterationStep(n, sinceHeartbeat, i, j, k, curatedContextEnabled);
-        sinceHeartbeat = step.nextSinceHeartbeat;
+        const step = determinePostIterationStep(n, i, j);
 
         if (n >= i) {
             break;
-        } else if (step.action.type === 'HEARTBEAT') {
-            heartbeatNo++;
-            if (curatedContextEnabled) {
-                const activeBranchesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
-                const prevModAndTestsForDos = heartbeatNo >= 2 ? modulesCount * (moduleItemTokens + profile.modulesTestOutput) : 0;
-                totalInput += profile.promptBase + profile.harnessNoteTokens + activeBranchesTokens + prevModAndTestsForDos;
-                totalOutput += profile.dosFullOutput;
-                runHeartbeatModulesAndTesters(heartbeatNo);
-            }
-            sinceHeartbeat = 0;
-        } else if (step.action.type === 'GLOBAL_UPDATE') {
+        } else if (step.type === 'GLOBAL_UPDATE') {
             globalUpdateNo++;
             const decisions = sampledDecisionsPerUpdate?.[globalUpdateNo - 1] ?? sampleGlobalUpdateDecisions(strategyCount);
 
             const activeBranchesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
             totalInput += profile.promptBase + profile.harnessNoteTokens + activeBranchesTokens;
-            totalOutput += profile.dosStepIOutput;
+            totalOutput += profile.stateSynthesisForStrategiesOutput;
 
             for (const branch of branches) {
                 const memBeforeWindowTokens = branch.hasMemoryBank ? profile.memoryOutput : 0;
@@ -429,7 +419,7 @@ function simulatePipelineTokens(
                 const activeStrategiesAndLatestCorrections = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens, 0);
                 const consolidatedBsrDecisionsTokens = strategyCount * 250;
                 const strategiesUsedSoFarTokens = strategiesFinalizedAndUsedCount * strategyTextTokens;
-                const guContextTokens = profile.harnessNoteTokens + activeStrategiesAndLatestCorrections + consolidatedBsrDecisionsTokens + profile.dosCoreSynthesisContext + strategiesUsedSoFarTokens;
+                const guContextTokens = profile.harnessNoteTokens + activeStrategiesAndLatestCorrections + consolidatedBsrDecisionsTokens + profile.stateSynthesisCoreContext + strategiesUsedSoFarTokens;
                 const guStratBaseInput = profile.promptBase + guContextTokens;
                 const guStratGenTurnOutput = Math.min(DEFAULT_ROLE_MAX_OUTPUT_TOKENS, changedCount * strategyTextTokens);
                 const guStratLoop = computeProximityLoopTokens(guStratBaseInput, strategyProximityLoops, guStratGenTurnOutput, profile.strategyProximityOutput);
@@ -451,7 +441,7 @@ function simulatePipelineTokens(
                     branch.updatesSurvived += 1;
                 } else {
                     const execInput = profile.promptBase + strategyTextTokens;
-                    const execOutput = profile.solutionCorrectionOutput;
+                    const execOutput = profile.executionAgentOutput;
                     const critiqueInput = profile.promptBase + strategyTextTokens + execOutput;
                     const critiqueOutput = profile.critiqueOutput;
                     totalInput += execInput + critiqueInput;
@@ -468,13 +458,12 @@ function simulatePipelineTokens(
             heartbeatNo++;
             if (curatedContextEnabled) {
                 const postUpdateBranchesTokens = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
-                const prevModAndTestsForStepIi = heartbeatNo >= 2 ? modulesCount * (moduleItemTokens + profile.modulesTestOutput) : 0;
+                const prevModAndTestsForModules = heartbeatNo >= 2 ? modulesCount * (moduleItemTokens + profile.modulesBuildingOutput) : 0;
                 const slotStatusesTokens = strategyCount * 80;
-                totalInput += profile.promptBase + profile.harnessNoteTokens + slotStatusesTokens + profile.dosStepIOutput + prevModAndTestsForStepIi + postUpdateBranchesTokens;
-                totalOutput += profile.dosFullOutput;
-                runHeartbeatModulesAndTesters(heartbeatNo);
+                totalInput += profile.promptBase + profile.harnessNoteTokens + slotStatusesTokens + profile.stateSynthesisForStrategiesOutput + prevModAndTestsForModules + postUpdateBranchesTokens;
+                totalOutput += profile.stateSynthesisForModulesOutput;
+                runHeartbeatModulesAndBuilders(heartbeatNo);
             }
-            sinceHeartbeat = 0;
         }
     }
 
@@ -487,15 +476,14 @@ export function calculateDeepthinkTokenEstimate(args: DeepthinkTokenEstimateInpu
     const modulesCount = clampInteger(args.modulesCount, 0, MAX_MODULES_COUNT);
     const modulesImpactReviewLoops = clampInteger(args.modulesImpactReviewLoops ?? 1, 0, MAX_MODULES_IMPACT_REVIEW_LOOPS);
     const i = clampInteger(args.i ?? args.deepthinkDepth ?? 10, 1, MAX_DEEPTHINK_DEPTH);
-    const j = clampInteger(args.j ?? 4, 3, 8);
-    const k = clampInteger(args.k ?? 4, 2, j);
+    const j = 4;
     const isolateBranches = args.codeExecutionEnabled === true || args.isolateBranches === true;
 
     const maxUpdates = Math.floor(Math.max(0, i - 1) / j);
     const sampledDecisionsPerUpdate = Array.from({ length: maxUpdates }, () => sampleGlobalUpdateDecisions(strategiesCount));
 
-    const averageSim = simulatePipelineTokens(AVERAGE_PROFILE, strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, i, j, k, isolateBranches, sampledDecisionsPerUpdate);
-    const worstSim = simulatePipelineTokens(WORST_PROFILE, strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, i, j, k, isolateBranches, sampledDecisionsPerUpdate);
+    const averageSim = simulatePipelineTokens(AVERAGE_PROFILE, strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, i, j, isolateBranches, sampledDecisionsPerUpdate);
+    const worstSim = simulatePipelineTokens(WORST_PROFILE, strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, i, j, isolateBranches, sampledDecisionsPerUpdate);
 
     const apiCalls = calculateDeepthinkApiCallsFromParams({
         strategiesCount,
@@ -504,7 +492,6 @@ export function calculateDeepthinkTokenEstimate(args: DeepthinkTokenEstimateInpu
         modulesImpactReviewLoops,
         i,
         j,
-        k,
         codeExecutionEnabled: args.codeExecutionEnabled,
         deepthinkCodeExecutionEnabled: args.codeExecutionEnabled,
     } as any);

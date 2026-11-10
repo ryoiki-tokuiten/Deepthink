@@ -47,7 +47,6 @@ export interface DeepthinkCoreDeps {
     getDeepthinkDepth: () => number;
     getI?: () => number;
     getJ?: () => number;
-    getK?: () => number;
     getIsolateBranchesEnabled: () => boolean;
     getDeepthinkCodeExecutionEnabled: () => boolean;
     updateControlsState: (newState: any) => void;
@@ -69,7 +68,6 @@ function captureRunConfig(): DeepthinkRunConfig {
     return {
         i: Math.round(deps.getI?.() ?? (deps.getDeepthinkDepth ? deps.getDeepthinkDepth() : 10) ?? 10),
         j: Math.round(deps.getJ?.() ?? 4),
-        k: Math.round(deps.getK?.() ?? 4),
         strategiesCount: deps.getSelectedStrategiesCount(),
         strategyProximityLoops: deps.getStrategyProximityLoops(),
         modulesCount: deps.getSelectedModulesCount(),
@@ -356,7 +354,7 @@ export async function startDeepthinkAnalysisProcess(challengeText: string, direc
         modulesImpactReviewHistory: [],
         bsrRecords: [],
         branchLedgers: {},
-        dosOutputs: [],
+        stateSynthesisOutputs: [],
         liveEvents: [],
         directContextFiles: directContextFiles.map(f => ({
             name: f.name,

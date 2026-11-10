@@ -5,7 +5,6 @@ export type AgentStatus = 'pending' | 'processing' | 'completed' | 'error' | 'ca
 export interface DeepthinkRunConfig {
     i: number;
     j: number;
-    k: number;
     strategiesCount: number;
     strategyProximityLoops: number;
     modulesCount: number;
@@ -141,26 +140,26 @@ export interface BsrGlobalUpdateRecord {
 
 export type ModuleUtilizationClassification = 'USED_CORRECTLY' | 'USED_PARTIALLY' | 'NOT_USED' | 'MISUSED';
 
-export interface DosBranchUtilization {
+export interface StateSynthesisBranchUtilization {
     branch_id: string;
     utilization: { reason: string; classification: ModuleUtilizationClassification };
 }
 
-export interface DosCritiqueCounterevidence {
+export interface StateSynthesisCritiqueCounterevidence {
     branch_id: string;
     reason: string;
     classification: 'STRONG';
 }
 
-export interface DosModuleFeedbackItem {
+export interface StateSynthesisModuleFeedbackItem {
     module_id: string;
-    branch_utilization: DosBranchUtilization[];
-    critique_counterevidence?: DosCritiqueCounterevidence[];
+    branch_utilization: StateSynthesisBranchUtilization[];
+    critique_counterevidence?: StateSynthesisCritiqueCounterevidence[];
 }
 
-export interface DosOutput {
+export interface StateSynthesisOutput {
     core_synthesis: Record<string, unknown>;
-    module_feedback?: DosModuleFeedbackItem[];
+    module_feedback?: StateSynthesisModuleFeedbackItem[];
 }
 
 export interface RealizedModuleFeedback {
@@ -183,7 +182,7 @@ export interface RealizedModuleFeedback {
 export interface HeartbeatBlock {
     heartbeat_no: number;
     iteration: number;
-    dosFilePath?: string;
+    stateSynthesisFilePath?: string;
     modules: DeepthinkModuleData[];
     realized_feedback: RealizedModuleFeedback[];
 }
@@ -265,10 +264,10 @@ export interface DeepthinkPipelineState {
     repositoryRevision?: string;
     bsrRecords: BsrGlobalUpdateRecord[];
     branchLedgers: Record<string, BsrLedgerEntry[]>;
-    dosOutputs: Array<{
-        callType: 'heartbeat' | 'step_i' | 'step_ii';
+    stateSynthesisOutputs: Array<{
+        callType: 'strategies' | 'modules';
         iteration: number;
-        output: DosOutput;
+        output: StateSynthesisOutput;
     }>;
     heartbeats: HeartbeatBlock[];
     modulesImpactReviewHistory: ProximityTurn[];
@@ -417,7 +416,7 @@ export function evaluateBranchState(
     };
 }
 
-export function calculateUtilizationVector(branchUtilizations: DosBranchUtilization[]) {
+export function calculateUtilizationVector(branchUtilizations: StateSynthesisBranchUtilization[]) {
     let c = 0, p = 0, n = 0, m = 0;
     for (const bu of branchUtilizations) {
         if (bu.utilization.classification === 'USED_CORRECTLY') c++;
@@ -429,69 +428,51 @@ export function calculateUtilizationVector(branchUtilizations: DosBranchUtilizat
     return total === 0 ? undefined : { correct_use: c / total, partial_use: p / total, not_used: n / total, misused: m / total };
 }
 
-export type PostIterationAction = { type: 'GLOBAL_UPDATE' } | { type: 'HEARTBEAT' } | { type: 'NONE' };
+export type PostIterationAction = { type: 'GLOBAL_UPDATE' } | { type: 'NONE' };
 
-export function validateLoopBounds(i: number, j: number, k: number): { valid: boolean; error?: string } {
+export const FIXED_GLOBAL_UPDATE_INTERVAL = 4;
+
+export function validateLoopBounds(i: number, j: number = FIXED_GLOBAL_UPDATE_INTERVAL): { valid: boolean; error?: string } {
     if (i < 5 || i > 20) return { valid: false, error: `Iteration count i must be between 5 and 20 (got ${i}).` };
     if (j < 3 || j > 8) return { valid: false, error: `Global update frequency j must be between 3 and 8 (got ${j}).` };
-    if (k < 2 || k > j) return { valid: false, error: `Heartbeat interval k must be between 2 and j (${j}) (got ${k}).` };
     return { valid: true };
-}
-
-export function isHeartbeatDue(n: number, since_heartbeat: number, k: number, j: number, i: number): boolean {
-    if (since_heartbeat !== k) return false;
-    const nextGlobalUpdate = Math.ceil((n + 0.0001) / j) * j;
-    if (nextGlobalUpdate < i && nextGlobalUpdate - n < 2) return false;
-    return true;
 }
 
 export function determinePostIterationStep(
     n: number,
-    currentSinceHeartbeat: number,
     i: number,
-    j: number,
-    k: number,
-    curatedContextEnabled: boolean
-): { action: PostIterationAction; nextSinceHeartbeat: number } {
-    if (n >= i) return { action: { type: 'NONE' }, nextSinceHeartbeat: currentSinceHeartbeat };
-    if (n % j === 0) return { action: { type: 'GLOBAL_UPDATE' }, nextSinceHeartbeat: 0 };
-    const incrementedSinceHeartbeat = currentSinceHeartbeat + 1;
-    if (curatedContextEnabled && isHeartbeatDue(n, incrementedSinceHeartbeat, k, j, i)) {
-        return { action: { type: 'HEARTBEAT' }, nextSinceHeartbeat: 0 };
-    }
-    return { action: { type: 'NONE' }, nextSinceHeartbeat: incrementedSinceHeartbeat };
+    j: number = FIXED_GLOBAL_UPDATE_INTERVAL
+): PostIterationAction {
+    if (n >= i) return { type: 'NONE' };
+    if (n % j === 0) return { type: 'GLOBAL_UPDATE' };
+    return { type: 'NONE' };
 }
 
 export interface LoopScheduleSummary {
-    standaloneHeartbeats: number;
     globalUpdates: number;
     totalHeartbeats: number;
     heartbeatIterations: number[];
     globalUpdateIterations: number[];
 }
 
-export function calculateLoopSchedule(i: number, j: number, k: number, curatedContextEnabled: boolean): LoopScheduleSummary {
-    let sinceHeartbeat = 0, standaloneHeartbeats = 0, globalUpdates = 0;
-    const heartbeatIterations: number[] = [];
+export function calculateLoopSchedule(
+    i: number,
+    j: number = FIXED_GLOBAL_UPDATE_INTERVAL,
+    curatedContextEnabled = false
+): LoopScheduleSummary {
+    let globalUpdates = 0;
     const globalUpdateIterations: number[] = [];
     for (let n = 1; n <= i; n++) {
-        const step = determinePostIterationStep(n, sinceHeartbeat, i, j, k, curatedContextEnabled);
-        sinceHeartbeat = step.nextSinceHeartbeat;
-        if (step.action.type === 'GLOBAL_UPDATE') {
+        const action = determinePostIterationStep(n, i, j);
+        if (action.type === 'GLOBAL_UPDATE') {
             globalUpdates++;
             globalUpdateIterations.push(n);
-            sinceHeartbeat = 0;
-        } else if (step.action.type === 'HEARTBEAT') {
-            standaloneHeartbeats++;
-            heartbeatIterations.push(n);
-            sinceHeartbeat = 0;
         }
     }
     return {
-        standaloneHeartbeats,
         globalUpdates,
-        totalHeartbeats: standaloneHeartbeats + (curatedContextEnabled ? globalUpdates : 0),
-        heartbeatIterations,
+        totalHeartbeats: curatedContextEnabled ? globalUpdates : 0,
+        heartbeatIterations: curatedContextEnabled ? [...globalUpdateIterations] : [],
         globalUpdateIterations,
     };
 }

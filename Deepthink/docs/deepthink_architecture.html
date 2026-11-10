@@ -203,9 +203,7 @@
   </svg>
   <main>
     <h1>Deepthink architecture</h1>
-    <p class="lede">End-to-end execution topology, loop scheduling, stateless context engineering, dual-tier memory and
-      trajectory rewind, multi-agent coordination and verification harnesses, bounded tool horizons, curated context
-      heartbeats, BSR information-theoretic decision mechanics, and single-tree git persistence.</p>
+    <p class="lede">End-to-end execution topology, unified Global Update &amp; Heartbeat loop scheduling ($j = 4$), stateless context engineering, dual-tier memory and trajectory rewind, multi-agent coordination and verification harnesses, bounded tool horizons, State Synthesis &amp; Modules Building, BSR empirical decision mechanics, and single-tree git persistence.</p>
     <nav class="toc" aria-label="Sections">
       <a href="#sec-1">I. Topology &amp; Scheduling</a>
       <a href="#sec-2">II. Context &amp; Trajectory Memory</a>
@@ -237,7 +235,7 @@
     // ============================================================================
     const NG = (() => {
       const { C, T, L, P, D, ln, box } = HX;
-      const cols = [156, 299, 442, 585], [c0, c1, c2, c3] = cols, Y = { 1: 188, 2: 222, 3: 256, 4: 314, 5: 348, 6: 532, 7: 566, 8: 600, 9: 658, 10: 692 };
+      const cols = [156, 299, 442, 585], [c0, c1, c2, c3] = cols, Y = { 1: 188, 2: 222, 3: 256, 4: 290, 5: 484, 6: 518, 7: 552, 8: 586, 9: 636, 10: 670 };
       const X0 = 84, X1 = 657, XW = X1 - X0, MX = 370;
       const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', OR = '#BA7517';
       const node = (x, y, k) => {
@@ -249,161 +247,148 @@
         if (k == 'z') return `<rect x="${x - 7}" y="${y - 7}" width="14" height="14" rx="2" fill="${G}" stroke="#04342C" stroke-width="1"/>`;
         return `<rect x="${x - 7}" y="${y - 7}" width="14" height="14" rx="2" fill="${V}" stroke="#26215C" stroke-width="1"/>`;
       };
-      const strip = (y, x = X0, w = XW) => `<rect x="${x}" y="${y}" width="${w}" height="20" rx="3" fill="#E1F5EE" stroke="${G}" stroke-width=".9" stroke-dasharray="4 3"/>` + T(x + w / 2, y + 10, 'Harness Improvements / Evaluation-Function Pertubations / Transfer Learning', 'middle', 'ts', 'font-size:10.5px;font-weight:600;fill:#085041');
+      const strip = (y, x = X0, w = XW) => `<rect x="${x}" y="${y}" width="${w}" height="20" rx="3" fill="#E1F5EE" stroke="${G}" stroke-width=".9" stroke-dasharray="4 3"/>` + T(x + w / 2, y + 10, 'State-Synthesis-For-Modules → Modules Generator ⇄ Reviewer → Parallel Modules Building', 'middle', 'ts', 'font-size:10px;font-weight:600;fill:#085041');
       let s = '';
       for (let n = 1; n <= 10; n++)s += ln(X0, Y[n], X1, Y[n], '#e7e4db', .8, '2 3') + T(X0 - 10, Y[n], 'iter ' + n, 'end', 'ts', 'font-size:9.5px;fill:#5a5955');
 
-      // Global update container background (drawn before spines and rollback arc)
-      s += `<rect x="${X0}" y="364" width="${XW}" height="134" rx="3" fill="#FBF1EC" stroke="${R}" stroke-width="1.2"/>`;
+      // Global update container background (after iter 4)
+      s += `<rect x="${X0}" y="316" width="${XW}" height="144" rx="3" fill="#FBF1EC" stroke="${R}" stroke-width="1.2"/>`;
 
       // Top seed generation
       s += L('g', 290, 14, 160, 28, 'Core challenge') + L('t', 270, 60, 200, 50, 'Strategy ⇄ proximity loop', 'seed: main1 … main4') + P('M370 42V58');
       cols.forEach((cx, i) => { s += P(`M370 110C370 124 ${cx} 118 ${cx} 133`) + `<rect x="${cx - 30}" y="134" width="60" height="18" rx="3" fill="#F1EFE8" stroke="#5F5E5A" stroke-width=".8"/>` + T(cx, 143, 'main' + (i + 1), 'middle', 'ts m', 'font-size:11px') });
 
-      // Segmented branch spines so lines never cross through heartbeat strips or global update headers
-      [c0, c1, c2, c3].forEach(x => {
-        s += ln(x, 152, x, 272); // iter 1..3 down to HB1 top
-        s += ln(x, 600, x, 616); // iter 8 down to HB3 top
-        s += ln(x, 642, x, 692); // after HB3 down to iter 10
-      });
+      // Segmented branch spines
       [c0, c1, c3].forEach(x => {
-        s += ln(x, 298, x, 348); // after HB1 down to iter 5
+        s += ln(x, 152, x, 290);
       });
-      // c2 (main3) iter 4..5 are discarded by rollback
-      s += ln(c2, 298, c2, 348, N, 1.2, '3 3');
-      // Spines inside Global Update (below header, stopping at internal HB2 strip)
+      s += ln(c2, 152, c2, 222) + ln(c2, 222, c2, 290, N, 1.2, '3 3');
       [c0, c2, c3].forEach(x => {
-        s += ln(x, 402, x, 462);
-        s += ln(x, 488, x, 600);
+        s += ln(x, 354, x, 424);
+        s += ln(x, 450, x, 670);
       });
-      // c1 (main2) is replaced in Global Update and runs as new branch (purple spine)
-      s += ln(c1, 402, c1, 462, V, 1.4) + ln(c1, 488, c1, 600, V, 1.4);
+      s += ln(c1, 354, c1, 424, V, 1.4) + ln(c1, 450, c1, 670, V, 1.4);
 
-      // Rollback arc for main3 (c2): routed in open lane ax=c2+56 and drawn BEFORE strips/header so it ducks cleanly behind banners
+      // Rollback arc for main3 (c2) from iter 2
       const ax = c2 + 56;
-      s += `<path d="M${c2 + 7} 256C${c2 + 46} 256 ${ax} 266 ${ax} 282V510C${ax} 526 ${c2 + 42} 532 ${c2 + 7} 532" fill="none" stroke="${V}" stroke-width="1.4" marker-end="url(#av)"/>`;
-      s += box(ax - 38, 320, 76, 18, '#EEEDFE', V, .9, 3) + T(ax, 329, 'restore iter. 3', 'middle', 'ts', 'font-size:9px;font-weight:700;fill:#26215C');
+      s += `<path d="M${c2 + 7} 222C${c2 + 46} 222 ${ax} 232 ${ax} 248V462C${ax} 478 ${c2 + 42} 484 ${c2 + 7} 484" fill="none" stroke="${V}" stroke-width="1.4" marker-end="url(#av)"/>`;
+      s += box(ax - 38, 260, 76, 18, '#EEEDFE', V, .9, 3) + T(ax, 269, 'restore iter. 2', 'middle', 'ts', 'font-size:9px;font-weight:700;fill:#26215C');
 
-      // Opaque Global Update header bar & Heartbeat strips drawn ON TOP of spines/curves so text is never crossed
-      s += `<rect x="${X0 + 1}" y="365" width="${XW - 2}" height="16" rx="2" fill="#FBF1EC"/>` +
-        T(MX, 373, 'Get an objective branch state representation & decide deterministically what branches to keep/update/prune', 'middle', 'ts', 'font-size:9.8px;font-weight:600;fill:#4A1B0C');
-      s += strip(272) + strip(462, X0 + 8, XW - 16) + strip(616);
+      // Opaque Global Update header bar & Concluding Heartbeat strip
+      s += `<rect x="${X0 + 1}" y="317" width="${XW - 2}" height="16" rx="2" fill="#FBF1EC"/>` +
+        T(MX, 325, 'Global Update (j = 4): BSR + State-Synthesis-For-Strategies → Deterministic Decisions → Strategy Revision', 'middle', 'ts', 'font-size:9.6px;font-weight:600;fill:#4A1B0C');
+      s += strip(424, X0 + 8, XW - 16) + strip(602);
 
       // Downward triangles below each heartbeat strip
-      cols.forEach(cx => { [292, 482, 636].forEach(y => { s += `<path d="M${cx - 4} ${y}L${cx + 4} ${y}L${cx} ${y + 6}Z" fill="${G}"/>` }) });
+      cols.forEach(cx => { [444, 622].forEach(y => { s += `<path d="M${cx - 4} ${y}L${cx + 4} ${y}L${cx} ${y + 6}Z" fill="${G}"/>` }) });
 
       // Iteration nodes
       for (let n = 1; n <= 10; n++) {
         const k = n == 1 ? 'f' : n == 10 ? 'z' : 'n';
-        cols.forEach((cx, i) => { let kk = k; if (i == 1 && n >= 6) kk = n == 10 ? 'zv' : 'v'; if (i == 2 && (n == 4 || n == 5)) kk = 'x'; s += node(cx, Y[n], kk) })
+        cols.forEach((cx, i) => { let kk = k; if (i == 1 && n >= 5) kk = n == 10 ? 'zv' : 'v'; if (i == 2 && (n == 3 || n == 4)) kk = 'x'; s += node(cx, Y[n], kk) })
       }
 
       // Global update row: new branch first run (c1), distillation of survivors (c0, c2, c3)
-      s += node(c1, 428, 'v') + node(c0, 428, 'd') + node(c2, 428, 'd') + node(c3, 428, 'd');
-      s += `<path d="M${c1 - 6} 342L${c1 + 6} 354M${c1 + 6} 342L${c1 - 6} 354" stroke="${R}" stroke-width="2"/>` +
-        T(c1 + 12, 348, 'archived', 'start', 'ts', `font-size:10.5px;fill:${R}`) +
-        T(c1 + 12, 428, 'new branch', 'start', 'ts', `font-size:10px;fill:${V}`) +
-        T(c1 + 12, 440, 'first run', 'start', 'ts', `font-size:10px;fill:${V}`);
+      s += node(c1, 384, 'v') + node(c0, 384, 'd') + node(c2, 384, 'd') + node(c3, 384, 'd');
+      s += `<path d="M${c1 - 6} 284L${c1 + 6} 296M${c1 + 6} 284L${c1 - 6} 296" stroke="${R}" stroke-width="2"/>` +
+        T(c1 + 12, 290, 'archived', 'start', 'ts', `font-size:10.5px;fill:${R}`) +
+        T(c1 + 12, 384, 'new branch', 'start', 'ts', `font-size:10px;fill:${V}`) +
+        T(c1 + 12, 396, 'exec + crit', 'start', 'ts', `font-size:10px;fill:${V}`);
 
       // Decision chips
-      const chip = (x, a, f, st, tc) => `<rect x="${x - 42}" y="382" width="84" height="20" rx="3" fill="${f}" stroke="${st}" stroke-width="1"/>` + T(x, 392, a, 'middle', 'ts', `font-size:10px;font-weight:600;letter-spacing:.2px;fill:${tc}`);
+      const chip = (x, a, f, st, tc) => `<rect x="${x - 42}" y="336" width="84" height="20" rx="3" fill="${f}" stroke="${st}" stroke-width="1"/>` + T(x, 346, a, 'middle', 'ts', `font-size:10px;font-weight:600;letter-spacing:.2px;fill:${tc}`);
       s += chip(c0, 'CONTINUE', '#E1F5EE', G, '#04342C') + chip(c1, 'PRUNE', '#FAECE7', R, '#4A1B0C') + chip(c2, 'EVOLVE ↩', '#EEEDFE', V, '#26215C') + chip(c3, 'CONTINUE', '#E1F5EE', G, '#04342C');
 
       // Feedback lane to Strategy ⇄ Proximity loop
-      s += `<path d="M${X0} 392H44V85H268" fill="none" stroke="#333" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#a)"/>` + `<text class="ts" transform="translate(30 232) rotate(-90)" text-anchor="middle" dominant-baseline="central" style="font-size:11px">revised strategies, changed slots only</text>`;
+      s += `<path d="M${X0} 346H44V85H268" fill="none" stroke="#333" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#a)"/>` + `<text class="ts" transform="translate(30 212) rotate(-90)" text-anchor="middle" dominant-baseline="central" style="font-size:11px">revised strategies, changed slots only</text>`;
 
-      // Converge to Final Judge (no extra subtitle text)
-      cols.forEach((cx, i) => { const ex = [310, 350, 390, 430][i]; s += `<path d="M${cx} 700C${cx} 727 ${ex} 722 ${ex} 745" fill="none" stroke="#333" stroke-width="1.2" marker-end="url(#a)"/>` });
-      s += L('t', 270, 746, 200, 44, 'Final judge');
+      // Final surviving outputs banner
+      s += L('t', 220, 706, 300, 38, 'Surviving Branch Final Outputs (Iter i)', 'Execution Agent only on final iteration');
 
       // Legend
       const lg = (x, y, k, t) => node(x, y, k) + T(x + 14, y, t, 'start');
-      s += lg(40, 816, 'f', 'execution + critique (first run)') + lg(250, 816, 'n', 'correction + critique') + lg(460, 816, 'z', 'correction + critique (final)');
-      s += lg(40, 842, 'v', 'new branch in a freed slot') + lg(250, 842, 'x', 'discarded by rollback') + `<path d="M454 836L466 848M466 836L454 848" stroke="${R}" stroke-width="2"/>` + T(474, 842, 'pruned, archived', 'start');
-      s += `<rect x="33" y="861" width="14" height="14" rx="2" fill="#E1F5EE" stroke="${G}" stroke-width=".9" stroke-dasharray="3 2"/>` + T(54, 868, 'heartbeat', 'start') + `<rect x="243" y="861" width="14" height="14" rx="2" fill="#FBF1EC" stroke="${R}" stroke-width="1.2"/>` + T(264, 868, 'global update', 'start') + lg(460, 868, 'd', 'distillation run');
-      return [890, 'Deepthink overview', s, ''];
+      s += lg(40, 770, 'f', 'Execution + Critique (iter 1)') + lg(250, 770, 'n', 'Execution + Critique') + lg(460, 770, 'z', 'Final Execution (iter i, no critique)');
+      s += lg(40, 796, 'v', 'new branch in a freed slot') + lg(250, 796, 'x', 'discarded by rollback') + `<path d="M454 790L466 802M466 790L454 802" stroke="${R}" stroke-width="2"/>` + T(474, 796, 'pruned, archived', 'start');
+      s += `<rect x="33" y="815" width="14" height="14" rx="2" fill="#E1F5EE" stroke="${G}" stroke-width=".9" stroke-dasharray="3 2"/>` + T(54, 822, 'Global Update Heartbeat', 'start') + `<rect x="243" y="815" width="14" height="14" rx="2" fill="#FBF1EC" stroke="${R}" stroke-width="1.2"/>` + T(264, 822, 'Global Update (every j = 4)', 'start') + lg(460, 822, 'd', 'Memory Bank distillation');
+      return [844, 'Deepthink overview', s, ''];
     })();
 
     // ============================================================================
-    // FIGURE 2: LOOP CONTROLLER & HEARTBEAT WORTHINESS SCHEDULE
+    // FIGURE 2: LOOP CONTROLLER & FIXED J=4 GLOBAL UPDATE SCHEDULE
     // ============================================================================
     const NSCHED = (() => {
       const { C, T, L, P, D, ln, box, badge } = HX;
       const G = '#0F6E56', R = '#993C1D', V = '#534AB7', OR = '#BA7517';
-      const gray = 'fill:#5a5955;font-size:12px', sg = 'fill:#5a5955;font-size:10px';
+      const gray = 'fill:#5a5955;font-size:12px';
       let s = '';
 
       // (a) Post-iteration decision tree
-      s += T(30, 20, '(a) Post-iteration loop controller: what runs after iteration n finishes', 'start', 'th');
-      s += T(30, 38, 'Evaluated in strict priority order after all active branches finish iteration n.', 'start', 'ts', gray);
+      s += T(30, 20, '(a) Post-iteration loop controller: unified Global Update & Heartbeat cadence (j = 4)', 'start', 'th');
+      s += T(30, 38, 'Evaluated after all active branches finish iteration n. Curated context modules are built exclusively inside Global Updates.', 'start', 'ts', gray);
 
-      s += L('g', 30, 58, 118, 46, 'Iteration n done', 'all branches synced') + P('M148 81H174');
-      s += box(176, 58, 128, 46, '#EEEDFE', V, 1.1, 4) +
-        T(240, 73, '1. Is n = i ?', 'middle', 'th', 'font-size:11.5px;fill:#26215C') +
-        T(240, 90, 'Yes → Final Judge', 'middle', 'ts', 'font-size:10px;fill:#26215C') +
-        P('M304 81H330');
+      s += L('g', 30, 58, 138, 46, 'Iteration n done', 'all branches synced') + P('M168 81H194');
+      s += box(196, 58, 148, 46, '#EEEDFE', V, 1.1, 4) +
+        T(270, 73, '1. Is n = i ?', 'middle', 'th', 'font-size:11.5px;fill:#26215C') +
+        T(270, 90, 'Yes → Pipeline Complete', 'middle', 'ts', 'font-size:10px;fill:#26215C') +
+        P('M344 81H370');
 
-      s += box(332, 58, 146, 46, '#FAECE7', R, 1.1, 4) +
-        T(405, 73, '2. Is n mod j = 0 ?', 'middle', 'th', 'font-size:11.5px;fill:#4A1B0C') +
-        T(405, 90, 'Yes → Update + HB (c=0)', 'middle', 'ts', 'font-size:10px;fill:#4A1B0C') +
-        P('M478 81H504');
+      s += box(372, 58, 152, 46, '#FAECE7', R, 1.1, 4) +
+        T(448, 73, '2. Is n mod 4 = 0 ?', 'middle', 'th', 'font-size:11.5px;fill:#4A1B0C') +
+        T(448, 90, 'Yes → Global Update + HB', 'middle', 'ts', 'font-size:10px;fill:#4A1B0C') +
+        P('M524 81H546');
 
-      s += box(506, 58, 144, 46, '#E1F5EE', G, 1.1, 4) +
-        T(578, 73, '3. Increment c++', 'middle', 'th', 'font-size:11.5px;fill:#04342C') +
-        T(578, 90, 'If c = k & worthy → HB', 'middle', 'ts', 'font-size:10px;fill:#04342C');
+      s += box(548, 58, 102, 46, '#E1F5EE', G, 1.1, 4) +
+        T(599, 73, '3. Otherwise', 'middle', 'th', 'font-size:11.5px;fill:#04342C') +
+        T(599, 90, 'Next Iter n+1', 'middle', 'ts', 'font-size:10px;fill:#04342C');
 
-      // Worthiness rule card
+      // Unified Global Update sequence card
       s += box(30, 116, 620, 48, '#F8F7F2', '#b5b3aa', .9, 4) +
-        T(42, 132, 'Heartbeat Worthiness Rule (when c = k): let G = next multiple of j after n', 'start', 'th', 'font-size:11px') +
-        T(42, 150, 'A standalone heartbeat must serve at least 2 upcoming corrections before the next Global Update’s own heartbeat.', 'start', 'ts', 'font-size:10px;fill:#5a5955') +
-        badge(448, 123, 190, 18, 'Skip HB if G < i and G − n < 2', '#FAEEDA', OR, '#412402', 9.5);
+        T(42, 132, 'Unified Global Update Pipeline (when n mod 4 = 0 and n < i):', 'start', 'th', 'font-size:11px') +
+        T(42, 150, 'BSR ∥ State-Synthesis-For-Strategies → Strategy Gen ⇄ Prox → Memory Bank ∥ Pruned Exec+Crit → State-Synthesis-For-Modules → Modules Building', 'start', 'ts', 'font-size:9.6px;fill:#5a5955');
 
       // (b) Worked timelines
       const y1 = 184;
       s += ln(30, y1 - 8, 650, y1 - 8, '#cfcdc4', 1);
-      s += T(30, y1 + 10, '(b) Schedule comparison: standard run vs skipped heartbeat before an imminent Global Update', 'start', 'th');
+      s += T(30, y1 + 10, '(b) Example schedules: default i = 10 and extended i = 15 with fixed Global Update window j = 4', 'start', 'th');
 
-      // Timeline 1: i=15, j=5, k=3
-      const ty1 = y1 + 42, X15 = n => 48 + 39 * (n - 1);
-      s += T(30, ty1 - 12, 'Run A (i = 15, j = 5, k = 3): every c = 3 trigger has G − n = 2 ≥ 2, so all heartbeats run', 'start', 'ts', 'font-size:11px;font-weight:600');
-      s += ln(40, ty1 + 14, 610, ty1 + 14, '#333', 1);
-      for (let n = 1; n <= 15; n++) {
-        const x = X15(n);
-        let fi = '#fff', st = '#8a8880', lbl = '', tc = '#333';
-        if (n == 3 || n == 8 || n == 13) { fi = '#E1F5EE'; st = G; lbl = 'HB'; tc = '#04342C' }
-        else if (n == 5 || n == 10) { fi = '#FAECE7'; st = R; lbl = 'GU+HB'; tc = '#4A1B0C' }
-        else if (n == 15) { fi = '#EEEDFE'; st = V; lbl = 'JUDGE'; tc = '#26215C' }
-        s += `<rect x="${x - 16}" y="${ty1}" width="32" height="28" rx="3" fill="${fi}" stroke="${st}" stroke-width="1"/>` +
+      // Timeline 1: i=10, j=4
+      const ty1 = y1 + 42, X10 = n => 48 + 56 * (n - 1);
+      s += T(30, ty1 - 12, 'Default Run (i = 10, j = 4): Global Updates + Heartbeats run after iterations 4 and 8; iteration 10 runs final Executions', 'start', 'ts', 'font-size:11px;font-weight:600');
+      s += ln(40, ty1 + 14, 570, ty1 + 14, '#333', 1);
+      for (let n = 1; n <= 10; n++) {
+        const x = X10(n);
+        let fi = '#fff', st = '#8a8880', lbl = 'E+C', tc = '#333';
+        if (n == 4 || n == 8) { fi = '#FAECE7'; st = R; lbl = 'GU+HB'; tc = '#4A1B0C' }
+        else if (n == 10) { fi = '#EEEDFE'; st = V; lbl = 'FINAL E'; tc = '#26215C' }
+        s += `<rect x="${x - 22}" y="${ty1}" width="44" height="28" rx="3" fill="${fi}" stroke="${st}" stroke-width="1"/>` +
           T(x, ty1 + 9, n, 'middle', 'ts m', 'font-size:9.5px;font-weight:700') +
-          T(x, ty1 + 21, lbl || '—', 'middle', 'ts m', `font-size:7.5px;font-weight:700;fill:${tc}`);
+          T(x, ty1 + 21, lbl, 'middle', 'ts m', `font-size:7.5px;font-weight:700;fill:${tc}`);
       }
 
-      // Timeline 2: i=14, j=6, k=5
-      const ty2 = y1 + 108, X14 = n => 48 + 42 * (n - 1);
-      s += T(30, ty2 - 12, 'Run B (i = 14, j = 6, k = 5): at n = 5, c reaches k = 5, but G = 6 < 14 and G − n = 1 < 2 → SKIPPED', 'start', 'ts', 'font-size:11px;font-weight:600');
+      // Timeline 2: i=15, j=4
+      const ty2 = y1 + 108, X15 = n => 48 + 39 * (n - 1);
+      s += T(30, ty2 - 12, 'Extended Run (i = 15, j = 4): Global Updates + Heartbeats run after iterations 4, 8, and 12; iteration 15 runs final Executions', 'start', 'ts', 'font-size:11px;font-weight:600');
       s += ln(40, ty2 + 14, 610, ty2 + 14, '#333', 1);
-      for (let n = 1; n <= 14; n++) {
-        const x = X14(n);
-        let fi = '#fff', st = '#8a8880', lbl = '', tc = '#333';
-        if (n == 5) { fi = '#FAEEDA'; st = OR; lbl = 'SKIP'; tc = '#412402' }
-        else if (n == 6 || n == 12) { fi = '#FAECE7'; st = R; lbl = 'GU+HB'; tc = '#4A1B0C' }
-        else if (n == 11) { fi = '#FAEEDA'; st = OR; lbl = 'SKIP'; tc = '#412402' }
-        else if (n == 14) { fi = '#EEEDFE'; st = V; lbl = 'JUDGE'; tc = '#26215C' }
-        s += `<rect x="${x - 17}" y="${ty2}" width="34" height="28" rx="3" fill="${fi}" stroke="${st}" stroke-width="1"/>` +
+      for (let n = 1; n <= 15; n++) {
+        const x = X15(n);
+        let fi = '#fff', st = '#8a8880', lbl = 'E+C', tc = '#333';
+        if (n == 4 || n == 8 || n == 12) { fi = '#FAECE7'; st = R; lbl = 'GU+HB'; tc = '#4A1B0C' }
+        else if (n == 15) { fi = '#EEEDFE'; st = V; lbl = 'FINAL'; tc = '#26215C' }
+        s += `<rect x="${x - 16}" y="${ty2}" width="32" height="28" rx="3" fill="${fi}" stroke="${st}" stroke-width="1"/>` +
           T(x, ty2 + 9, n, 'middle', 'ts m', 'font-size:9.5px;font-weight:700') +
-          T(x, ty2 + 21, lbl || '—', 'middle', 'ts m', `font-size:7.5px;font-weight:700;fill:${tc}`);
+          T(x, ty2 + 21, lbl, 'middle', 'ts m', `font-size:7.5px;font-weight:700;fill:${tc}`);
       }
 
       // Parameter bounds strip
       const by = ty2 + 44;
       [['i ∈ [5, 20] (default 10)', '#F1EFE8', '#5F5E5A', '#2C2C2A'],
-      ['j ∈ [3, 8] (default 5)', '#FAECE7', R, '#4A1B0C'],
-      ['k ∈ [2, j] (default 3)', '#E1F5EE', G, '#04342C'],
-      ['All iters 2…i: corr + critique', '#EEEDFE', V, '#26215C']].forEach(([txt, fi, st, tc], idx) => {
+      ['j = 4 (fixed Global Update)', '#FAECE7', R, '#4A1B0C'],
+      ['Iters 1…i−1: Exec + Critique', '#E1F5EE', G, '#04342C'],
+      ['Iter i: Final Executions only', '#EEEDFE', V, '#26215C']].forEach(([txt, fi, st, tc], idx) => {
         s += badge(30 + 156 * idx, by, 148, 20, txt, fi, st, tc, 9.2);
       });
 
-      return [by + 32, 'Loop controller and heartbeat worthiness schedule', s, ''];
+      return [by + 32, 'Loop controller and Global Update schedule', s, ''];
     })();
 
     // ============================================================================
@@ -498,14 +483,13 @@
 
       let curY = 48;
 
-      // PANEL (a): Per-Branch Execution, Window Audit & Final Judge
+      // PANEL (a): Per-Branch Execution, Critique, Window Audit & Memory Bank
       const colsA = [
-        ['Attempt', 'Iter 1 & New', R],
-        ['Correction', 'Iter 2…i', R],
-        ['Critique', 'Iter 1…i', '#854F0B'],
+        ['Execution (Init)', 'Iter 1 & New', R],
+        ['Execution (Iter)', 'Iter 2…i', R],
+        ['Critique Agent', 'Iter 1…i−1', '#854F0B'],
         ['BSR Agent', 'Global Update', GY],
-        ['Mem Bank', 'Global Update', '#6250d6'],
-        ['Final Judge', 'After Iter i', '#26215C']
+        ['Memory Bank', 'Global Update', '#6250d6']
       ];
 
       const rowsA = [
@@ -514,8 +498,7 @@
           [1, 'Slot + Strategy', '', 't'],
           [2, 'Slot + Strategy', '', 't'],
           [3, 'Slot + Strategy', '', 't'],
-          [4, 'Slot + Strategy', '', 't'],
-          [5, 'All Strategies', '', 't']
+          [4, 'Slot + Strategy', '', 't']
         ]],
         ['<StandingEventLedger>', 'standing event ledger from prior windows', [
           [3, 'Previous Output(s)', '', 't']
@@ -527,37 +510,34 @@
           [4, 'Distilled Bank', '', 'a']
         ]],
         ['<LatestCustomCuratedContext>', 'mapped module packet (global + branch)', [
-          [1, 'Mapped Packet', 'until next heartbeat', 'a']
+          [1, 'Mapped Packet', 'until next GU HB', 'a']
         ]],
         ['<WindowCorrectionCritiqueHistory>', 'uncompressed pairs from current window', [
-          [1, 'Past j Iterations', '', 't'],
-          [2, 'Past j Iterations', '', 't'],
-          [3, 'Past j Iterations', '', 't'],
-          [4, 'Past j Iterations', '', 't']
+          [1, 'Past Window Iters', '', 't'],
+          [2, 'Past Window Iters', '', 't'],
+          [3, 'Past 4 Iterations', '', 't'],
+          [4, 'Up to Rollback/End', '', 't']
         ]],
         ['<CrossStrategyPeerIntelligence>', 'peers’ strategy + <LatestCorrection> & <Critique>', [
           [1, 'Latest Pair', 'isolation OFF', 'p']
-        ]],
-        ['# Competing Candidate Solutions', '<FinalSolution> + <FinalCritique> per branch', [
-          [5, 'Solution + Critique', '', 't']
         ]]
       ];
 
       curY = drawPanel(
         curY,
-        '(a) Per-Branch Execution, Window Audit & Final Judge Agents',
+        '(a) Per-Branch Execution Agent, Critique Agent, BSR & Memory Bank',
         colsA,
         rowsA
       );
       curY += 14;
 
-      // PANEL (b): Global Strategy, Synthesis (DOS) & Modules Loop
+      // PANEL (b): Global Strategy, State Synthesis & Modules Loop
       const colsB = [
         ['Seed Strat & Prox', 'Initial Gen', '#2a78d6', 79],
         ['Update Strategy & Proximity', 'Global Update', '#2a78d6', 119],
-        ['DOS Step-i', 'Global Update', G, 69],
-        ['DOS HB / ii', 'HB & Post-GU', G, 69],
-        ['Modules Gen & Reviewer', 'Heartbeat', '#eb6834', 119]
+        ['Synth-Strategies', 'Pre-Strategy', G, 69],
+        ['Synth-Modules', 'Pre-Modules', G, 69],
+        ['Modules Gen & Reviewer', 'GU Heartbeat', '#eb6834', 119]
       ];
 
       const rowsB = [
@@ -566,26 +546,26 @@
           [1, 'Count Target', '', 't'],
           [4, 'Count Target', '', 't']
         ]],
-        ['<ActiveBranchesState> (Corr + Crit)', 'all active strategies + Latest Corr & Crit', [
-          [2, 'All Branches', 'corr + critique', 't'],
-          [3, 'All Branches', 'corr + critique', 't']
+        ['<ActiveBranchesState> (Exec + Crit)', 'all active strategies + Latest Exec & Crit', [
+          [2, 'All Branches', 'exec + critique', 't'],
+          [3, 'All Branches', 'exec + critique', 't']
         ]],
-        ['Prior HB Modules, Tests & Feedback', 'prior HB modules, tests & realized feedback', [
-          [3, 'Prior HB Tests', '', 'a'],
-          [4, 'Tests + Feedback', 'verdict & util', 'a']
+        ['Prior HB Modules, Builds & Feedback', 'prior HB modules, builds & realized feedback', [
+          [3, 'Prior HB Builds', '', 'a'],
+          [4, 'Builds + Feedback', 'verdict & util', 'a']
         ]],
-        ['<CurrentActiveStrategies>', 'active strategies + Latest Corr (+ Map in HB)', [
-          [1, 'Active Strategies', '+ Latest Correction', 't'],
-          [4, 'Active + Mapped', '+ Latest Correction', 't']
+        ['<CurrentActiveStrategies>', 'active strategies + Latest Exec (+ Map in HB)', [
+          [1, 'Active Strategies', '+ Latest Execution', 't'],
+          [4, 'Active + Mapped', '+ Latest Execution', 't']
         ]],
         ['<ConsolidatedBsrDecisions>', 'CONTINUE / EVOLVE / PRUNE + event reasons', [
           [1, 'BSR Decisions', '', 't'],
-          [3, 'Slot Statuses', 'Step-ii only', 'a']
+          [3, 'Slot Statuses', 'For-Modules only', 'a']
         ]],
-        ['<DosCoreSynthesis> / <StepIOutput…>', 'structured cross-branch synthesis JSON', [
-          [1, 'Step-i DOS', '', 't'],
-          [3, 'Step-i Baseline', 'Step-ii only', 'a'],
-          [4, 'DOS Synthesis', '', 't']
+        ['<StateSynthesisCore> / <…Baseline>', 'structured cross-branch synthesis JSON', [
+          [1, 'Synth-Strategies', '', 't'],
+          [3, 'Strategies Baseline', 'For-Modules only', 'a'],
+          [4, 'Synth-Modules', '', 't']
         ]],
         ['<ActuallyFinalizedAndUsedSoFar>', 'ledger of finalized strategies / modules so far', [
           [1, 'Used Strategies Ledger', '', 't'],
@@ -600,7 +580,7 @@
 
       curY = drawPanel(
         curY,
-        '(b) Global Strategy, Synthesis (DOS) & Modules Loop Agents',
+        '(b) Global Strategy, State Synthesis & Modules Loop Agents',
         colsB,
         rowsB
       );
@@ -613,31 +593,31 @@
     // ============================================================================
     const NHIST = (() => {
       const { C, T, L, P, D, ln, TX, card, box, badge } = HX;
-      const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', OR = '#BA7517', r = String.raw;
-      const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
-      const X = n => 72 + 38 * (n - 1);
+      const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', OR = '#BA7517';
+      const gray = 'fill:#5a5955;font-size:12px', sg = 'fill:#5a5955;font-size:10px';
+      const X = n => 72 + 48 * (n - 1);
       let s = '';
 
-      // (a) Sawtooth history in prompt across i=15, j=5, k=3
-      s += T(30, 20, '(a) Shared <BranchHistoryAndMemory> window and curated context schedule (i = 15, j = 5, k = 3)', 'start', 'th');
-      s += T(30, 38, 'Both Correction and Critique receive the exact same history block: pre-update pair + DistilledMemoryBank + window iterations.', 'start', 'ts', gray);
+      // (a) Sawtooth history in prompt across i=10, j=4
+      s += T(30, 20, '(a) Shared <BranchHistoryAndMemory> window and curated context schedule (i = 10, j = 4)', 'start', 'th');
+      s += T(30, 38, 'Both Execution Agent and Critique Agent receive the exact same history block: pre-update pair + DistilledMemoryBank + window iterations.', 'start', 'ts', gray);
 
       const base = 236;
-      // Global update distillation lines after 5 and 10
-      [5, 10].forEach((n, idx) => {
-        const x = X(n) + 19;
+      // Global update distillation lines after 4 and 8
+      [4, 8].forEach((n, idx) => {
+        const x = X(n) + 24;
         s += ln(x, 64, x, base + 42, R, 1.4, '4 2') +
-          badge(x - 40, 52, 80, 18, `Update ${idx + 1} → M${idx + 1}`, '#FAECE7', R, '#4A1B0C', 9.5);
+          badge(x - 46, 52, 92, 18, `GU ${idx + 1} → M${idx + 1} + HB${idx + 1}`, '#FAECE7', R, '#4A1B0C', 9);
       });
 
-      s += ln(50, base, 630, base, '#333', 1);
+      s += ln(50, base, 560, base, '#333', 1);
 
-      // Draw stacks for iterations 1..15 (window length j = 5)
-      for (let n = 1; n <= 15; n++) {
-        const w = Math.floor((n - 1) / 5) * 5 + 1;
-        const hasBank = n >= 6;
-        const bankLbl = n >= 11 ? 'M2' : 'M1';
-        const anchorLbl = n >= 11 ? '10' : '5';
+      // Draw stacks for iterations 1..10 (window length j = 4)
+      for (let n = 1; n <= 10; n++) {
+        const w = Math.floor((n - 1) / 4) * 4 + 1;
+        const hasBank = n >= 5;
+        const bankLbl = n >= 9 ? 'M2' : 'M1';
+        const anchorLbl = n >= 9 ? '8' : '4';
         const tiles = [];
         if (hasBank) {
           tiles.push({ lbl: anchorLbl, kind: 'a' });
@@ -652,27 +632,24 @@
             const fi = t.kind == 'm' ? '#EEEDFE' : t.kind == 'a' ? '#FAEEDA' : '#E1F5EE';
             const st = t.kind == 'm' ? V : t.kind == 'a' ? OR : G;
             const tc = t.kind == 'm' ? '#26215C' : t.kind == 'a' ? '#412402' : '#04342C';
-            s += `<rect x="${X(n) - 15}" y="${y}" width="30" height="20" rx="2.5" fill="${fi}" stroke="${st}" stroke-width=".9"/>` +
+            s += `<rect x="${X(n) - 16}" y="${y}" width="32" height="20" rx="2.5" fill="${fi}" stroke="${st}" stroke-width=".9"/>` +
               T(X(n), y + 10, t.lbl, 'middle', 'ts m', `font-size:10px;font-weight:${t.kind != 'n' ? 700 : 500};fill:${tc}`);
           });
         }
         s += `<path d="M${X(n)} ${base}v5" stroke="#333" stroke-width=".8"/>` + T(X(n), base + 15, n, 'middle', 'ts m', 'font-size:10.5px');
         // Curated context packet row below axis
         let hb = '—', hbc = '#8a8880', hbf = '#F1EFE8';
-        if (n == 4 || n == 5) { hb = 'HB1'; hbc = G; hbf = '#E1F5EE' }
-        else if (n >= 6 && n <= 8) { hb = 'HB2'; hbc = R; hbf = '#FAECE7' }
-        else if (n == 9 || n == 10) { hb = 'HB3'; hbc = G; hbf = '#E1F5EE' }
-        else if (n >= 11 && n <= 13) { hb = 'HB4'; hbc = R; hbf = '#FAECE7' }
-        else if (n >= 14) { hb = 'HB5'; hbc = G; hbf = '#E1F5EE' }
-        s += `<rect x="${X(n) - 15}" y="${base + 28}" width="30" height="16" rx="2" fill="${hbf}" stroke="${hbc}" stroke-width=".7"/>` +
+        if (n >= 5 && n <= 8) { hb = 'HB1'; hbc = R; hbf = '#FAECE7' }
+        else if (n >= 9) { hb = 'HB2'; hbc = R; hbf = '#FAECE7' }
+        s += `<rect x="${X(n) - 16}" y="${base + 28}" width="32" height="16" rx="2" fill="${hbf}" stroke="${hbc}" stroke-width=".7"/>` +
           T(X(n), base + 36, hb, 'middle', 'ts m', 'font-size:8.5px;font-weight:600');
       }
       s += T(44, base + 15, 'iter n', 'end', 'ts', sg) + T(44, base + 36, 'packet', 'end', 'ts', sg);
 
       // Legend for (a)
-      s += `<rect x="30" y="290" width="18" height="13" rx="2" fill="#E1F5EE" stroke="${G}" stroke-width=".9"/>` + T(54, 296.5, '<WindowCorrectionCritiqueHistory> pair (window length j = 5)', 'start', 'ts', 'font-size:10.2px') +
+      s += `<rect x="30" y="290" width="18" height="13" rx="2" fill="#E1F5EE" stroke="${G}" stroke-width=".9"/>` + T(54, 296.5, '<WindowCorrectionCritiqueHistory> pair (window length j = 4)', 'start', 'ts', 'font-size:10.2px') +
         `<rect x="360" y="290" width="18" height="13" rx="2" fill="#FAEEDA" stroke="${OR}" stroke-width=".9"/>` + T(384, 296.5, 'latest pair at distillation boundary (or rollback point)', 'start', 'ts', 'font-size:10.2px') +
-        `<rect x="30" y="308" width="18" height="13" rx="2" fill="#EEEDFE" stroke="${V}" stroke-width=".9"/>` + T(54, 314.5, '<DistilledMemoryBank> (M1 = 1..5; M2 = M1 + 6..10)', 'start', 'ts', 'font-size:10.2px');
+        `<rect x="30" y="308" width="18" height="13" rx="2" fill="#EEEDFE" stroke="${V}" stroke-width=".9"/>` + T(54, 314.5, '<DistilledMemoryBank> (M1 = 1..4; M2 = M1 + 5..8; rollback distills only up to last_good_iteration)', 'start', 'ts', 'font-size:10.2px');
 
       // (b) Dual-tier memory: Prompt compression vs On-disk .jsonl trajectory rewind
       const y2 = 334;
@@ -683,10 +660,10 @@
       // Left box: Strategy-N/history/ directory layout
       s += box(30, y2 + 46, 286, 148, '#F8F7F2', '#5F5E5A', 1, 4) +
         T(42, y2 + 62, 'Strategy-N/history/ (persisted per invoke)', 'start', 'th', 'font-size:11.2px') +
-        box(42, y2 + 76, 262, 24, '#E1F5EE', G, .85, 3) + T(50, y2 + 88, 'iteration_06.md     (final solution + critique)', 'start', 'ts m', 'font-size:9.2px;fill:#04342C') +
-        box(42, y2 + 104, 262, 26, '#FAEEDA', OR, 1.1, 3) + T(50, y2 + 117, 'iteration_06.jsonl  (full agent trajectory)', 'start', 'ts m', 'font-size:9.2px;font-weight:700;fill:#412402') +
+        box(42, y2 + 76, 262, 24, '#E1F5EE', G, .85, 3) + T(50, y2 + 88, 'iteration_05.md     (final solution + critique)', 'start', 'ts m', 'font-size:9.2px;fill:#04342C') +
+        box(42, y2 + 104, 262, 26, '#FAEEDA', OR, 1.1, 3) + T(50, y2 + 117, 'iteration_05.jsonl  (full agent trajectory)', 'start', 'ts m', 'font-size:9.2px;font-weight:700;fill:#412402') +
         box(42, y2 + 134, 262, 24, '#EEEDFE', V, .85, 3) + T(50, y2 + 146, 'memory_bank_01.md   (+ memory_bank_01.jsonl)', 'start', 'ts m', 'font-size:9.2px;fill:#26215C') +
-        T(42, y2 + 176, 'Also written in Module-M/, DOS_history/, etc.', 'start', 'ts', 'font-size:9.8px;fill:#5a5955');
+        T(42, y2 + 176, 'Also written in Module-M/, State_Synthesis_history/, etc.', 'start', 'ts', 'font-size:9.8px;fill:#5a5955');
 
       // Right box: What is inside *.jsonl and how rewind works
       s += box(340, y2 + 46, 310, 148, '#FFFDF8', OR, 1, 4) +
@@ -711,7 +688,7 @@
     const NCOORD = (() => {
       const { C, T, L, P, D, ln, TX, card, box, badge } = HX;
       const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', OR = '#BA7517';
-      const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
+      const gray = 'fill:#5a5955;font-size:12px', sg = 'fill:#5a5955;font-size:10px';
       let s = '';
 
       // (a) Universal access matrix & collaboration topology
@@ -719,17 +696,17 @@
       s += T(30, 38, 'Every agent shares full repository read scope, workspace-root /tmp/ (R/W), and live shared_workspace.md collaboration.', 'start', 'ts', gray);
 
       const headers = ['Agent Role', 'Primary Working Dir', 'Repo Read Scope', '/tmp/ Dir', 'shared_workspace'];
-      const hx = [30, 188, 326, 456, 542];
+      const hx = [30, 198, 332, 456, 542];
       s += box(30, 52, 620, 24, '#F1EFE8', '#5F5E5A', .9, 3);
       headers.forEach((h, i) => s += T(hx[i] + 6, 64, h, 'start', 'th', 'font-size:10.5px'));
 
       const rows = [
-        ['Strategy Gen / Proximity / DOS', 'none (repo root)', 'Full repository', 'Read / Write', 'read · edit · append'],
+        ['Strategy Gen / Proximity', 'none (repo root)', 'Full repository', 'Read / Write', 'read · edit · append'],
+        ['State Synthesis', 'none (repo root)', 'Full repository', 'Read / Write', 'read · edit · append'],
         ['Modules Gen / Impact Reviewer', 'none (repo root)', 'Full repository', 'Read / Write', 'read · edit · append'],
-        ['Modules Tester (× m)', 'Module-M/ (R/W)', 'Full repository', 'Read / Write', 'read · edit · append'],
-        ['Attempt / Correction / Critique', 'Strategy-N/ (R/W)', 'Full repository', 'Read / Write', 'read · edit · append'],
-        ['Memory Bank / BSR', 'Strategy-N/ (read-only)', 'Full repository', 'Read / Write', 'read · edit · append'],
-        ['Final Judge', 'none (repo root)', 'Full repository', 'Read / Write', 'read · edit · append']
+        ['Modules Building (× m)', 'Module-M/ (R/W)', 'Full repository', 'Read / Write', 'read · edit · append'],
+        ['Execution Agent / Critique Agent', 'Strategy-N/ (R/W)', 'Full repository', 'Read / Write', 'read · edit · append'],
+        ['Memory Bank / BSR', 'Strategy-N/ (read-only)', 'Full repository', 'Read / Write', 'read · edit · append']
       ];
       rows.forEach((r, i) => {
         const y = 76 + 24 * i;
@@ -747,9 +724,9 @@
       s += T(30, y1 + 10, '(b) Live shared_workspace.md blackboard: surgical edit tool and 5,000-token gate', 'start', 'th');
       s += T(30, y1 + 28, 'Parallel calls serialize through an atomic mutex; targeted edits update sections in place within a 5,000-token cap.', 'start', 'ts', gray);
 
-      s += L('t', 30, y1 + 46, 136, 36, 'Branch main1…N', 'correction / critique') +
-        L('a', 30, y1 + 90, 136, 36, 'Modules Gen / Tester', 'modules & test notes') +
-        L('p', 30, y1 + 134, 136, 36, 'DOS / Strategy / Judge', 'cross-branch notes');
+      s += L('t', 30, y1 + 46, 136, 36, 'Branch main1…N', 'Execution / Critique') +
+        L('a', 30, y1 + 90, 136, 36, 'Modules Gen / Building', 'modules & build notes') +
+        L('p', 30, y1 + 134, 136, 36, 'State Synthesis / Strat', 'cross-branch notes');
 
       s += P(`M166 ${y1 + 64}H214`) + P(`M166 ${y1 + 108}H214`) + P(`M166 ${y1 + 152}H214`);
 
@@ -780,7 +757,7 @@
       s += T(30, y2 + 10, '(c) Self-built verification harnesses and adversarial test hardening in /tmp/', 'start', 'th');
       s += T(30, y2 + 28, 'Because every agent has R/W access to /tmp/, branches and critiques co-evolve executable verification suites across the run.', 'start', 'ts', gray);
 
-      s += L('t', 30, y2 + 46, 168, 54, '1. Attempt / Correction', 'writes solution + initial harness') +
+      s += L('t', 30, y2 + 46, 168, 54, '1. Execution Agent', 'writes solution + initial harness') +
         P(`M198 ${y2 + 73}H232`) +
         box(234, y2 + 42, 212, 62, '#FAEEDA', OR, 1.2, 4) +
         T(340, y2 + 58, 'Workspace /tmp/ (Shared R/W)', 'middle', 'th', 'font-size:11.5px;fill:#412402') +
@@ -789,9 +766,8 @@
         P(`M446 ${y2 + 73}H480`) +
         L('c', 482, y2 + 46, 168, 54, '2. Critique Agent', 'hardens /tmp/ harness & falsifies');
 
-      // Clean feedback path at y2+116 with label BELOW the line at y2+133 so it never crosses vertical stems
       s += `<path d="M566 ${y2 + 100}V${y2 + 116}H114V${y2 + 102}" fill="none" stroke="${R}" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ar)"/>` +
-        T(340, y2 + 132, '3. Next Correction runs the hardened /tmp/ suite; BSR uses sandbox test runs as confirmed event evidence', 'middle', 'ts', 'font-size:10.2px;font-weight:600;fill:#4A1B0C');
+        T(340, y2 + 132, '3. Next Execution Agent runs the hardened /tmp/ suite; BSR uses sandbox test runs as confirmed event evidence', 'middle', 'ts', 'font-size:10.2px;font-weight:600;fill:#4A1B0C');
 
       return [580, 'Multi-agent coordination, surgical shared_workspace, and /tmp verification loops', s, ''];
     })();
@@ -837,16 +813,16 @@
           x: 30, w: 260, rh: 34, t: 'Harness-written, read-only to agents', f: '#F1EFE8', st: '#5F5E5A', tc: '#2C2C2A', items: [
             ['user_uploaded/', 'seeded once, before the seed strategies', 1],
             ['Strategy-N/iterations/, history/', 'end of each iteration and global update', 1],
-            ['history/memory_bank_UU.md', 'global update, step 5', 1],
-            ['DOS_history/, strategies_history/', 'bundled with heartbeat or global update commit', 1],
+            ['history/memory_bank_UU.md', 'distilled per surviving branch at GU', 1],
+            ['State_Synthesis_history/, strategies_history/', 'bundled with global update commits', 1],
             ['Pruned_Strategies/', 'folder moved here when a slot is pruned', 1],
-            ['Module-M/module.md, feedback', 'heartbeat end; feedback one heartbeat later', 1]]
+            ['Module-M/module.md, feedback.json', 'heartbeat end; feedback one update later', 1]]
         },
         {
           x: 300, w: 170, rh: 51, t: 'Agent work, tracked', f: '#E1F5EE', st: G, tc: '#04342C', items: [
             ['Strategy-N/', "written by branch N's roles", 1],
-            ['Module-M/', 'written by tester M', 1],
-            ['Committed', '6 exact pipeline checkpoints', 0],
+            ['Module-M/', 'written by Modules Building M', 1],
+            ['Committed', '5 exact pipeline checkpoints', 0],
             ['Rollback', 'EVOLVE restores Strategy-N/', 0]]
         },
         {
@@ -874,8 +850,8 @@
       s += box(30, top, 300, 286, '#F8F7F2', '#b5b3aa', .9, 4) + T(42, top + 16, '$HOME decides where tool caches land', 'start', 'th', 'font-size:11px');
       s += box(42, top + 30, 276, 34, '#F1EFE8', '#5F5E5A', .9, 3) + T(180, top + 47, 'Does the role own a writable agentDirectory?', 'middle', 'ts', 'font-size:10.2px;font-weight:600');
       s += P(`M110 ${top + 64}V${top + 90}`) + P(`M250 ${top + 64}V${top + 90}`) + T(118, top + 77, 'yes', 'start', 'ts', 'font-size:9.5px') + T(258, top + 77, 'no', 'start', 'ts', 'font-size:9.5px');
-      s += box(42, top + 92, 134, 56, '#E1F5EE', G, 1, 3) + mono(50, top + 105, 'HOME=<dir>/.tmp', 9, 700, '#04342C') + sub(50, top + 121, 'attempt, critique,', 9.3) + sub(50, top + 134, 'correction, tester', 9.3);
-      s += box(186, top + 92, 132, 56, '#FAEEDA', OR, 1, 3) + mono(194, top + 105, 'HOME=/tmp', 9, 700, '#412402') + sub(194, top + 121, 'root roles, BSR,', 9.3) + sub(194, top + 134, 'memory bank', 9.3);
+      s += box(42, top + 92, 134, 56, '#E1F5EE', G, 1, 3) + mono(50, top + 105, 'HOME=<dir>/.tmp', 9, 700, '#04342C') + sub(50, top + 121, 'Execution, Critique,', 9.3) + sub(50, top + 134, 'Modules Building', 9.3);
+      s += box(186, top + 92, 132, 56, '#FAEEDA', OR, 1, 3) + mono(194, top + 105, 'HOME=/tmp', 9, 700, '#412402') + sub(194, top + 121, 'root roles, BSR,', 9.3) + sub(194, top + 134, 'Memory Bank', 9.3);
       s += T(42, top + 166, 'Caches & shared package dirs', 'start', 'ts', 'font-size:10px;font-weight:600');
       ['XDG_CACHE_HOME', 'MPLCONFIGDIR', 'PYTHONUSERBASE', 'PIP_CACHE_DIR', 'CARGO_HOME', 'CARGO_TARGET_DIR'].forEach((n, i) => {
         s += badge(42 + 142 * (i % 2), top + 176 + 21 * Math.floor(i / 2), 134, 17, n, '#EEEDFE', V, '#26215C', 8.6);
@@ -929,8 +905,8 @@
     // ============================================================================
     const NTOOLS = (() => {
       const { C, T, L, P, D, ln, TX, card, box, badge } = HX;
-      const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', OR = '#BA7517', r = String.raw;
-      const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
+      const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', OR = '#BA7517';
+      const gray = 'fill:#5a5955;font-size:12px';
       let s = '';
 
       // (a) Progressive tool-call horizon management
@@ -938,24 +914,17 @@
       s += T(30, 38, 'Countdown reminders at m − 10 and m − 5 guide pacing; at m an urgent prompt grants 5 overtime turns before revoking other tools.', 'start', 'ts', gray);
 
       const ty = 96;
-      // Timeline bar segments (y: 96..128)
-      // Seg 1: 1 .. m-10
       s += `<rect x="30" y="${ty}" width="190" height="32" rx="3" fill="#E1F5EE" stroke="${G}" stroke-width="1"/>` +
         T(125, ty + 16, 'Normal tool loop (1 … m−11)', 'middle', 'ts', 'font-size:10.5px;font-weight:600;fill:#04342C');
-      // Seg 2: m-10 .. m-5
       s += `<rect x="220" y="${ty}" width="110" height="32" fill="#FAEEDA" stroke="${OR}" stroke-width="1"/>` +
         T(275, ty + 16, 'm−10 … m−6', 'middle', 'ts m', 'font-size:10px;font-weight:600;fill:#412402');
-      // Seg 3: m-5 .. m
       s += `<rect x="330" y="${ty}" width="100" height="32" fill="#FAC775" stroke="${OR}" stroke-width="1"/>` +
         T(380, ty + 16, 'm−5 … m', 'middle', 'ts m', 'font-size:10px;font-weight:700;fill:#412402');
-      // Seg 4: Grace window m+1 .. m+5
       s += `<rect x="430" y="${ty}" width="118" height="32" fill="#FAECE7" stroke="${R}" stroke-width="1.3"/>` +
         T(489, ty + 16, 'Grace: m+1 … m+5', 'middle', 'ts m', 'font-size:10px;font-weight:700;fill:#4A1B0C');
-      // Seg 5: > m+5 revocation
       s += `<rect x="548" y="${ty}" width="102" height="32" rx="3" fill="#EEEDFE" stroke="${V}" stroke-width="1.5"/>` +
         T(599, ty + 16, 'Turn m+6+', 'middle', 'ts m', 'font-size:10.5px;font-weight:700;fill:#26215C');
 
-      // Callout pins: top pins start at ty (96), bottom pins start at ty+32 (128) so they NEVER cross through the bar!
       const pin = (x, y1, y2, col, title, sub) => {
         return ln(x, y1, x, y2, col, 1.3) + `<circle cx="${x}" cy="${y1}" r="3.5" fill="${col}"/>` +
           T(x, y2 + (y2 < y1 ? -18 : 9), title, 'middle', 'th', `font-size:10.5px;fill:${col}`) +
@@ -966,7 +935,6 @@
       s += pin(430, ty, ty - 14, R, 'Urgent Directive @ m', 'Huge message: submit now (+5 turns)');
       s += pin(548, ty + 32, ty + 46, V, 'Revoke Tools @ m+5', 'Only final_output remains active');
 
-      // Active tools table across the phases — wide badges with concise text so nothing overflows
       const ay = 184;
       s += box(30, ay, 620, 56, '#F8F7F2', '#cfcdc4', .9, 4) +
         T(42, ay + 16, 'Tool access (1 … m+5):', 'start', 'th', 'font-size:10.8px') +
@@ -984,24 +952,20 @@
 
       s += L('t', 30, y2 + 48, 118, 52, 'Agent calls', 'final_output(payload)') + P(`M148 ${y2 + 74}H176`);
 
-      // Gate 1: Token Gate
       s += box(178, y2 + 44, 146, 60, '#EEEDFE', V, 1.2, 4) +
         T(251, y2 + 60, '1. Output Tokens Gate', 'middle', 'th', 'font-size:11.5px;fill:#26215C') +
-        T(251, y2 + 76, '≤ 5k default · ≤ 16k Judge', 'middle', 'ts', 'font-size:9.8px') +
-        T(251, y2 + 89, '≤ 10k (Attempt, Corr, MemBank)', 'middle', 'ts', 'font-size:9.8px') +
+        T(251, y2 + 76, '≤ 5k default (Critique, etc.)', 'middle', 'ts', 'font-size:9.8px') +
+        T(251, y2 + 89, '≤ 10k (Execution, MemBank)', 'middle', 'ts', 'font-size:9.8px') +
         P(`M324 ${y2 + 74}H352`);
 
-      // Gate 2: Schema Gate
       s += box(354, y2 + 44, 158, 60, '#E1F5EE', G, 1.2, 4) +
         T(433, y2 + 60, '2. Schema & Invariants', 'middle', 'th', 'font-size:11.5px;fill:#04342C') +
-        T(433, y2 + 76, 'Exact slot IDs · Σp = 1.0', 'middle', 'ts', 'font-size:10px') +
+        T(433, y2 + 76, 'Exact slot IDs & JSON schema', 'middle', 'ts', 'font-size:10px') +
         T(433, y2 + 89, 'Surgical EVOLVE/PRUNE match', 'middle', 'ts', 'font-size:10px') +
         P(`M512 ${y2 + 74}H540`, '0', 'ag');
 
-      // Commit
       s += L('g', 542, y2 + 48, 108, 52, 'Accepted', 'commit + snapshot');
 
-      // Failure loop back / retry backoff
       s += `<path d="M251 ${y2 + 104}V${y2 + 130}H433V${y2 + 104}" fill="none" stroke="${R}" stroke-width="1.1"/>` +
         `<path d="M342 ${y2 + 130}V${y2 + 146}" fill="none" stroke="${R}" stroke-width="1.2" marker-end="url(#ar)"/>` +
         box(68, y2 + 148, 548, 42, '#FAECE7', R, 1, 4) +
@@ -1017,33 +981,31 @@
     const NHEART = (() => {
       const { C, T, L, P, D, ln, TX, card, box, badge } = HX;
       const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', OR = '#BA7517';
-      const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
+      const gray = 'fill:#5a5955;font-size:12px', sg = 'fill:#5a5955;font-size:10px';
       let s = '';
 
       // (a) Four-stage pipeline
-      s += T(30, 20, '(a) Four-stage Curated Context Heartbeat pipeline and configuration', 'start', 'th');
-      s += T(30, 38, 'Refreshes empirical evidence every k iterations (and at the end of every Global Update, which reuses Step-ii DOS).', 'start', 'ts', gray);
+      s += T(30, 20, '(a) Four-stage Curated Context Heartbeat pipeline at the conclusion of each Global Update', 'start', 'th');
+      s += T(30, 38, 'Runs at the conclusion of every Global Update when modulesCount > 0 (after Memory Bank distillation & replacement branch Exec+Crit).', 'start', 'ts', gray);
 
-      s += L('t', 30, 56, 132, 54, '1. DOS Call', 'audits prev. HB + state') + P('M162 83H186') +
-        L('t', 188, 56, 156, 54, '2. Modules Loop', 'Gen ⇄ Reviewer (L rounds)') + P('M344 83H368') +
-        L('a', 370, 56, 140, 54, '3. Testers (× m)', 'in Module-M/') + P('M510 83H534') +
+      s += L('t', 30, 56, 142, 54, '1. State Synthesis', 'State-Synthesis-For-Modules') + P('M172 83H192') +
+        L('t', 194, 56, 152, 54, '2. Modules Loop', 'Gen ⇄ Reviewer (L rounds)') + P('M346 83H366') +
+        L('a', 368, 56, 144, 54, '3. Modules Building', 'parallel in Module-M/') + P('M512 83H534') +
         L('g', 536, 56, 114, 54, '4. Map', 'packet per slot');
 
-      // Feedback record side-output from Step 1 -> Step 2
-      s += `<path d="M96 110V132H266V112" fill="none" stroke="${V}" stroke-width="1.1" stroke-dasharray="3 2" marker-end="url(#av)"/>` +
-        T(181, 144, 'attaches verdict + utilization [C,P,N,M] to prev. HB block', 'middle', 'ts', 'font-size:9.8px;fill:#26215C');
+      s += `<path d="M101 110V132H270V112" fill="none" stroke="${V}" stroke-width="1.1" stroke-dasharray="3 2" marker-end="url(#av)"/>` +
+        T(185, 144, 'attaches verdict + utilization [C,P,N,M] to prev. HB block', 'middle', 'ts', 'font-size:9.8px;fill:#26215C');
 
-      // Mode table on right of (a)
       s += box(30, 160, 620, 50, '#F8F7F2', '#cfcdc4', .9, 4) +
-        T(42, 176, 'Active stages by configuration (k slider):', 'start', 'th', 'font-size:11px') +
-        badge(310, 167, 330, 18, 'Modules ON: Steps 1 → 4 run every k iterations', '#E1F5EE', G, '#04342C', 9.2) +
-        T(42, 196, 'Post-Update HB: Step 1 reuses Step-ii DOS.', 'start', 'ts', sg) +
-        badge(310, 188, 330, 18, 'Modules OFF: Heartbeat skipped, k ignored', '#F1EFE8', '#8a8880', '#5a5955', 9.2);
+        T(42, 176, 'Active stages by configuration (modulesCount):', 'start', 'th', 'font-size:11px') +
+        badge(310, 167, 330, 18, 'Modules ON (m > 0): All 4 stages run at end of every GU', '#E1F5EE', G, '#04342C', 9.2) +
+        T(42, 196, 'Uses post-rollout surviving & new branch state.', 'start', 'ts', sg) +
+        badge(310, 188, 330, 18, 'Modules OFF (m = 0): Heartbeat stages skipped', '#F1EFE8', '#8a8880', '#5a5955', 9.2);
 
       // (b) Target-branch packet routing
       const y1 = 232;
       s += ln(30, y1 - 10, 650, y1 - 10, '#cfcdc4', 1);
-      s += T(30, y1 + 10, '(b) Module test execution and deterministic branch packet mapping', 'start', 'th');
+      s += T(30, y1 + 10, '(b) Independent Modules Building and deterministic branch packet mapping', 'start', 'th');
       s += T(30, y1 + 28, 'Each module specifies target_branches (empty [] = broadcast to all active branches).', 'start', 'ts', gray);
 
       const mods = [
@@ -1055,7 +1017,7 @@
         const y = y1 + 46 + 38 * i;
         s += box(30, y, 274, 30, fi, st, 1, 3) +
           T(40, y + 11, id + ' · ' + t, 'start', 'ts m', 'font-size:9.8px;font-weight:700') +
-          T(40, y + 23, 'Tester verdict: ' + v + ' (+ full test output)', 'start', 'ts', 'font-size:9.5px');
+          T(40, y + 23, 'Modules Building verdict: ' + v, 'start', 'ts', 'font-size:9.5px');
         targets.forEach(b => {
           const by = y1 + 50 + 38 * b + 11;
           s += `<path d="M304 ${y + 15}C354 ${y + 15} 370 ${by} 418 ${by}" fill="none" stroke="${st}" stroke-width="1.2" marker-end="url(#a)"/>`;
@@ -1066,105 +1028,97 @@
         const y = y1 + 46 + 38 * b;
         s += box(420, y, 230, 30, '#F8F7F2', '#333', 1, 3) +
           T(432, y + 11, lbl, 'start', 'th', 'font-size:11px') +
-          T(432, y + 23, '→ read by Correction agent', 'start', 'ts', sg);
+          T(432, y + 23, '→ read by Execution Agent', 'start', 'ts', sg);
       });
 
       return [404, 'Curated context heartbeat architecture', s, ''];
     })();
 
     // ============================================================================
-    // FIGURE 9: STATELESS DOS CALL MODES & CROSS-HEARTBEAT FEEDBACK TIMING
+    // FIGURE 9: STATELESS STATE SYNTHESIS MODES & CROSS-HEARTBEAT FEEDBACK TIMING
     // ============================================================================
-    const NDOS = (() => {
+    const NSYNTH = (() => {
       const { C, T, L, P, D, ln, TX, card, box, badge } = HX;
       const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', OR = '#BA7517';
-      const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
+      const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px';
       let s = '';
 
-      // (a) Three DOS modes comparison
-      s += T(30, 20, '(a) The three stateless DOS (Dissected Observations Synthesis) invocation modes', 'start', 'th');
-      s += T(30, 38, 'DOS retains no memory between calls; each call receives a specific state slice tailored to its consumer.', 'start', 'ts', gray);
+      // (a) Two State Synthesis modes comparison
+      s += T(30, 20, '(a) The two stateless State Synthesis invocation stages in a Global Update', 'start', 'th');
+      s += T(30, 38, 'State Synthesis retains no memory between calls; each call receives a specific state slice tailored to its consumer.', 'start', 'ts', gray);
 
       const modes = [
-        [30, '1. Standalone Heartbeat DOS', '#E1F5EE', G, '#04342C', [
-          'When: Start of a Heartbeat (not after GU)',
-          'Inputs: Prev. HB modules/tests + all',
-          '  active branches’ latest corr. & critique',
-          'Outputs: core_synthesis + realized',
-          '  module_feedback for all branches',
-          'Consumer: This Heartbeat’s Modules Gen.'
-        ]],
-        [245, '2. Global Update Step-i DOS', '#FAECE7', R, '#4A1B0C', [
-          'When: Step 1 of GU (parallel with BSR)',
-          'Inputs: Active branches’ latest corr. &',
-          '  critique only (even if curated ctx OFF)',
+        [30, '1. State-Synthesis-For-Strategies', '#FAECE7', R, '#4A1B0C', [
+          'When: Start of GU (parallel with BSR)',
+          'Inputs: Active branches’ latest execution &',
+          '  critique only (runs even if modules OFF)',
           'Outputs: core_synthesis ONLY',
           '  (no module_feedback produced)',
-          'Consumer: Step 3 Strategy Generator &',
-          '  Step 6 (Step-ii DOS baseline)'
+          'Consumer: Strategy Generator &',
+          '  <StateSynthesisForStrategiesBaseline>'
         ]],
-        [460, '3. Global Update Step-ii DOS', '#EEEDFE', V, '#26215C', [
-          'When: Step 6 of GU (modules ON)',
-          'Inputs: <StepIOutputBaseline> + slot',
-          '  statuses + prev. HB tests + survivors',
-          'Outputs: Nuanced synthesis + feedback',
+        [350, '2. State-Synthesis-For-Modules', '#EEEDFE', V, '#26215C', [
+          'When: Concluding GU Heartbeat (m > 0)',
+          'Inputs: <StateSynthesisForStrategiesBaseline> +',
+          '  slot statuses + prev. HB builds + post-GU state',
+          'Outputs: Nuanced core_synthesis + feedback',
           '  on SURVIVING branches only (pruned/',
-          '  replacement slots excluded)',
-          'Consumer: Reused as Step 7 HB DOS'
+          '  replacement slots excluded from feedback)',
+          'Consumer: Modules Generator & Impact Reviewer'
         ]]
       ];
       modes.forEach(([x, ti, fi, st, tc, lines]) => {
-        s += box(x, 52, 190, 132, fi, st, 1.1, 4) +
-          T(x + 10, 68, ti, 'start', 'th', `font-size:11px;fill:${tc}`);
-        lines.forEach((l, i) => s += T(x + 10, 87 + 13.5 * i, l, 'start', 'ts', 'font-size:9.6px'));
+        s += box(x, 52, 300, 132, fi, st, 1.1, 4) +
+          T(x + 12, 68, ti, 'start', 'th', `font-size:11.5px;fill:${tc}`);
+        lines.forEach((l, i) => s += T(x + 12, 87 + 13.5 * i, l, 'start', 'ts', 'font-size:9.8px'));
       });
 
       // (b) Cross-heartbeat feedback timing matrix
       const y1 = 208;
       s += ln(30, y1 - 10, 650, y1 - 10, '#cfcdc4', 1);
-      s += T(30, y1 + 10, '(b) Cross-heartbeat causality and one-cycle feedback lag', 'start', 'th');
-      s += T(30, y1 + 28, 'A module block created at Heartbeat m−1 is used by branches, then audited by DOS at Heartbeat m for Generator m.', 'start', 'ts', gray);
+      s += T(30, y1 + 10, '(b) Cross-Global-Update heartbeat causality and one-window feedback lag', 'start', 'th');
+      s += T(30, y1 + 28, 'A module block created at GU Heartbeat h−1 is used by branches in the next window, then audited by State-Synthesis-For-Modules at GU h.', 'start', 'ts', gray);
 
       const my = y1 + 48;
-      for (let c = 0; c < 5; c++)s += T(122 + 104 * c + 44, my, 'Heartbeat ' + (c + 1), 'middle', 'th', 'font-size:12px');
-      for (let r = 0; r < 5; r++) {
-        const y = my + 16 + 36 * r;
-        s += T(110, y + 15, 'Block ' + (r + 1), 'end', 'th', 'font-size:11.5px');
-        for (let c = 0; c < 5; c++) {
-          const x = 122 + 104 * c;
+      for (let c = 0; c < 4; c++)s += T(132 + 126 * c + 50, my, 'GU Heartbeat ' + (c + 1), 'middle', 'th', 'font-size:12px');
+      for (let r = 0; r < 4; r++) {
+        const y = my + 16 + 38 * r;
+        s += T(116, y + 15, 'Block ' + (r + 1), 'end', 'th', 'font-size:11.5px');
+        for (let c = 0; c < 4; c++) {
+          const x = 132 + 126 * c;
           if (r === c) {
-            s += `<rect x="${x}" y="${y}" width="88" height="28" rx="3" fill="#E1F5EE" stroke="${G}" stroke-width="1.5"/>` +
-              T(x + 44, y + 14, 'generated & tested', 'middle', 'ts', 'font-size:9.2px;font-weight:700;fill:#04342C');
+            s += `<rect x="${x}" y="${y}" width="106" height="28" rx="3" fill="#E1F5EE" stroke="${G}" stroke-width="1.5"/>` +
+              T(x + 53, y + 14, 'generated & built', 'middle', 'ts', 'font-size:9.2px;font-weight:700;fill:#04342C');
           } else if (r === c - 1) {
-            s += `<rect x="${x}" y="${y}" width="88" height="28" rx="3" fill="#EEEDFE" stroke="${V}" stroke-width="1.4"/>` +
-              `<rect x="${x}" y="${y}" width="18" height="28" rx="3" fill="#9FE1CB" stroke="${G}" stroke-width="1"/>` +
-              T(x + 52, y + 14, 'DOS → Gen', 'middle', 'ts', 'font-size:9.5px;font-weight:700;fill:#26215C');
+            s += `<rect x="${x}" y="${y}" width="106" height="28" rx="3" fill="#EEEDFE" stroke="${V}" stroke-width="1.4"/>` +
+              `<rect x="${x}" y="${y}" width="20" height="28" rx="3" fill="#9FE1CB" stroke="${G}" stroke-width="1"/>` +
+              T(x + 62, y + 14, 'Synth → Gen', 'middle', 'ts', 'font-size:9.5px;font-weight:700;fill:#26215C');
           } else if (r < c - 1) {
-            s += `<rect x="${x}" y="${y}" width="88" height="28" rx="3" fill="#F1EFE8" stroke="#8a8880" stroke-width=".8"/>` +
-              T(x + 44, y + 14, 'stored on disk', 'middle', 'ts', 'font-size:9.2px;fill:#5a5955');
+            s += `<rect x="${x}" y="${y}" width="106" height="28" rx="3" fill="#F1EFE8" stroke="#8a8880" stroke-width=".8"/>` +
+              T(x + 53, y + 14, 'stored on disk', 'middle', 'ts', 'font-size:9.2px;fill:#5a5955');
           } else {
-            s += `<rect x="${x}" y="${y}" width="88" height="28" rx="3" fill="none" stroke="#c9c7bd" stroke-dasharray="3 3"/>`;
+            s += `<rect x="${x}" y="${y}" width="106" height="28" rx="3" fill="none" stroke="#c9c7bd" stroke-dasharray="3 3"/>`;
           }
         }
       }
 
-      const ly = my + 208;
+      const ly = my + 180;
       s += `<rect x="30" y="${ly}" width="22" height="14" rx="2" fill="#E1F5EE" stroke="${G}" stroke-width="1.4"/>` +
-        T(58, ly + 7, 'Created at this heartbeat (mapped to branches for upcoming corrections)', 'start', 'ts', sm) +
+        T(58, ly + 7, 'Created at this Global Update Heartbeat (mapped to branches for upcoming window)', 'start', 'ts', sm) +
         `<rect x="30" y="${ly + 20}" width="7" height="14" fill="#9FE1CB" stroke="${G}" stroke-width=".8"/><rect x="37" y="${ly + 20}" width="15" height="14" fill="#EEEDFE" stroke="${V}" stroke-width="1.2"/>` +
-        T(58, ly + 27, 'Audited by this heartbeat’s DOS and passed in <RealizedModuleFeedback> to this heartbeat’s Generator', 'start', 'ts', sm) +
+        T(58, ly + 27, 'Audited by State-Synthesis-For-Modules and passed in <RealizedModuleFeedback> to Modules Generator', 'start', 'ts', sm) +
         `<rect x="30" y="${ly + 40}" width="22" height="14" rx="2" fill="#F1EFE8" stroke="#8a8880" stroke-width=".8"/>` +
         T(58, ly + 47, 'Archived in Modules/Heartbeat-M/ on disk', 'start', 'ts', sm);
 
-      return [526, 'Stateless DOS synthesis modes and cross-heartbeat feedback timing', s, ''];
+      return [500, 'Stateless State Synthesis stages and cross-heartbeat feedback timing', s, ''];
     })();
 
     // ============================================================================
-    // FIGURE 10: MODULE TESTING & UTILIZATION FEEDBACK LOOP (NH)
+    // FIGURE 10: MODULE BUILDING & UTILIZATION FEEDBACK LOOP (NH)
     // ============================================================================
     const NH = (() => {
       const { C, T, L, P, D, ln, TX } = HX;
-      const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', K = '#1a1a1a', r = String.raw;
+      const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', r = String.raw;
       const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px', b11 = 'font-size:11px;font-weight:700';
       const dash = (x, y, w, h, fi = 'none', st = '#3d3d3a', sw = 1.2) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${fi}" stroke="${st}" stroke-width="${sw}" stroke-dasharray="2 3"/>`;
       const box = (x, y, w, h, fi, st, sw = .9) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="${fi}" stroke="${st}" stroke-width="${sw}"/>`;
@@ -1172,60 +1126,55 @@
       const bar = (x, y, w, v, fi, st) => `<rect x="${x}" y="${y - 6}" width="${w}" height="12" fill="none" stroke="#d8d6cd" stroke-width=".8"/>` + (v ? `<rect x="${x}" y="${y - 6}" width="${v * w}" height="12" fill="${fi}" stroke="${st}" stroke-width="1"/>` : ln(x, y - 6, x, y + 6, st, 2));
       const gut = (y, a, b) => T(14, y - 7, a, 'start', 'ts', b11) + T(14, y + 7, b, 'start', 'ts', b11);
       let s = '<g transform="translate(0 -866)">';
-      s += T(30, 886, 'Modules: testing proposed modules and measuring branch utilization', 'start', 'th') + T(30, 906, 'Independent testers verify each module; at the next heartbeat, DOS grades how surviving branches used it.', 'start', 'ts', gray);
+      s += T(30, 886, 'Modules: building proposed modules and measuring branch utilization', 'start', 'th') + T(30, 906, 'Independent Modules Building agents verify each module; at the next Global Update, State Synthesis grades how surviving branches used it.', 'start', 'ts', gray);
       s += dash(104, 918, 546, 272, '#FBFAF6');
       const RT = [924, 996, 1104];
       [994, 1102].forEach(y => { s += sep(104, y, 546) });
-      // 1. test: independent tester verdict
       {
         const y0 = RT[0];
         s += box(118, y0 + 10, 150, 22, '#E1F5EE', G, 1) + T(193, y0 + 21, 'Verdict: VALIDATED', 'middle', 'ts', 'font-size:10.5px;font-weight:700;fill:#04342C') +
           box(278, y0 + 10, 130, 22, '#FAECE7', R, .8) + T(343, y0 + 21, 'or REJECTED', 'middle', 'ts', 'font-size:10px;fill:#4A1B0C') +
           box(418, y0 + 10, 146, 22, '#FAEEDA', '#BA7517', .8) + T(491, y0 + 21, 'or INCONCLUSIVE', 'middle', 'ts', 'font-size:10px;fill:#412402');
-        s += T(118, y0 + 48, 'Dedicated Modules Tester executes the module in Module-M/ and records the empirical verdict.', 'start', 'ts', sm);
+        s += T(118, y0 + 48, 'Dedicated Modules Building agent executes the module in Module-M/ and records the empirical verdict.', 'start', 'ts', sm);
       }
-      // 2. DOS feedback: utilization
       {
         const y0 = RT[1];[['used correctly', .50, '#9FE1CB', G], ['used partially', .25, '#E1F5EE', G], ['not used', .25, '#D3D1C7', '#5F5E5A'], ['misused', 0, '#F0997B', R]].forEach(([n, v, f, st], i) => { const y = y0 + 16 + 20 * i; s += T(118, y, n, 'start', 'ts', sg) + bar(196, y, 150, v, f, st) + T(352, y, v.toFixed(2), 'start', 'ts m', 'font-size:10px') });
-        s += TX(410, y0 + 28, r`U(m)=\left[\tfrac{C}{T},\tfrac{P}{T},\tfrac{N}{T},\tfrac{M}{T}\right]`, 13) + T(410, y0 + 54, 'C, P, N, M: used correctly, partially,', 'start', 'ts', sg) + T(410, y0 + 66, 'not used, misused. T = their total.', 'start', 'ts', sg) + T(410, y0 + 84, 'DOS also flags STRONG critique_counterevidence.', 'start', 'ts', sg)
+        s += TX(410, y0 + 28, r`U(m)=\left[\tfrac{C}{T},\tfrac{P}{T},\tfrac{N}{T},\tfrac{M}{T}\right]`, 13) + T(410, y0 + 54, 'C, P, N, M: used correctly, partially,', 'start', 'ts', sg) + T(410, y0 + 66, 'not used, misused. T = their total.', 'start', 'ts', sg) + T(410, y0 + 84, 'State Synthesis also flags STRONG critique_counterevidence.', 'start', 'ts', sg)
       }
-      // 3. the feedback record
       {
         const y0 = RT[2];[[118, 150, 'observed_test_outcome', ['VALIDATED']], [280, 180, 'utilization (C, P, N, M)', ['.50 · .25 · .25 · .00']], [472, 164, 'critique_counterevidence', ['NONE (or STRONG + reason)']]].forEach(([x, w, t, v]) => { s += box(x, y0 + 6, w, 44, '#F8F7F2', '#b5b3aa') + T(x + 8, y0 + 16, t, 'start', 'ts', 'font-size:9px;fill:#5a5955') + v.map((l, k) => T(x + 8, y0 + 33 + 12 * k, l, 'start', 'ts m', 'font-size:9px;font-weight:700')).join('') });
-        s += T(118, y0 + 68, '↩ saved in Module-M/ and returned to the Modules Generator at the next heartbeat', 'start', 'ts', sm)
+        s += T(118, y0 + 68, '↩ saved in Module-M/feedback.json and returned to the Modules Generator at the next Global Update', 'start', 'ts', sm)
       }
-      [['Test', 'the verdict', RT[0] + 32], ['DOS feedback', 'how it was used', RT[1] + 50], ['Feedback', 'record', RT[2] + 35]].forEach(([a, b, y]) => { s += gut(y, a, b) });
+      [['Build', 'the verdict', RT[0] + 32], ['State Synthesis', 'how it was used', RT[1] + 50], ['Feedback', 'record', RT[2] + 35]].forEach(([a, b, y]) => { s += gut(y, a, b) });
       s += '</g>';
-      return [340, 'Module testing and utilization loop', s, ''];
+      return [340, 'Modules building and utilization loop', s, ''];
     })();
 
     // ============================================================================
-    // FIGURE 12: BSR WINDOW SCORING (MA)
+    // FIGURE 11: BSR WINDOW SCORING (MA)
     // ============================================================================
     const MA = (() => {
       const { C, T, L, P, D, ln } = HX;
       const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880';
       const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
-      const X = n => 100 + 75 * (n - 5), Yt = t => 190 - 20 * t;
+      const X = n => 100 + 92 * (n - 4), Yt = t => 190 - 20 * t;
       let s = `<defs><pattern id="hatchGA" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#E1F5EE"/><line x1="0" y1="0" x2="0" y2="6" stroke="${G}" stroke-width="1.6"/></pattern><pattern id="hatchRA" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#FAECE7"/><line x1="0" y1="0" x2="0" y2="6" stroke="${R}" stroke-width="1.6"/></pattern></defs>`;
-      // ---------- (a) running total
-      s += T(30, 20, '(a) Confirmed events become a running total', 'start', 'th');
+      s += T(30, 20, '(a) Confirmed events across the 4-iteration window become a running total', 'start', 'th');
       s += T(30, 38, 'Each confirmed event moves the total by its weight: small 1, medium 2, large 4. Zone edges are ±τ, with τ = 2.', 'start', 'ts', gray);
       s += `<rect x="90" y="62" width="495" height="88" fill="#BDEBD5"/><rect x="90" y="150" width="495" height="80" fill="#E3E1D4"/><rect x="90" y="230" width="495" height="48" fill="#F8CFBF"/>`;
       [[106, 'PROGRESS', 'net ≥ τ'], [190, 'STALL', '|net| < τ'], [254, 'REGRESS', 'net ≤ −τ']].forEach(([y, a, b]) => { s += T(592, y - 7, a, 'start', 'ts', 'font-size:12px;font-weight:600;fill:#2C2C2A') + T(592, y + 8, b, 'start', 'ts', sg) });
       [6, 4, 2, 0, -2, -4].forEach(t => { s += ln(86, Yt(t), 90, Yt(t), '#333', .8) + T(82, Yt(t), (t < 0 ? '−' + Math.abs(t) : t), 'end', 'ts', sm) });
       s += ln(90, Yt(0), 585, Yt(0), '#333', 1) + ln(90, 62, 90, 278, '#333', 1) + T(90, 52, 'running total', 'start', 'ts', sg);
-      [5, 6, 7, 8, 9, 10].forEach(n => { s += ln(X(n), 278, X(n), 284, '#333', .8) + T(X(n), 294, n == 5 ? 'start' : n, 'middle', 'ts', sm) });
-      s += T(337, 312, 'iteration of the window', 'middle', 'ts', sg);
-      const tot = { 5: 0, 6: 4, 7: 5, 8: 5, 9: 1, 10: -3 };
-      for (let n = 6; n <= 10; n++) { const p = tot[n - 1], xa = n == 6 ? 104 : X(n - 1) + 17; s += ln(xa, Yt(p), X(n) - 17, Yt(p), N, 1, '3 3') }
+      [4, 5, 6, 7, 8].forEach(n => { s += ln(X(n), 278, X(n), 284, '#333', .8) + T(X(n), 294, n == 4 ? 'start' : n, 'middle', 'ts', sm) });
+      s += T(337, 312, 'iteration of the 4-iteration window (iterations 5 … 8)', 'middle', 'ts', sg);
+      const tot = { 4: 0, 5: 4, 6: 5, 7: 1, 8: -3 };
+      for (let n = 5; n <= 8; n++) { const p = tot[n - 1], xa = n == 5 ? 104 : X(n - 1) + 17; s += ln(xa, Yt(p), X(n) - 17, Yt(p), N, 1, '3 3') }
       s += `<circle cx="100" cy="${Yt(0)}" r="4" fill="#333"/>`;
-      [[6, 4, '+4 large'], [7, 1, '+1 small'], [9, -4, '−4 large'], [10, -4, '−4 large']].forEach(([n, d, lab]) => {
+      [[5, 4, '+4 large'], [6, 1, '+1 small'], [7, -4, '−4 large'], [8, -4, '−4 large']].forEach(([n, d, lab]) => {
         const a = tot[n - 1], b = tot[n], top = Yt(Math.max(a, b)), h = 20 * Math.abs(d), pos = d > 0;
         s += `<rect x="${X(n) - 17}" y="${top}" width="34" height="${h}" fill="${pos ? '#56CCA3' : '#EF9677'}" stroke="${pos ? G : R}" stroke-width="1"/>` + T(X(n), pos ? top - 10 : top + h + 10, lab, 'middle', 'ts', 'font-size:11px;font-weight:600')
       });
-      s += `<circle cx="${X(8)}" cy="${Yt(5)}" r="4" fill="#fff" stroke="#333" stroke-width="1"/>` + T(X(8), Yt(5) + 16, 'no event', 'middle', 'ts', sg);
-      s += `<circle cx="${X(8)}" cy="${Yt(5)}" r="9" fill="none" stroke="${R}" stroke-width="1.4"/>` + ln(X(8) + 10, Yt(5), 512, Yt(5), R, 1, '4 3') + T(X(8) - 26, Yt(5) - 18, 'last good iteration = 8 (best_total = 5)', 'start', 'ts', `font-size:11px;fill:${R}`);
+      s += `<circle cx="${X(6)}" cy="${Yt(5)}" r="9" fill="none" stroke="${R}" stroke-width="1.4"/>` + ln(X(6) + 10, Yt(5), 512, Yt(5), R, 1, '4 3') + T(X(6) - 26, Yt(5) - 18, 'last good iteration = 6 (best_total = 5)', 'start', 'ts', `font-size:11px;fill:${R}`);
       s += `<path d="M512 ${Yt(5)}H522V${Yt(-3)}H512" fill="none" stroke="${R}" stroke-width="1.2"/>` + T(530, 138, 'best − net', 'start', 'ts', `font-size:11px;font-weight:600;fill:${R}`) + T(530, 154, '= 5 − (−3) = 8', 'start', 'ts', `font-size:11px;fill:${R}`);
       s += ln(492, Yt(-3), 552, Yt(-3), N, 1, '3 3') + `<path d="M544 ${Yt(0)}H554V${Yt(-3)}H544" fill="none" stroke="#333" stroke-width="1.2"/>` + T(560, Yt(-1.5), 'net = −3', 'start', 'ts', 'font-size:11px;font-weight:600');
       s += T(30, 332, 'net = −3 ≤ −τ → window outcome is REGRESS. Events count only when confirmed by a critique or sandbox run.', 'start', 'ts', 'fill:#5a5955;font-size:11.5px');
@@ -1235,7 +1184,7 @@
       s += T(30, y0 + 18, 'Why: a setback matters in proportion to the progress it undid, measured against everything that moved.', 'start', 'ts', gray);
       const u = 30, rx = 90, ry = y0 + 60;
       let x = rx;
-      [[4, 'it. 6 · +4', '#9FE1CB', G], [1, '+1', '#9FE1CB', G], [4, 'it. 9 · −4', '#F5C4B3', R], [4, 'it. 10 · −4', '#F5C4B3', R], [2, 'τ', '#E3E1D8', '#5F5E5A']].forEach(([w, lab, f, st]) => {
+      [[4, 'it. 5 · +4', '#9FE1CB', G], [1, '+1', '#9FE1CB', G], [4, 'it. 7 · −4', '#F5C4B3', R], [4, 'it. 8 · −4', '#F5C4B3', R], [2, 'τ', '#E3E1D8', '#5F5E5A']].forEach(([w, lab, f, st]) => {
         s += `<rect x="${x}" y="${ry}" width="${w * u}" height="24" fill="${f}" stroke="${st}" stroke-width="1"/>` + T(x + w * u / 2, ry + 12, lab, 'middle', 'ts', sm); x += w * u
       });
       s += `<path d="M${rx + 5 * u} ${ry - 4}V${ry - 10}H${rx + 13 * u}V${ry - 4}" fill="none" stroke="${R}" stroke-width="1.2"/>` + T(rx + 9 * u, ry - 21, 'ground given back after the peak: best − net = 8', 'middle', 'ts', `font-size:11px;fill:${R}`);
@@ -1258,7 +1207,6 @@
       const gy = cy + 84;
       s += `<rect x="${rx}" y="${gy}" width="${23 * v}" height="24" fill="none" stroke="#5F5E5A" stroke-width="1" stroke-dasharray="4 3"/><rect x="${rx}" y="${gy}" width="${3 * v}" height="24" fill="#5DCAA5" stroke="${G}" stroke-width="1"/>` + T(rx + 3 * v + 8, gy + 12, '3 of 23', 'start', 'ts', 'font-size:11px;font-weight:600');
       s += T(552, gy + 4, 'progress_kept', 'start', 'th', 'font-size:13px') + T(552, gy + 21, '= 3 / 23 = 0.130', 'start', 'ts m', 'font-size:11px');
-      // legend
       const ly = gy + 52;
       s += `<rect x="40" y="${ly - 6}" width="14" height="12" fill="#9FE1CB" stroke="${G}" stroke-width=".9"/>` + T(60, ly, 'confirmed progress', 'start') + `<rect x="215" y="${ly - 6}" width="14" height="12" fill="#F5C4B3" stroke="${R}" stroke-width=".9"/>` + T(235, ly, 'confirmed regression', 'start') + `<rect x="400" y="${ly - 6}" width="14" height="12" fill="#E3E1D8" stroke="#5F5E5A" stroke-width=".9"/>` + T(420, ly, 'τ: room left for noise', 'start');
       return [ly + 26, 'BSR window scoring', s, ''];
@@ -1273,12 +1221,10 @@
       const gray = 'fill:#5a5955;font-size:12px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
       const card = (x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="5" fill="#F8F7F2" stroke="#b5b3aa" stroke-width=".8" stroke-dasharray="2 3"/>`;
       let s = '';
-      // ================= (a) observed window evidence
       s += T(30, 20, '(a) Window evidence: observed drift and stall evidence', 'start', 'th') + T(30, 38, 'Window movement and critique_alignment directly determine drift and stall evidence.', 'start', 'ts', gray);
       s += card(30, 56, 298, 92) + T(44, 74, 'Observed window drift', 'start', 'th', 'font-size:12px') + TX(44, 102, r`\text{drift}=\dfrac{\text{net}}{\text{movement}+\tau}=\dfrac{-3}{13+2}=-0.200`, 12.5) + T(44, 130, 'Signed share of window movement (positive = progress)', 'start', 'ts', sg);
       s += card(352, 56, 298, 92) + T(366, 74, 'Observed stall evidence', 'start', 'th', 'font-size:12px') + TX(366, 102, r`\text{stall}=(1-\max(0,\text{drift}))\cdot\max(0,a)=0.600`, 12.5) + T(366, 130, 'a = critique_alignment ∈ [−1, 1], 0.6 here: (1 − 0) · 0.6 = 0.600', 'start', 'ts', sg);
       s += ln(30, 166, 650, 166, '#cfcdc4', 1);
-      // ================= (b) pressures and decision
       const y0 = 186;
       s += T(30, y0, '(b) Evidence becomes three pressures; the largest one picks the action', 'start', 'th') + T(30, y0 + 18, 'All four quantities come directly from the confirmed window events, standing ledger, and critique alignment.', 'start', 'ts', gray);
       s += T(30, y0 + 44, 'evidence', 'start', 'ts', sg) + T(196, y0 + 44, 'pressure formula', 'start', 'ts', sg) + T(450, y0 + 44, 'pressure', 'start', 'ts', sg) + T(596, y0 + 44, 'action', 'start', 'ts', sg);
@@ -1295,22 +1241,22 @@
       s += ln(bx, y0 + 208, bx + bw, y0 + 208, '#333', .8) + T(bx, y0 + 219, '0', 'middle', 'ts', sg) + T(bx + .3 * bw, y0 + 219, 'θ = 0.3', 'middle', 'ts', 'font-size:10px;font-weight:600;fill:#333') + T(bx + bw, y0 + 219, '1', 'middle', 'ts', sg);
       s += ln(sx, yc[0], sx, yc[2], '#b5b3aa', 1.2) + ln(bx + bw, yc[0], sx, yc[0], '#b5b3aa', 1.2) + ln(bx + bw, yc[2], sx, yc[2], '#b5b3aa', 1.2) + ln(bx + bw, yc[1], sx, yc[1], V, 2) + `<path d="M${sx} ${yc[1]}H594" stroke="${V}" stroke-width="1.6" marker-end="url(#a)"/>` + L('p', 596, yc[1] - 20, 76, 40, 'EVOLVE');
       const ry = y0 + 244;
-      s += T(30, ry + 2, 'EVOLVE has two forms: roll back when lost > stall · kept, otherwise edit the strategy text in place.', 'start', 'ts') + TX(30, ry + 24, r`0.533>0.600\cdot0.130=0.078\ \Rightarrow\ \text{roll back to the last good iteration, 8}`, 13);
-      s += P(`M634 ${yc[1] + 20}V${ry + 44}`) + L('p', 30, ry + 44, 620, 34, 'Decision for main2: EVOLVE with rollback to iteration 8');
+      s += T(30, ry + 2, 'EVOLVE has two forms: roll back when lost > stall · kept, otherwise edit the strategy text in place.', 'start', 'ts') + TX(30, ry + 24, r`0.533>0.600\cdot0.130=0.078\ \Rightarrow\ \text{roll back to the last good iteration, 6 (and distill only up to iter 6)}`, 12.5);
+      s += P(`M634 ${yc[1] + 20}V${ry + 44}`) + L('p', 30, ry + 44, 620, 34, 'Decision for main2: EVOLVE with rollback to iteration 6');
       return [ry + 88, 'BSR window evidence and decision', s, ''];
     })();
 
     // ============================================================================
-    // FIGURE 15: REPOSITORY GIT HISTORY, UNTRACKED SURFACES & SNAPSHOTS (NGIT)
+    // FIGURE 13: REPOSITORY GIT HISTORY, UNTRACKED SURFACES & SNAPSHOTS (NGIT)
     // ============================================================================
     const NGIT = (() => {
       const { C, T, L, P, D, ln, box, badge } = HX;
       const G = '#0F6E56', R = '#993C1D', V = '#534AB7', N = '#8a8880', GR = '#2E8B3A', OR = '#BA7517';
-      const gray = 'fill:#5a5955;font-size:11px', sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
+      const sm = 'font-size:11px', sg = 'fill:#5a5955;font-size:10px';
       const BK = { sh: [34, 80], s1: [122, 58], s2: [188, 68], pr: [264, 90], s3: [362, 134] };
       const Y = { sh: 88, s1: 151, s2: 224, pr: 340, s3: 434 };
-      const X = n => n <= 5 ? 186 + 34 * (n - 1) : 472 + 32 * (n - 6);
-      const ZX0 = 340, ZX1 = 452;
+      const X = n => n <= 4 ? 186 + 38 * (n - 1) : 450 + 36 * (n - 5);
+      const ZX0 = 324, ZX1 = 432;
       const curve = (x1, y1, x2, y2, st, w, d, m) => `<path d="M${x1} ${y1}C${(x1 + x2) / 2} ${y1} ${(x1 + x2) / 2} ${y2} ${x2} ${y2}" fill="none" stroke="${st}" stroke-width="${w}"${d ? ` stroke-dasharray="${d}"` : ''}${m ? ' marker-end="url(#a)"' : ''}/>`;
       const dot = (x, y, k) => {
         if (k == 'c') return `<circle cx="${x}" cy="${y}" r="7" fill="#4FCB9F" stroke="${G}" stroke-width="1.3"/>`;
@@ -1329,37 +1275,35 @@
       for (let n = 1; n <= 10; n++)s += ln(X(n), 128, X(n), bot - 6, '#ece9e0', .8, '2 3');
       { const B = Object.values(BK); B.forEach(([t, h], i) => { s += ln(166, t + 6, 166, t + h - 6, '#cfcdc4', 1); if (i < B.length - 1) s += ln(6, (t + h + B[i + 1][0]) / 2, 674, (t + h + B[i + 1][0]) / 2, '#b5b3aa', 1) }) }
       const lab = (y, a, b, c) => `<text class="m" x="14" y="${y - (c ? 14 : 7)}" style="font-size:11.5px;font-weight:700" fill="#1a1a1a" dominant-baseline="central">${a}</text>` + (c ? `<text class="m" x="14" y="${y}" style="font-size:11.5px;font-weight:700" fill="#1a1a1a" dominant-baseline="central">${c}</text>` : '') + T(14, y + (c ? 14 : 9), b, 'start', 'ts', `font-size:10.5px;fill:${GR}`);
-      s += lab(Y.sh - 2, 'Modules/Heartbeat-N/', 'Shared directories', 'strategies_history/') + lab(Y.s1, 'Strategy-1/', 'Continues (.md + .jsonl)') + lab(Y.s2, 'Strategy-2/', 'Pruned, slot reused') + lab(Y.pr - 10, 'Pruned_Strategies/', 'Archive of pruned folders') + lab(Y.s3, 'Strategy-3/', 'Restored to iteration 3');
+      s += lab(Y.sh - 2, 'Modules/Heartbeat-N/', 'Shared directories', 'State_Synthesis_history/') + lab(Y.s1, 'Strategy-1/', 'Continues (.md + .jsonl)') + lab(Y.s2, 'Strategy-2/', 'Pruned, slot reused') + lab(Y.pr - 10, 'Pruned_Strategies/', 'Archive of pruned folders') + lab(Y.s3, 'Strategy-3/', 'Restored to iteration 2');
       // rails
-      s += rail(Y.sh, 176, 648, N, 1.4) + rail(Y.pr, 176, 372, '#d6d3c9', 1, '2 3') + rail(Y.pr, 372, 648, N, 1.6) + rail(Y.s1, X(1), X(10)) + rail(Y.s3, X(1), X(10)) + rail(Y.s2, X(1), X(5) + 7) + rail(Y.s2, 372, X(10), V, 1.6);
+      s += rail(Y.sh, 176, 648, N, 1.4) + rail(Y.pr, 176, 356, '#d6d3c9', 1, '2 3') + rail(Y.pr, 356, 648, N, 1.6) + rail(Y.s1, X(1), X(10)) + rail(Y.s3, X(1), X(10)) + rail(Y.s2, X(1), X(4) + 7) + rail(Y.s2, 356, X(10), V, 1.6);
       // shared-directory commits and flags
-      const xH1 = X(3) + 18, xG = ZX0 + 16, xH2 = ZX1 - 16, xH3 = X(8) + 16, xF = X(10) + 34;
-      s += [xH1, xG, xH2, xH3].map(x => dot(x, Y.sh, 'h')).join('');
-      s += flag(xH1, Y.sh, 'Heartbeat 1', 68) + flag(xG, Y.sh, 'Update 1', 54) + flag(xH2, Y.sh, 'Heartbeat 2', 68, 8) + flag(xH3, Y.sh, 'Heartbeat 3', 68);
-      s += `<path d="M${xF} ${Y.sh - 9}L${xF + 9} ${Y.sh}L${xF} ${Y.sh + 9}L${xF - 9} ${Y.sh}Z" fill="${V}" stroke="#26215C" stroke-width="1.2"/>` + flag(xF, Y.sh, 'Final judge', 64, -6);
+      const xG = ZX0 + 18, xH1 = ZX1 - 18, xH2 = X(8) + 16;
+      s += [xG, xH1, xH2].map(x => dot(x, Y.sh, 'h')).join('');
+      s += flag(xG, Y.sh, 'GU 1 Rollout', 74, -8) + flag(xH1, Y.sh, 'GU 1 + HB 1', 72, 12) + flag(xH2, Y.sh, 'GU 2 + HB 2', 72);
       // Strategy-1
       for (let n = 1; n <= 10; n++)s += dot(X(n), Y.s1, 'c');
       s += dot(ZX0 + 48, Y.s1, 'm');
       // Strategy-2
-      for (let n = 1; n <= 5; n++)s += dot(X(n), Y.s2, 'c');
-      s += curve(X(5) + 8, Y.s2, 372, Y.pr, R, 1.6) + dot(372, Y.pr, 'a');
+      for (let n = 1; n <= 4; n++)s += dot(X(n), Y.s2, 'c');
+      s += curve(X(4) + 8, Y.s2, 356, Y.pr, R, 1.6) + dot(356, Y.pr, 'a');
       s += dot(ZX0 + 48, Y.s2, 'v');
-      for (let n = 6; n <= 10; n++)s += dot(X(n), Y.s2, 'v');
-      s += T(ZX0 + 58, Y.s2 - 18, 'first run, numbered iteration 5', 'start', 'ts', `font-size:10px;fill:${V}`);
+      for (let n = 5; n <= 10; n++)s += dot(X(n), Y.s2, 'v');
+      s += T(ZX0 + 58, Y.s2 - 18, 'first run, numbered iteration 4', 'start', 'ts', `font-size:10px;fill:${V}`);
       // Pruned_Strategies note
-      s += ln(381, Y.pr - 6, 416, Y.pr - 48, N, 1, '2 2') + T(420, Y.pr - 60, 'git mv Strategy-2', 'start', 'ts m', 'font-size:9.5px') + T(420, Y.pr - 47, 'Pruned_Strategies/Strategy-2_pruned_01', 'start', 'ts m', 'font-size:9.5px') + T(420, Y.pr - 30, 'history stays in git; a new empty', 'start', 'ts', sm) + T(420, Y.pr - 16, 'Strategy-2/ takes the freed slot', 'start', 'ts', sm);
+      s += ln(365, Y.pr - 6, 416, Y.pr - 48, N, 1, '2 2') + T(420, Y.pr - 60, 'git mv Strategy-2', 'start', 'ts m', 'font-size:9.5px') + T(420, Y.pr - 47, 'Pruned_Strategies/Strategy-2_pruned_01', 'start', 'ts m', 'font-size:9.5px') + T(420, Y.pr - 30, 'history stays in git; a new empty', 'start', 'ts', sm) + T(420, Y.pr - 16, 'Strategy-2/ takes the freed slot', 'start', 'ts', sm);
       // Strategy-3: restore
-      for (let n = 1; n <= 5; n++)s += dot(X(n), Y.s3, 'c');
+      for (let n = 1; n <= 4; n++)s += dot(X(n), Y.s3, 'c');
       s += dot(ZX0 + 48, Y.s3, 'r') + dot(ZX0 + 80, Y.s3, 'm');
-      for (let n = 6; n <= 10; n++)s += dot(X(n), Y.s3, 'c');
-      s += `<path d="M${X(3)} ${Y.s3 - 9}C${X(3)} ${Y.s3 - 56} ${ZX0 + 44} ${Y.s3 - 56} ${ZX0 + 42} ${Y.s3 - 11}" fill="none" stroke="${R}" stroke-width="1.6" marker-end="url(#a)"/>` + T((X(3) + ZX0 + 44) / 2, Y.s3 - 60, 'content restored from iteration 3', 'middle', 'ts', `font-size:10.5px;fill:${R}`);
-      const bm = (X(4) + X(5)) / 2;
-      s += `<path d="M${X(4) - 8} ${Y.s3 + 18}V${Y.s3 + 24}H${X(5) + 8}V${Y.s3 + 18}" fill="none" stroke="${R}" stroke-width="1.1"/>` + T(bm, Y.s3 + 39, 'out of the folder,', 'middle', 'ts', `font-size:10.5px;fill:${R}`) + T(bm, Y.s3 + 52, 'kept in git + .jsonl', 'middle', 'ts', `font-size:10.5px;fill:${R}`);
+      for (let n = 5; n <= 10; n++)s += dot(X(n), Y.s3, 'c');
+      s += `<path d="M${X(2)} ${Y.s3 - 9}C${X(2)} ${Y.s3 - 56} ${ZX0 + 44} ${Y.s3 - 56} ${ZX0 + 42} ${Y.s3 - 11}" fill="none" stroke="${R}" stroke-width="1.6" marker-end="url(#a)"/>` + T((X(2) + ZX0 + 44) / 2, Y.s3 - 60, 'content restored from iteration 2', 'middle', 'ts', `font-size:10.5px;fill:${R}`);
+      const bm = (X(3) + X(4)) / 2;
+      s += `<path d="M${X(3) - 8} ${Y.s3 + 18}V${Y.s3 + 24}H${X(4) + 8}V${Y.s3 + 18}" fill="none" stroke="${R}" stroke-width="1.1"/>` + T(bm, Y.s3 + 39, 'out of the folder,', 'middle', 'ts', `font-size:10.5px;fill:${R}`) + T(bm, Y.s3 + 52, 'kept in git + .jsonl', 'middle', 'ts', `font-size:10.5px;fill:${R}`);
       // shared iteration axis under the last block
       for (let n = 1; n <= 10; n++)s += T(X(n), bot + 14, n, 'middle', 'ts', sm);
       s += T(176, bot + 14, 'iteration', 'end', 'ts', sg);
 
-      // Untracked live root surfaces & snapshot strip — 3 side-by-side cards so nothing overflows
       const uy = bot + 30;
       s += box(14, uy, 646, 52, '#F8F7F2', '#b5b3aa', .9, 4) +
         T(24, uy + 13, 'Untracked live root surfaces (.git/info/exclude) & crash-safe resumption snapshot:', 'start', 'th', 'font-size:10.8px') +
@@ -1367,10 +1311,9 @@
         box(234, uy + 23, 202, 22, '#FAEEDA', OR, .8, 3) + T(335, uy + 34, '/tmp/ (universal R/W harnesses)', 'middle', 'ts m', 'font-size:8.6px;font-weight:700;fill:#412402') +
         box(446, uy + 23, 204, 22, '#E1F5EE', G, .8, 3) + T(548, uy + 34, 'latest.gz (state + commit SHAs)', 'middle', 'ts m', 'font-size:8.6px;font-weight:700;fill:#04342C');
 
-      // legend
       const ly = uy + 68;
       s += dot(36, ly, 'c') + T(50, ly, 'per-folder commit (.md + .jsonl)', 'start', 'ts', sm) + dot(350, ly, 'm') + T(364, ly, 'memory-bank distillation commit', 'start', 'ts', sm);
-      s += dot(36, ly + 24, 'h') + T(50, ly + 24, 'bundled HB / GU rollout commit (window_start)', 'start', 'ts', sm) + dot(350, ly + 24, 'r') + T(364, ly + 24, 'restore from commit (EVOLVE rollback)', 'start', 'ts', sm);
+      s += dot(36, ly + 24, 'h') + T(50, ly + 24, 'bundled GU rollout / Heartbeat commit', 'start', 'ts', sm) + dot(350, ly + 24, 'r') + T(364, ly + 24, 'restore from commit (EVOLVE rollback)', 'start', 'ts', sm);
       s += dot(36, ly + 48, 'v') + T(50, ly + 48, 'new folder in a freed slot', 'start', 'ts', sm) + dot(350, ly + 48, 'a') + T(364, ly + 48, 'archived by PRUNE (ordinal suffix _01)', 'start', 'ts', sm);
       return [ly + 70, 'Repository history and persistence', s, ''];
     })();
@@ -1387,7 +1330,7 @@
       sbox: NSBOX,
       tools: NTOOLS,
       heart: NHEART,
-      dos: NDOS,
+      synth: NSYNTH,
       hyp: NH,
       win: MA,
       fc: MB,
@@ -1398,43 +1341,43 @@
       {
         id: 'sec-1',
         kicker: 'Section I',
-        title: 'System Topology & Run Loop Scheduling',
-        desc: 'Deepthink explores competing strategies in parallel slots (<code>main1</code> to <code>mainN</code>) across <code>i</code> synchronized iterations. Every iteration acts as a two-phase barrier (Corrections in parallel, then Critiques in parallel), punctuated by Curated Context Heartbeats every <code>k</code> steps and Global Updates every <code>j</code> steps.',
+        title: 'System Topology & Unified Global Update Scheduling',
+        desc: 'Deepthink explores competing strategies in parallel slots (<code>main1</code> to <code>mainN</code>) across <code>i</code> synchronized iterations. Every iteration from <code>1</code> to <code>i − 1</code> acts as a two-phase barrier (Execution Agents in parallel, then Critique Agents in parallel), while final iteration <code>i</code> runs only the branch Execution Agents. Every <code>j = 4</code> iterations (when <code>n &lt; i</code>), a unified Global Update evaluates branch trajectories, revises strategies, distills memory banks in parallel with replacement branch initial <code>Execution &gt; Critique</code>, and concludes with a Curated Context Heartbeat.',
         figs: ['overview', 'sched']
       },
       {
         id: 'sec-2',
         kicker: 'Section II',
         title: 'Stateless Context Engineering, Memory Distillation & Trajectory Rewind',
-        desc: 'Prompts are never accumulated as stateful chat threads; <code>contextBuilders.ts</code> reconstructs every prompt from stored state fields and XML blocks. While in-prompt history follows a bounded window sawtooth of length <code>j</code> compressed into <code>DistilledMemoryBank</code> at each Global Update, the harness persists the full turn-by-turn agent execution trace in <code>.jsonl</code> format alongside every final output so agents can rewind past trajectories on disk.',
+        desc: 'Prompts are never accumulated as stateful chat threads; <code>contextBuilders.ts</code> reconstructs every prompt from stored state fields and XML blocks. While in-prompt history follows a bounded window sawtooth of length <code>j = 4</code> compressed into <code>DistilledMemoryBank</code> at each Global Update (with <code>EVOLVE (rollback)</code> distilling only up to <code>last_good_iteration</code>), the harness persists the full turn-by-turn agent execution trace in <code>.jsonl</code> format alongside every final output so agents can rewind past trajectories on disk.',
         figs: ['ctx', 'hist']
       },
       {
         id: 'sec-3',
         kicker: 'Section III',
         title: 'Multi-Agent Coordination, Verification Harnesses & Bounded Tool Gates',
-        desc: 'Agents collaborate through <code>shared_workspace.md</code> (capped at 5,000 tokens with surgical <code>edit</code> support) and share read/write access to workspace-root <code>/tmp/</code>, where branches and critiques co-evolve executable verification harnesses. What each agent may write is enforced by read-only container mounts with narrow writable windows, while toolchains come from a shared read-only environment. Tool-using invocations are governed by progressive countdown injections at <code>m − 10</code> and <code>m − 5</code> calls, a 5-turn grace window at <code>m</code>, tool revocation after <code>m + 5</code>, and a dual token + schema gate in <code>final_output</code>.',
+        desc: 'Agents collaborate through <code>shared_workspace.md</code> (capped at 5,000 tokens with surgical <code>edit</code> support) and share read/write access to workspace-root <code>/tmp/</code>, where Execution Agents and Critique Agents co-evolve executable verification harnesses. What each agent may write is enforced by read-only container mounts with narrow writable windows, while toolchains come from a shared read-only environment. Tool-using invocations are governed by progressive countdown injections at <code>m − 10</code> and <code>m − 5</code> calls, a 5-turn grace window at <code>m</code>, tool revocation after <code>m + 5</code>, and a dual token + schema gate in <code>final_output</code>.',
         figs: ['coord', 'sbox', 'tools']
       },
       {
         id: 'sec-4',
         kicker: 'Section IV',
-        title: 'Curated Context Heartbeat & Module Feedback Loop',
-        desc: 'Each Heartbeat synthesizes cross-branch state via DOS, generates high-impact modules, tests them in parallel, and maps verified packets to target branches. At the following Heartbeat, DOS audits how branches utilized the packet and flags any strong critique counterevidence.',
-        figs: ['heart', 'dos', 'hyp']
+        title: 'Curated Context Heartbeat, State Synthesis & Modules Building Loop',
+        desc: 'At the conclusion of each Global Update (when <code>modulesCount &gt; 0</code>), <code>State-Synthesis-For-Modules</code> synthesizes post-update cross-branch state and audits how surviving branches utilized the prior Global Update’s modules. The Modules Generator and Modules Impact Reviewer then design high-impact modules, which dedicated <code>Modules Building</code> agents build and verify in parallel before mapping packets to target branches.',
+        figs: ['heart', 'synth', 'hyp']
       },
       {
         id: 'sec-5',
         kicker: 'Section V',
         title: 'Global Update & BSR Empirical Decision Engine',
-        desc: 'Every <code>j</code> iterations, BSR reports confirmed progress and regression events across the window along with critique alignment. Deterministic formulas compute observed window <code>drift</code>, <code>stall_evidence</code>, <code>lost_ground</code>, and lifetime <code>progress_kept</code> from the standing event ledger to decide <code>CONTINUE</code>, <code>EVOLVE</code> (in place or rollback), or <code>PRUNE</code>.',
+        desc: 'Every <code>j = 4</code> iterations, BSR reports confirmed progress and regression events across the window along with critique alignment in parallel with <code>State-Synthesis-For-Strategies</code>. Deterministic formulas compute observed window <code>drift</code>, <code>stall_evidence</code>, <code>lost_ground</code>, and lifetime <code>progress_kept</code> from the standing event ledger to decide <code>CONTINUE</code>, <code>EVOLVE</code> (in place or rollback), or <code>PRUNE</code>.',
         figs: ['win', 'fc']
       },
       {
         id: 'sec-6',
         kicker: 'Section VI',
         title: 'Single-Tree Git History & Resumable State Persistence',
-        desc: 'All strategy folders, heartbeat archives, and pruned branches coexist in a single git branch and working tree so parallel agents can cross-read directories while the harness performs atomic per-folder commits and non-destructive rollbacks.',
+        desc: 'All strategy folders, heartbeat archives, State Synthesis histories, and pruned branches coexist in a single git branch and working tree so parallel agents can cross-read directories while the harness performs atomic per-folder commits and non-destructive rollbacks.',
         figs: ['git']
       }
     ];

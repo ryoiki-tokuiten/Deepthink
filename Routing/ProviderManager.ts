@@ -249,21 +249,18 @@ export class ProviderManager {
             }
         }
 
-        const geminiConfig = this.providers.get('gemini')!;
-        if (!geminiConfig.apiKey) {
-            geminiConfig.apiKey = '__SERVER_ENV__';
-            geminiConfig.isConfigured = true;
-        }
-
         const envKeys: Record<string, string | undefined> = {
-            openai: process.env.OPENAI_API_KEY,
-            anthropic: process.env.ANTHROPIC_API_KEY,
+            gemini: process.env.GEMINI_API_KEY?.trim() ? '__SERVER_ENV__' : undefined,
+            openai: process.env.OPENAI_API_KEY?.trim() || undefined,
+            anthropic: process.env.ANTHROPIC_API_KEY?.trim() || undefined,
         };
         for (const [name, key] of Object.entries(envKeys)) {
             if (key) {
                 const config = this.providers.get(name)!;
-                config.apiKey = key;
-                config.isConfigured = true;
+                if (!config.apiKey) {
+                    config.apiKey = key;
+                    config.isConfigured = true;
+                }
             }
         }
 

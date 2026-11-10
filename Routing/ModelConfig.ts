@@ -68,7 +68,6 @@ export interface ModelParameters {
     deepthinkDepth: number;
     i?: number;
     j?: number;
-    k?: number;
     isolateBranches: boolean;
     deepthinkCodeExecutionEnabled: boolean;
     thinkingLevel: ThinkingLevel;
@@ -88,7 +87,6 @@ const DEFAULT_MODEL_PARAMETERS: ModelParameters = {
     deepthinkDepth: 10,
     i: 10,
     j: 4,
-    k: 4,
     isolateBranches: false,
     deepthinkCodeExecutionEnabled: false,
     thinkingLevel: 'high',
@@ -165,21 +163,11 @@ export class ModelConfigManager {
     }
 
     public getJ(): number {
-        return Math.max(3, Math.min(8, Math.round(this.parameters.j ?? 4)));
+        return 4;
     }
 
-    public setJ(j: number): void {
-        this.parameters.j = Math.max(3, Math.min(8, Math.round(j)));
-    }
-
-    public getK(): number {
-        const j = this.getJ();
-        return Math.max(2, Math.min(j, Math.round(this.parameters.k ?? 4)));
-    }
-
-    public setK(k: number): void {
-        const j = this.getJ();
-        this.parameters.k = Math.max(2, Math.min(j, Math.round(k)));
+    public setJ(_j: number): void {
+        this.parameters.j = 4;
     }
 
     public isIsolateBranchesEnabled(): boolean {

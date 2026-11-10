@@ -16,7 +16,6 @@ export interface DeepthinkConfigState {
     deepthinkDepth: number;
     i: number;
     j: number;
-    k: number;
     isolateBranches: boolean;
     codeExecutionEnabled: boolean;
     bsrNoiseLevel: number;
@@ -47,7 +46,6 @@ export class DeepthinkConfigController extends EventTarget {
             deepthinkDepth: this.modelConfig.getDeepthinkDepth(),
             i: this.modelConfig.getI(),
             j: this.modelConfig.getJ(),
-            k: this.modelConfig.getK(),
             isolateBranches: this.modelConfig.isIsolateBranchesEnabled(),
             codeExecutionEnabled: this.modelConfig.isDeepthinkCodeExecutionEnabled(),
             bsrNoiseLevel: this.modelConfig.getBsrNoiseLevel(),
@@ -67,7 +65,6 @@ export class DeepthinkConfigController extends EventTarget {
     public getDeepthinkDepth(): number { return this.modelConfig.getDeepthinkDepth(); }
     public getI(): number { return this.modelConfig.getI(); }
     public getJ(): number { return this.modelConfig.getJ(); }
-    public getK(): number { return this.modelConfig.getK(); }
     public getMaxStrategies(): number { return MAX_DEEPTHINK_STRATEGIES; }
     public isIsolateBranchesEnabled(): boolean { return this.modelConfig.isIsolateBranchesEnabled(); }
     public isCodeExecutionEnabled(): boolean { return this.modelConfig.isDeepthinkCodeExecutionEnabled(); }
@@ -116,11 +113,6 @@ export class DeepthinkConfigController extends EventTarget {
     public setJ(j: number): void {
         this.modelConfig.setJ(j);
         this.emitChange('j');
-    }
-
-    public setK(k: number): void {
-        this.modelConfig.setK(k);
-        this.emitChange('k');
     }
 
     public setIsolateBranchesEnabled(enabled: boolean): void {

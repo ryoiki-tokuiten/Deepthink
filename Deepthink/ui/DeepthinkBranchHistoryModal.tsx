@@ -29,7 +29,7 @@ type RoleMeta = { icon: string; title: string; cardClass: string; modalTitle?: s
 
 const ROLE_META: Record<BranchHistoryMessage['role'], RoleMeta> = {
     solution_attempt: { icon: 'auto_fix_high', title: 'Execution Agent', cardClass: 'solution-attempt-card' },
-    solution_critique: { icon: 'Troubleshoot', title: 'Solution Critique', cardClass: 'solution-critique-card', modalTitle: 'Solution Critique Details' },
+    solution_critique: { icon: 'Troubleshoot', title: 'Critique Agent', cardClass: 'solution-critique-card', modalTitle: 'Critique Agent Details' },
 };
 
 const getRoleInfo = (role: BranchHistoryMessage['role'], _iterationNumber?: number): RoleMeta => {

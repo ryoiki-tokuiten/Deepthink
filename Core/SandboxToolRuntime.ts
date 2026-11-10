@@ -544,7 +544,7 @@ function buildRepositoryFilesystemRules(access?: SandboxRepositoryAccess): strin
         writableDirectory
             ? `- L2 Mutable Workspace: You may create, modify, and delete working files under /workspace/${writableDirectory} (excluding its L3 read-only /workspace/${writableDirectory}/history/ directory and /workspace/${writableDirectory}/strategy.md) and in the shared untracked /workspace/tmp (/tmp) directory.`
             : '- L2 Mutable Workspace: You may create, modify, and delete files in the shared untracked /workspace/tmp (/tmp) directory, which is accessible to all agents for verification harnesses and scratch work.',
-        '- L3 Immutable Kernel: All past histories (.md, .jsonl, .json in Strategy-N/history/, DOS_history/, strategies_history/, Pruned_Strategies/, and Modules/), strategy.md, /workspace/user_uploaded, and /workspace/.git are mounted read-only (0444 / ro-bind). Do not attempt to modify or delete L3 history files.',
+        '- L3 Immutable Kernel: All past histories (.md, .jsonl, .json in Strategy-N/history/, State_Synthesis_history/, strategies_history/, Pruned_Strategies/, and Modules/), strategy.md, /workspace/user_uploaded, and /workspace/.git are mounted read-only (0444 / ro-bind). Do not attempt to modify or delete L3 history files.',
         '- You may read every directory and file in this repository. The complete repository is mounted read-only except for your explicitly assigned writable directory, if any.',
         '- Repository files outside your writable L2 directory and /workspace/tmp are mounted read-only in L3. Treat them as shared evidence.',
         writableDirectory

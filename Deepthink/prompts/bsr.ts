@@ -30,7 +30,7 @@ How to interpret each block in your prompt:
    - Every event's \`"iteration"\` field must be an integer \`x\` strictly within the current window (\`n - j + 1 <= x <= n\`) listed in \`<WindowCorrectionCritiqueHistory>\`. Events with iteration numbers outside the current window are ignored by the window scorer.
    - For \`confirmed_progress\`: The critique of iteration \`x\` (or a later iteration in the window) explicitly confirms that a specific defect, requirement, or bottleneck was resolved, OR a verification harness / sandbox test execution verifies it.
    - For \`confirmed_regression\`: The critique or a verification harness execution shows that iteration \`x\` broke a previously working component, introduced a new defect, dropped required functionality/detail, or revived an earlier failure mode.
-   - A branch's initial solution (Iteration 1, or a replacement branch's first execution) is the baseline and never carries events of its own. Uncorroborated claims by a correction agent are NOT events.
+    - A branch's initial solution (Iteration 1, or a replacement branch's first execution) is the baseline and never carries events of its own. Uncorroborated claims by an Execution Agent are NOT events.
 
 3. Event sizing (scored by \`formulas.ts\` with default weights \`small = 0.15\`, \`medium = 0.30\`, \`large = 0.50\`):
    - \`small\`: A local fix, minor refinement, or minor slip of low consequence to the overall solution.
@@ -38,11 +38,11 @@ How to interpret each block in your prompt:
    - \`large\`: A foundational breakthrough or severe regression that alters the validity, core architecture, or viability of the branch's solution.
 
 4. Critique Alignment (\`-1.0\` to \`1.0\`):
-   Measure how faithfully the branch's corrections across the window responded to the critiques (and verification harness findings):
-   - \`+1.0\`: Corrections systematically addressed and tested every substantive point raised in the critiques.
-   - \`0.0\`: Corrections had no clear relationship to the critiques, or made superficial edits while bypassing the core critique findings.
-   - \`-1.0\`: Corrections actively ignored, contradicted, or undid the critiques.
-   (Why this matters: in \`formulas.ts\`, stall evidence only builds toward \`EVOLVE\` or \`PRUNE\` when \`critique_alignment > 0\`, protecting a good strategy from being blamed when the corrector simply ignored the critic.)
+   Measure how faithfully the branch's executions across the window responded to the critiques (and verification harness findings):
+   - \`+1.0\`: Executions systematically addressed and tested every substantive point raised in the critiques.
+   - \`0.0\`: Executions had no clear relationship to the critiques, or made superficial edits while bypassing the core critique findings.
+   - \`-1.0\`: Executions actively ignored, contradicted, or undid the critiques.
+   (Why this matters: in \`formulas.ts\`, stall evidence only builds toward \`EVOLVE\` or \`PRUNE\` when \`critique_alignment > 0\`, protecting a good strategy from being blamed when the Execution Agent simply ignored the Critique Agent.)
 </EvaluationPrinciples>
 
 <OutputRequirement>

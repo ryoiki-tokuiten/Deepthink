@@ -40,7 +40,6 @@ export async function ensureDeepthinkInitialized(): Promise<DeepthinkModule> {
             getDeepthinkDepth,
             getI: () => ctrl.getI(),
             getJ: () => ctrl.getJ(),
-            getK: () => ctrl.getK(),
             getIsolateBranchesEnabled,
             getDeepthinkCodeExecutionEnabled: () => ctrl.isCodeExecutionEnabled(),
             getBsrNoiseLevel: () => ctrl.getBsrNoiseLevel(),

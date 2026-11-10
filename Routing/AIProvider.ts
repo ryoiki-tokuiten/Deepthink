@@ -236,7 +236,7 @@ class GoogleAIProvider implements AIProvider {
     private apiKey = '';
 
     initialize(apiKey: string): boolean {
-        this.apiKey = apiKey || '__SERVER_ENV__';
+        this.apiKey = apiKey.trim();
         this.initialized = Boolean(this.apiKey);
         return this.initialized;
     }

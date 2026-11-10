@@ -37,25 +37,25 @@ export const DEEPTHINK_AGENT_REGISTRY = {
     modelKey: 'model_modulesGeneration',
     maxOutputTokens: 5000,
   },
-  modulesTester: {
-    label: 'Modules Tester',
-    sandboxRole: 'Modules Testing',
-    systemPromptKey: 'sys_deepthink_modulesTester',
-    modelKey: 'model_modulesTester',
+  modulesBuilding: {
+    label: 'Modules Building',
+    sandboxRole: 'Modules Building',
+    systemPromptKey: 'sys_deepthink_modulesBuilding',
+    modelKey: 'model_modulesBuilding',
     maxOutputTokens: 5000,
   },
-  solutionCritique: {
-    label: 'Solution Critique',
-    sandboxRole: 'Solution Critique',
-    systemPromptKey: 'sys_deepthink_solutionCritique',
-    modelKey: 'model_solutionCritique',
+  critiqueAgent: {
+    label: 'Critique Agent',
+    sandboxRole: 'Critique Agent',
+    systemPromptKey: 'sys_deepthink_critiqueAgent',
+    modelKey: 'model_critiqueAgent',
     maxOutputTokens: 5000,
   },
-  solutionCorrection: {
+  executionAgent: {
     label: 'Execution Agent',
     sandboxRole: 'Execution Agent',
-    systemPromptKey: 'sys_deepthink_solutionCorrection',
-    modelKey: 'model_solutionCorrection',
+    systemPromptKey: 'sys_deepthink_executionAgent',
+    modelKey: 'model_executionAgent',
     maxOutputTokens: 10000,
   },
   memoryBank: {
@@ -65,11 +65,11 @@ export const DEEPTHINK_AGENT_REGISTRY = {
     modelKey: 'model_memoryBank',
     maxOutputTokens: 10000,
   },
-  dos: {
-    label: 'Dissected Observations Synthesis',
-    sandboxRole: 'Dissected Observations Synthesis',
-    systemPromptKey: 'sys_deepthink_dos',
-    modelKey: 'model_dos',
+  stateSynthesis: {
+    label: 'State Synthesis',
+    sandboxRole: 'State Synthesis',
+    systemPromptKey: 'sys_deepthink_stateSynthesis',
+    modelKey: 'model_stateSynthesis',
     maxOutputTokens: 5000,
   },
   bsr: {

@@ -63,21 +63,20 @@ export const TokenVolumeGraph: React.FC<{
     modulesImpactReviewLoops?: number;
     i: number;
     j?: number;
-    k?: number;
     isolateBranches: boolean;
     codeExecutionEnabled?: boolean;
-}> = ({ strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, i, j, k, isolateBranches, codeExecutionEnabled }) => {
+}> = ({ strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, i, j, isolateBranches, codeExecutionEnabled }) => {
     const [focus, setFocus] = useState<TokenGraphFocus>('total');
     const [hoverDepth, setHoverDepth] = useState<number | null>(null);
     const safeDepth = Math.max(1, Math.round(i || 1));
 
     const trend = useMemo(() => buildDeepthinkTokenTrend({
-        strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, j, k, isolateBranches, codeExecutionEnabled, maxDepth: safeDepth,
-    }), [strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, j, k, isolateBranches, codeExecutionEnabled, safeDepth]);
+        strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, j, isolateBranches, codeExecutionEnabled, maxDepth: safeDepth,
+    }), [strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, j, isolateBranches, codeExecutionEnabled, safeDepth]);
 
     const selected = useMemo(() => calculateDeepthinkTokenEstimate({
-        strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, deepthinkDepth: safeDepth, i: safeDepth, j, k, isolateBranches, codeExecutionEnabled,
-    }), [strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, j, k, isolateBranches, codeExecutionEnabled, safeDepth]);
+        strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, deepthinkDepth: safeDepth, i: safeDepth, j, isolateBranches, codeExecutionEnabled,
+    }), [strategiesCount, strategyProximityLoops, modulesCount, modulesImpactReviewLoops, j, isolateBranches, codeExecutionEnabled, safeDepth]);
 
     const [chartSize, setChartSize] = useState<{ width: number; height: number }>({ width: TOKEN_CHART.width, height: TOKEN_CHART.height });
     const shellRef = useRef<HTMLDivElement>(null);
@@ -246,7 +245,6 @@ export const TotalLLMCallsTokenEstimationModal: React.FC<{ onClose: () => void }
         modulesImpactReviewLoops: configState.modulesImpactReviewLoops,
         i: configState.i,
         j: configState.j,
-        k: configState.k,
         isolateBranches: configState.isolateBranches,
     }), [configState]);
 
@@ -263,7 +261,6 @@ export const TotalLLMCallsTokenEstimationModal: React.FC<{ onClose: () => void }
         deepthinkDepth: safeDepth,
         i: safeDepth,
         j: configState.j,
-        k: configState.k,
         isolateBranches: configState.isolateBranches,
         codeExecutionEnabled: configState.codeExecutionEnabled,
     }), [configState, safeDepth]);
@@ -330,7 +327,6 @@ export const TotalLLMCallsTokenEstimationModal: React.FC<{ onClose: () => void }
                                 modulesImpactReviewLoops={configState.modulesImpactReviewLoops}
                                 i={configState.i}
                                 j={configState.j}
-                                k={configState.k}
                                 isolateBranches={configState.isolateBranches}
                                 codeExecutionEnabled={configState.codeExecutionEnabled}
                             />
@@ -351,7 +347,6 @@ interface DeepthinkConfigPanelProps {
     modulesEnabled: boolean;
     i: number;
     j: number;
-    k: number;
     isolateBranches: boolean;
     codeExecutionEnabled: boolean;
     bsrNoiseLevel: number;
@@ -366,8 +361,6 @@ interface DeepthinkConfigPanelProps {
     onModulesImpactReviewLoopsChange: (count: number) => void;
     onModulesToggle: (enabled: boolean) => void;
     onIChange: (i: number) => void;
-    onJChange: (j: number) => void;
-    onKChange: (k: number) => void;
     onIsolateBranchesToggle: (enabled: boolean) => void;
     onCodeExecutionToggle: (enabled: boolean) => void;
     onBsrNoiseLevelChange: (val: number) => void;
@@ -455,31 +448,122 @@ const ToggleSwitch: React.FC<{ id: string; checked: boolean; onChange: (checked:
     </label>
 );
 
-const LoopScheduleSection: React.FC<{
-    i: number; j: number; k: number; curatedContextEnabled: boolean;
-    onIChange: (i: number) => void; onJChange: (j: number) => void; onKChange: (k: number) => void;
-}> = ({ i, j, k, curatedContextEnabled, onIChange, onJChange, onKChange }) => {
-    const errorI = i < 5 || i > 20 ? 'Total iterations (i) must be between 5 and 20.' : null;
-    const errorJ = j < 3 || j > 8 ? 'Global update interval (j) must be between 3 and 8.' : null;
-    const maxK = Math.max(2, Math.min(8, j));
-    const effectiveK = Math.min(k, maxK);
-    const errorK = curatedContextEnabled && (k < 2 || k > j) ? `Heartbeat interval (k) must be between 2 and j (${j}).` : null;
+const MosaicSlider: React.FC<{ id: string; value: number; min: number; max: number; disabled?: boolean; onChange: (value: number) => void }> = ({ id, value, min, max, disabled, onChange }) => {
+    const safeValue = clamp(value, min, max);
+    const ratio = max > min ? clamp((safeValue - min) / (max - min), 0, 1) : 0;
+    const trackRef = useRef<HTMLDivElement>(null);
+    const [trackWidth, setTrackWidth] = useState<number>(820);
 
-    const updatePoints: number[] = [];
-    for (let it = j; it < i; it += j) updatePoints.push(it);
+    useEffect(() => {
+        if (!trackRef.current) return;
+        const measure = (w: number) => {
+            if (w > 0) setTrackWidth(Math.round(w));
+        };
+        measure(trackRef.current.getBoundingClientRect().width);
+        const observer = new ResizeObserver(entries => {
+            if (entries[0]) measure(entries[0].contentRect.width);
+        });
+        observer.observe(trackRef.current);
+        return () => observer.disconnect();
+    }, []);
 
-    const heartbeatPoints: number[] = [];
-    if (curatedContextEnabled && k >= 2) {
-        for (let it = 1; it < i; it++) {
-            if (updatePoints.includes(it)) continue;
-            const nextBarrier = updatePoints.find(p => p > it) ?? i;
-            const prevBarrier = [...updatePoints].reverse().find(p => p < it) ?? 0;
-            const cycleOffset = it - prevBarrier;
-            if (cycleOffset > 0 && cycleOffset % k === 0 && nextBarrier - it >= 2) {
-                heartbeatPoints.push(it);
+    const cells = useMemo(() => {
+        const usableTrackWidth = Math.max(120, trackWidth - 30);
+        const filledPx = Math.max(0, ratio * usableTrackWidth + 10);
+        const totalCols = Math.max(1, Math.floor((filledPx - 6) / 7));
+        const items: Array<{ key: string; x: number; y: number; fill: string }> = [];
+
+        for (let c = 0; c < totalCols; c++) {
+            const u = totalCols > 1 ? c / (totalCols - 1) : 1;
+            if (u < 0.08) continue;
+            const progress = clamp((u - 0.08) / 0.92, 0, 1);
+            const env = Math.pow(progress, 0.92);
+            const clusterWave = 0.5 + 0.5 * Math.sin(c * 0.65) * Math.cos(c * 0.23);
+
+            for (let r = 0; r < 4; r++) {
+                const seed1 = (((c + 1) * 374761393 + (r + 1) * 668265263) ^ ((c * 1274126177) >>> 2)) >>> 0;
+                const seed2 = (((c + 5) * 1103515245 + (r + 3) * 12345) ^ (seed1 >>> 7)) >>> 0;
+                const h1 = (seed1 % 1000) / 1000;
+                const h2 = (seed2 % 1000) / 1000;
+
+                let fill: string;
+                const sparkleThreshold = 0.85 - 0.11 * clusterWave * clamp((u - 0.32) / 0.68, 0, 1);
+
+                if (u > 0.30 && h1 > sparkleThreshold) {
+                    const alpha = clamp((0.50 + 0.44 * h2) * Math.pow(progress, 0.8), 0.05, 0.95);
+                    fill = `rgba(255, 246, 252, ${alpha.toFixed(3)})`;
+                } else if (h1 > 0.50) {
+                    const alpha = clamp((0.18 + 0.34 * h2) * env, 0.04, 0.62);
+                    fill = `rgba(255, 186, 222, ${alpha.toFixed(3)})`;
+                } else if (h1 < 0.24) {
+                    const alpha = clamp((0.16 + 0.28 * h2) * env, 0.04, 0.52);
+                    fill = `rgba(110, 10, 60, ${alpha.toFixed(3)})`;
+                } else {
+                    const alpha = clamp((0.06 + 0.14 * h2) * env, 0.02, 0.26);
+                    fill = `rgba(255, 220, 238, ${alpha.toFixed(3)})`;
+                }
+
+                items.push({
+                    key: `${c}-${r}`,
+                    x: 6 + c * 7,
+                    y: 3 + r * 7,
+                    fill,
+                });
             }
         }
-    }
+        return items;
+    }, [trackWidth, ratio]);
+
+    return (
+        <div className={classNames('mosaic-slider-container', disabled && 'is-disabled')} ref={trackRef}>
+            <input
+                type="range"
+                id={id}
+                className="mosaic-slider-input"
+                min={min}
+                max={max}
+                step={1}
+                value={safeValue}
+                disabled={disabled}
+                onPointerDown={() => { if (!disabled) requestConfigWarning(); }}
+                onChange={e => { requestConfigWarning(); onChange(toInteger(e.currentTarget.value)); }}
+            />
+            <div className="mosaic-slider-track">
+                <div
+                    className="mosaic-slider-fill"
+                    style={{ width: `calc(${ratio.toFixed(5)} * (100% - 30px) + 14px)` }}
+                >
+                    <svg className="mosaic-slider-svg" aria-hidden="true">
+                        {cells.map(cell => (
+                            <rect
+                                key={cell.key}
+                                x={cell.x}
+                                y={cell.y}
+                                width={5}
+                                height={5}
+                                rx={1.35}
+                                fill={cell.fill}
+                            />
+                        ))}
+                    </svg>
+                </div>
+                <div
+                    className="mosaic-slider-thumb"
+                    style={{ left: `calc(1px + ${ratio.toFixed(5)} * (100% - 30px))` }}
+                />
+            </div>
+        </div>
+    );
+};
+
+const LoopScheduleSection: React.FC<{
+    i: number; curatedContextEnabled: boolean;
+    onIChange: (i: number) => void;
+}> = ({ i, curatedContextEnabled, onIChange }) => {
+    const errorI = i < 5 || i > 20 ? 'Total iterations (i) must be between 5 and 20.' : null;
+
+    const updatePoints: number[] = [];
+    for (let it = 4; it < i; it += 4) updatePoints.push(it);
 
     return (
         <SectionFrame containerClass="evolution-filter-options-container" headerClass="evolution-filter-options-header dt-title-red" icon="event_repeat" title="Loop Schedule & Global Updates">
@@ -490,13 +574,12 @@ const LoopScheduleSection: React.FC<{
                             const itNum = idx + 1;
                             const isUpdate = updatePoints.includes(itNum);
                             const isFinal = itNum === i;
-                            const isHeartbeat = heartbeatPoints.includes(itNum);
                             const hasHeartbeatAtUpdate = isUpdate && curatedContextEnabled;
                             return (
                                 <div
                                     key={itNum}
-                                    className={classNames('timeline-step', isUpdate && 'update-step', hasHeartbeatAtUpdate && 'with-heartbeat', isFinal && 'final-step', isHeartbeat && 'heartbeat-step')}
-                                    title={`Iteration ${itNum}${isUpdate ? `: Global Update + BSR${hasHeartbeatAtUpdate ? ' (Curated Heartbeat synchronized)' : ''}` : isFinal ? ': Final Iteration (Corrections Only)' : isHeartbeat ? `: Curated Context Heartbeat (k=${k})` : ''}`}
+                                    className={classNames('timeline-step', isUpdate && 'update-step', hasHeartbeatAtUpdate && 'with-heartbeat', isFinal && 'final-step')}
+                                    title={`Iteration ${itNum}${isUpdate ? `: Global Update + BSR${hasHeartbeatAtUpdate ? ' + Curated Context Modules' : ''}` : isFinal ? ': Final Iteration (Executions Only)' : ''}`}
                                 >
                                     <span className="step-num">{itNum}</span>
                                 </div>
@@ -507,24 +590,12 @@ const LoopScheduleSection: React.FC<{
             </div>
 
             <div className="loop-controls-inputs">
-                <div className={classNames('slider-pair-row', curatedContextEnabled && 'slider-triple-row')}>
-                    <div className="input-group-tight">
+                <div className="slider-pair-row">
+                    <div className="input-group-tight" style={{ gridColumn: '1 / -1' }}>
                         <label htmlFor="dt-i-slider" className="input-label">Total Iterations (i): <span id="dt-i-value">{i}</span></label>
-                        <SliderWithFill id="dt-i-slider" value={i} min={5} max={20} color="var(--accent-pink)" onChange={onIChange} />
+                        <MosaicSlider id="dt-i-slider" value={i} min={5} max={20} onChange={onIChange} />
                         {errorI && <div className="config-error-text">{errorI}</div>}
                     </div>
-                    <div className="input-group-tight">
-                        <label htmlFor="dt-j-slider" className="input-label">Global Update Interval (j): <span id="dt-j-value">{j}</span></label>
-                        <SliderWithFill id="dt-j-slider" value={j} min={3} max={8} color="var(--accent-pink)" onChange={onJChange} />
-                        {errorJ && <div className="config-error-text">{errorJ}</div>}
-                    </div>
-                    {curatedContextEnabled && (
-                        <div className="input-group-tight">
-                            <label htmlFor="dt-k-slider" className="input-label">Heartbeat Interval (k): <span id="dt-k-value">{effectiveK}</span> iterations</label>
-                            <SliderWithFill id="dt-k-slider" value={effectiveK} min={2} max={maxK} color="var(--accent-pink)" onChange={onKChange} />
-                            {errorK && <div className="config-error-text">{errorK}</div>}
-                        </div>
-                    )}
                 </div>
             </div>
         </SectionFrame>
@@ -555,9 +626,9 @@ const Figure4Visualization: React.FC<{ modulesEnabled: boolean }> = ({ modulesEn
                     </marker>
                 </defs>
                 <g className={!modulesEnabled ? 'vis-dimmed' : ''}>
-                    {B('t', 28, 46, 136, 84, 'Critique Synthesis')}
+                    {B('t', 28, 46, 136, 84, 'State Synthesis')}
                     {B('t', 188, 46, 164, 84, 'Modules Generator', 'with impact review')}
-                    {B('t', 376, 46, 132, 84, 'Independent', 'Modules testing')}
+                    {B('t', 376, 46, 132, 84, 'Independent', 'Modules building')}
                     {B('g', 532, 46, 110, 84, 'Map', 'to branches')}
                     {P('M164 88H186')}
                     {P('M352 88H374')}
@@ -567,7 +638,7 @@ const Figure4Visualization: React.FC<{ modulesEnabled: boolean }> = ({ modulesEn
                     {B('p', 120, 386, 440, 82, 'Back & forth impact review history saved', 'and added back to the next modules generation')}
                     {P('M587 130V258H484')}
                     {B('g', 298, 216, 184, 84, 'Branch context', 'mapped packet')}
-                    {B('g', 36, 216, 206, 84, 'Next correction agents', 'read the branch context')}
+                    {B('g', 36, 216, 206, 84, 'Next execution agents', 'read the branch context')}
                     {P('M298 258H244')}
                 </g>
             </svg>
@@ -589,7 +660,7 @@ const CuratedContextSection: React.FC<{
         <div className="window-content" id="dt-information-packet-content">
             <div className={classNames('curated-subfeature-card', !modulesEnabled && 'collapsed')}>
                 <div className="curated-subfeature-header">
-                    <label htmlFor="dt-modules-toggle" className="curated-toggle-label">Modules Generation & Independent Testing</label>
+                    <label htmlFor="dt-modules-toggle" className="curated-toggle-label">Modules Generation &amp; Independent Building</label>
                     <ToggleSwitch
                         id="dt-modules-toggle"
                         checked={modulesEnabled}
@@ -755,10 +826,9 @@ const DeepthinkConfigPanelComponent: React.FC<DeepthinkConfigPanelProps> = props
         deepthinkDepth: safeDepth,
         i: safeDepth,
         j: props.j,
-        k: props.k,
         isolateBranches: props.isolateBranches,
         codeExecutionEnabled: props.codeExecutionEnabled,
-    }), [props.strategiesCount, props.strategyProximityLoops, props.modulesEnabled, props.modulesCount, props.modulesImpactReviewLoops, safeDepth, props.j, props.k, props.isolateBranches, props.codeExecutionEnabled]);
+    }), [props.strategiesCount, props.strategyProximityLoops, props.modulesEnabled, props.modulesCount, props.modulesImpactReviewLoops, safeDepth, props.j, props.isolateBranches, props.codeExecutionEnabled]);
 
     return (
         <div className="deepthink-config-panel">
@@ -804,8 +874,8 @@ const DeepthinkConfigPanelComponent: React.FC<DeepthinkConfigPanelProps> = props
                 </div>
                 <div className="config-middle-row" style={{ marginBottom: '1rem' }}>
                     <LoopScheduleSection
-                        i={props.i} j={props.j} k={props.k} curatedContextEnabled={props.modulesEnabled}
-                        onIChange={withConfigWarning(props.onIChange)} onJChange={withConfigWarning(props.onJChange)} onKChange={withConfigWarning(props.onKChange)}
+                        i={props.i} curatedContextEnabled={props.modulesEnabled}
+                        onIChange={withConfigWarning(props.onIChange)}
                     />
                 </div>
                 <div className="config-bottom-grid">
@@ -844,22 +914,12 @@ function deriveProps(controller: DeepthinkController): DeepthinkConfigPanelProps
         ...state,
         i: state.i ?? 10,
         j: state.j ?? 4,
-        k: state.k ?? 4,
         onStrategiesChange: value => controller.setStrategiesCount(value),
         onStrategyProximityLoopsChange: value => controller.setStrategyProximityLoops(value),
         onModulesChange: value => controller.setModulesCount(value),
         onModulesImpactReviewLoopsChange: value => controller.setModulesImpactReviewLoops(value),
         onModulesToggle: value => controller.setModulesEnabled(value),
         onIChange: value => controller.setI(Math.max(5, Math.min(20, Math.round(value)))),
-        onJChange: value => {
-            const clampedJ = Math.max(3, Math.min(8, Math.round(value)));
-            controller.setJ(clampedJ);
-            if (controller.getK() > clampedJ) controller.setK(clampedJ);
-        },
-        onKChange: value => {
-            const maxK = Math.max(2, Math.min(8, controller.getJ()));
-            controller.setK(Math.max(2, Math.min(maxK, Math.round(value))));
-        },
         onIsolateBranchesToggle: value => controller.setIsolateBranchesEnabled(value),
         onCodeExecutionToggle: value => controller.setCodeExecutionEnabled(value),
         onBsrNoiseLevelChange: value => controller.setBsrNoiseLevel(value),

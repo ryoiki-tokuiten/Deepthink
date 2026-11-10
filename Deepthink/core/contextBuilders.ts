@@ -5,15 +5,14 @@ import type {
   BsrLedgerEntry,
   DeepthinkBranchIteration,
   DeepthinkMainStrategyData,
-  DosOutput,
+  StateSynthesisOutput,
   HeartbeatBlock,
 } from './types.ts';
 import {
-  buildDosStepIiNote,
+  buildStateSynthesisForModulesNote,
   buildModuleHeartbeatNote,
   buildStrategyGlobalUpdateNote,
-  DOS_HEARTBEAT_NOTE,
-  DOS_STEP_I_NOTE,
+  STATE_SYNTHESIS_FOR_STRATEGIES_NOTE,
 } from './harnessNotes.ts';
 
 function fence(label: string, content: string | undefined): string {
@@ -61,7 +60,7 @@ export function buildContextForStrategyGlobalUpdate(
     rollbackTo?: number | 'window_start';
     eventReasons: string[];
   }>,
-  stepIDosOutput: DosOutput,
+  stateSynthesisStrategiesOutput: StateSynthesisOutput,
   strategiesUsedSoFar: Array<{ slotId: string; iterationFinalized: number; text: string }>,
   currentGuTurns?: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>,
   strategiesCount?: number
@@ -107,7 +106,7 @@ export function buildContextForStrategyGlobalUpdate(
     '',
     fence('ConsolidatedBsrDecisions', formattedDecisions),
     '',
-    fence('DosSynthesisForStrategies', JSON.stringify(stepIDosOutput.core_synthesis || stepIDosOutput, null, 2)),
+    fence('StateSynthesisForStrategies', JSON.stringify(stateSynthesisStrategiesOutput.core_synthesis || stateSynthesisStrategiesOutput, null, 2)),
     '',
     fence('StrategiesFinalizedAndUsedSoFar', formattedUsedSoFar),
   );
@@ -133,7 +132,7 @@ export function buildContextForModulesGenerate(
   challenge: string,
   heartbeatNo: number,
   activeStrategies: DeepthinkMainStrategyData[],
-  dosOutput?: DosOutput,
+  stateSynthesisOutput?: StateSynthesisOutput,
   previousHeartbeat?: HeartbeatBlock,
   currentHbTurns?: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>,
   modulesCount?: number,
@@ -163,8 +162,8 @@ export function buildContextForModulesGenerate(
       '',
       fence('ActiveRunningStrategies', formattedActiveStrategies),
     );
-    if (dosOutput?.core_synthesis && Object.keys(dosOutput.core_synthesis).length > 0) {
-      parts.push('', fence('DosCoreSynthesis', JSON.stringify(dosOutput.core_synthesis, null, 2)));
+    if (stateSynthesisOutput?.core_synthesis && Object.keys(stateSynthesisOutput.core_synthesis).length > 0) {
+      parts.push('', fence('StateSynthesisCore', JSON.stringify(stateSynthesisOutput.core_synthesis, null, 2)));
     }
   } else {
     const prevModulesAndTests = previousHeartbeat.modules.map(m => ({
@@ -208,8 +207,8 @@ export function buildContextForModulesGenerate(
       fence('ModulesFinalizedAndUsedSoFar', formattedUsedSoFar),
     );
 
-    if (dosOutput?.core_synthesis && Object.keys(dosOutput.core_synthesis).length > 0) {
-      parts.push('', fence('DosCoreSynthesis', JSON.stringify(dosOutput.core_synthesis, null, 2)));
+    if (stateSynthesisOutput?.core_synthesis && Object.keys(stateSynthesisOutput.core_synthesis).length > 0) {
+      parts.push('', fence('StateSynthesisCore', JSON.stringify(stateSynthesisOutput.core_synthesis, null, 2)));
     }
   }
 
@@ -230,9 +229,9 @@ export function buildContextForModulesGenerate(
   return parts.join('\n\n');
 }
 
-export function buildContextForDos(
+export function buildContextForStateSynthesis(
   challenge: string,
-  kind: 'heartbeat' | 'step_i' | 'step_ii',
+  kind: 'strategies' | 'modules',
   activeBranches: Array<{
     branchId: string;
     strategyText: string;
@@ -247,26 +246,26 @@ export function buildContextForDos(
       form?: BsrEvolveForm;
       rollbackTo?: number | 'window_start';
     }>;
-    stepIOutput?: DosOutput;
+    stateSynthesisStrategiesOutput?: StateSynthesisOutput;
   }
 ): string {
   const formattedBranches = activeBranches.map(b => (
     `### Branch ${b.branchId}\nStrategy: ${b.strategyText}\n\nLatest Correction:\n${b.latestCorrection}\n\nLatest Critique:\n${b.latestCritique}`
   )).join('\n\n');
 
-  if (kind === 'step_i') {
+  if (kind === 'strategies') {
     return [
       `# Core Challenge`,
       challenge,
       '',
-      `# Dissected Observations Synthesis - Global Update (Step-i)`,
-      fence('HarnessNote', DOS_STEP_I_NOTE),
+      `# State Synthesis - Global Update (State-Synthesis-For-Strategies)`,
+      fence('HarnessNote', STATE_SYNTHESIS_FOR_STRATEGIES_NOTE),
       '',
       fence('ActiveBranchesState', formattedBranches),
     ].join('\n\n');
   }
 
-  const formatPrevModulesForDos = (hb?: HeartbeatBlock): string => {
+  const formatPrevModulesForStateSynthesis = (hb?: HeartbeatBlock): string => {
     if (!hb || !hb.modules || hb.modules.length === 0) return 'None.';
     return JSON.stringify(
       hb.modules.map(m => ({
@@ -280,33 +279,17 @@ export function buildContextForDos(
     );
   };
 
-  if (kind === 'heartbeat') {
-    const prevModules = formatPrevModulesForDos(options?.previousHeartbeat);
-
-    return [
-      `# Core Challenge`,
-      challenge,
-      '',
-      `# Dissected Observations Synthesis - Heartbeat DOS`,
-      fence('HarnessNote', DOS_HEARTBEAT_NOTE),
-      '',
-      fence('PreviousHeartbeatModulesAndTests', prevModules),
-      '',
-      fence('ActiveBranchesState', formattedBranches),
-    ].join('\n\n');
-  }
-
-  const note = buildDosStepIiNote(options?.slotStatuses || []);
-  const prevModules = formatPrevModulesForDos(options?.previousHeartbeat);
+  const note = buildStateSynthesisForModulesNote(options?.slotStatuses || []);
+  const prevModules = formatPrevModulesForStateSynthesis(options?.previousHeartbeat);
 
   return [
     `# Core Challenge`,
     challenge,
     '',
-    `# Dissected Observations Synthesis - Global Update (Step-ii)`,
+    `# State Synthesis - Global Update (State-Synthesis-For-Modules)`,
     fence('HarnessNote', note),
     '',
-    fence('StepIOutputBaseline', JSON.stringify(options?.stepIOutput, null, 2)),
+    fence('StateSynthesisForStrategiesBaseline', JSON.stringify(options?.stateSynthesisStrategiesOutput, null, 2)),
     '',
     fence('PreviousHeartbeatModulesAndTests', prevModules),
     '',
@@ -375,7 +358,7 @@ export function buildCrossStrategyLatestCorrectionCritique(
   }).join('\n\n');
 }
 
-export function buildContextForCorrectionAgent(
+export function buildContextForExecutionAgent(
   challenge: string,
   branchId: string,
   strategyText: string,

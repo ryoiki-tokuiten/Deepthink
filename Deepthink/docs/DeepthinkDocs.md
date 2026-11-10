@@ -1,41 +1,41 @@
 # Deepthink
 
-Deepthink tackles a hard challenge by running several different strategies side by side. Each strategy lives in its own branch. In every iteration each branch writes or improves a solution and has it critiqued, and all branches finish the iteration before any of them moves on. Every few iterations the system looks at how each branch has been trending and decides whether to keep it, change its strategy, or replace it. At the end, a judge picks the best solution among the surviving branches.
+Deepthink tackles a hard challenge by running several different strategies side by side. Each strategy lives in its own branch. In every iteration each branch executes on its strategy (producing or refining a complete solution) and has it critiqued by a dedicated Critique Agent, and all branches finish the iteration before any of them moves on. Every $j = 4$ iterations (when $n < i$), a Global Update evaluates how each branch has been trending, decides whether to keep it (`CONTINUE`), evolve its strategy (`EVOLVE` in place or with rollback), or replace it (`PRUNE`), distills surviving branch histories into a Memory Bank in parallel with replacement branch initial `Execution > Critique`, and concludes with a Curated Context Heartbeat that synthesizes cross-branch state and builds tested modules for the next window. At the final iteration $i$, every surviving branch runs its final Execution (without a critique) and stands as a valid candidate output.
 
-One kind of supporting evidence can be added along the way, and it is optional: modules that are tested by dedicated tester agents. The pipeline is the same on every run. Settings change the number of branches, the length of the run, and which optional agents take part.
+One kind of supporting evidence can be added at the end of each Global Update, and it is optional: curated context modules that are built and verified in parallel by dedicated **Modules Building** agents. The pipeline is the same on every run. Settings change the number of branches, the total number of iterations ($i$), and which optional agents take part.
 
 ## Terms
 
 | Term | Meaning |
 |---|---|
 | Branch, slot | One strategy and everything built on it. Branches are named `main1` to `mainN`. The name belongs to the slot, so replacing a branch's strategy text or the whole branch keeps the name. |
-| Iteration | One round in which every branch advances once. |
-| Window | The `j` iterations between two global updates. |
-| Global update | Runs every `j` iterations. Scores each branch, then keeps it, rewrites its strategy, or replaces it. |
-| Heartbeat | Runs every `k` iterations. Refreshes the evidence that corrections read. |
-| Curated context | That evidence: tested modules prepared per branch. |
-| DOS | Dissected Observations Synthesis. An agent that summarizes where every branch stands. |
-| BSR | Branch State Representation. An agent that reports what changed in a branch during a window. |
+| Iteration | One round in which every branch advances once (`Execution > Critique` for iterations $1 \dots i-1$; `Execution` only for final iteration $i$). |
+| Window | The $j = 4$ iterations between two Global Updates. |
+| Global update | Runs after every $j = 4$ iterations (when $n \bmod 4 = 0$ and $n < i$). Scores each branch via BSR, keeps it, rewrites its strategy, or replaces it, distills memory banks, and concludes with the Curated Context Heartbeat. |
+| Heartbeat | The concluding phase of a Global Update when modules are enabled (`modulesCount > 0`). Runs `State-Synthesis-For-Modules`, `Modules Generator <-> Modules Impact Reviewer`, and parallel `Modules Building` agents to refresh the module packets that upcoming Execution Agents read. |
+| Curated context | That evidence: independently built and tested modules prepared and mapped per branch at the end of each Global Update. |
+| State Synthesis | An agent (`stateSynthesis`) that summarizes where every branch stands across two Global Update stages: `State-Synthesis-For-Strategies` and `State-Synthesis-For-Modules`. |
+| BSR | Branch State Representation. An agent (`bsr`) that reports confirmed progress and regression events in a branch during a window. |
 
 ## Principles
 
 - A branch name is also its folder, `Strategy-N`. Rewriting a strategy never changes the name.
-- No agent decides what happens to a branch. BSR describes the window, and fixed formulas turn that report and the standing event ledger into a decision.
-- Iteration numbers count from the start of the run for every branch. A replacement branch created after iteration 10 records its first solution as iteration 10 and its first correction as iteration 11.
-- Modules are optional. The run works without them.
+- A single unified **Execution Agent** (`executionAgent`) handles iteration 1 initial execution, replacement branch initial execution, and all subsequent iterative refinements ($2 \dots i$) based on the branch history and context passed to it.
+- No agent decides what happens to a branch. BSR describes the window, and fixed formulas turn that report and the standing event ledger into a decision (`CONTINUE`, `EVOLVE (in_place)`, `EVOLVE (rollback)`, or `PRUNE`).
+- Iteration numbers count from the start of the run for every branch. A replacement branch created during the Global Update after iteration 4 records its initial `Execution > Critique` at iteration 4 and its next refinement at iteration 5.
+- Curated context modules are optional and run exclusively as the concluding phase of each Global Update. There are no standalone heartbeats between Global Updates.
 
 ## Configuration
 
 | Setting | Meaning | Range | Default |
 |---|---|---|---|
 | `i` | Total iterations | 5 to 20 | 10 |
-| `j` | Iterations between global updates | 3 to 8 | 5 |
-| `k` | Iterations between heartbeats | 2 to `j` | 3 |
-| `strategiesCount` | Number of branches | 1 to 5 | |
-| `strategyProximityLoops` | Rounds of strategy generator and proximity review | | |
-| `modulesCount` | Modules per heartbeat. 0 turns modules off | | |
+| `j` | Fixed Global Update interval | Fixed at 4 | 4 |
+| `strategiesCount` | Number of parallel strategy branches | 1 to 5 | |
+| `strategyProximityLoops` | Rounds of Strategy Generator and Strategy Proximity Reviewer | | |
+| `modulesCount` | Modules per Global Update Heartbeat. 0 turns modules off | | |
 | `modulesImpactReviewLoops` | Rounds of Modules Generator and Modules Impact Reviewer | | |
-| `isolateBranches` | Correction agents get no information about other branches | | |
+| `isolateBranches` | Execution Agents get no information about other branches | | |
 | `deepthinkCodeExecutionEnabled` | Gives agents sandbox tools | | |
 | `thinkingLevel` | Reasoning effort requested from the provider | | |
 | `bsrNoiseLevel` | BSR noise threshold $\tau$ | | 0.05 |
@@ -44,9 +44,7 @@ One kind of supporting evidence can be added along the way, and it is optional: 
 | `bsrWeightMedium` | Weight for `medium` confirmed events | | 0.30 |
 | `bsrWeightLarge` | Weight for `large` confirmed events | | 0.50 |
 
-All bounds are inclusive and a violation is reported as an error. `j` may be larger than `i`: with `i = 5` and `j = 8`, no global update runs.
-
-Modules use the `k` slider, in a panel titled "Customize How Often Curated Context Is Refreshed". If modules are turned off, curated context is off, and `k` is ignored.
+All bounds are inclusive and a violation is reported as an error. The Global Update cadence is fixed at $j = 4$ iterations, so Global Updates occur after iterations $4, 8, 12, 16$ whenever $n < i$.
 
 `isolateBranches` is enforced through the agents' instructions. Every agent can technically read the whole repository, so isolation depends on the agent following its prompt.
 
@@ -56,45 +54,47 @@ Each agent has an editable system prompt and an optional model override. The ove
 
 ```text
 Seed strategies
-Iteration 1            every branch writes a first solution, then it is critiqued
-Iterations 2 to i - 1  every branch corrects its solution, then the correction is critiqued
-Iteration i            every branch runs its final correction (no critique); pipeline completes
+Iteration 1            every branch runs Execution Agent, then Critique Agent
+Iterations 2 to i - 1  every branch runs Execution Agent, then Critique Agent
+                       (when n mod 4 == 0 and n < i, a Global Update + Heartbeat runs after Critique)
+Iteration i            every branch runs its final Execution Agent (no Critique); pipeline completes
 ```
 
-Inside an iteration, all branches run in parallel and the system waits for every one of them to finish. Every iteration from 2 through `i - 1` runs correction and critique with its natural context, and the final iteration `i` runs only the branch corrections. Each surviving strategy branch produces a valid final output. There are no modules before iteration 1, because modules are generated from critiques and DOS synthesis.
+Inside an iteration, all branches run their Execution Agent in parallel, and once all finishes, all branches run their Critique Agent in parallel (for $n < i$). In the final iteration $i$, only the branch Execution Agents run, and each surviving strategy branch stands as a valid final output. There are no modules before the first Global Update (after iteration 4), because modules are synthesized from accumulated branch executions, critiques, and `State-Synthesis-For-Modules`.
 
 After iteration `n` finishes, exactly one of these happens:
 
-1. If `n = i`, the run completes once the final corrections finish. No critique, heartbeat, or global update runs.
-2. If `n` is a multiple of `j`, a global update runs. It always ends with a heartbeat, whatever `k` is.
-3. Otherwise a counter of iterations since the last heartbeat goes up by one. When it reaches `k` and the heartbeat is worth running, a heartbeat runs and the counter resets. If curated context is off, this step is skipped.
+1. If `n = i`, the run completes once the final Execution Agents finish. No Critique Agent or Global Update runs.
+2. If `n` is a multiple of `4` (`n % 4 === 0` and `n < i`), a unified **Global Update** runs (concluding with a Curated Context Heartbeat when `modulesCount > 0`).
+3. Otherwise, the pipeline advances directly to iteration `n + 1`.
 
-Whatever runs after iteration `n` is what the corrections in iteration `n + 1` and later will read.
-
-**When a heartbeat is worth running.** A heartbeat is read by the corrections that follow it, up to the next global update, which brings a heartbeat of its own. So a heartbeat only runs if it will serve at least two corrections. Let `G` be the next multiple of `j` after `n`. If a global update lies ahead (`G < i`) and `G - n < 2`, the heartbeat is skipped. If no global update lies ahead, it runs. A heartbeat that ends a global update is never skipped. The counter resets after any heartbeat, wherever it ran.
-
-**Example: `i = 15`, `j = 5`, `k = 3`**
+**Example: `i = 10` (default), `j = 4` (fixed)**
 
 | After iteration | What runs |
 |---|---|
-| 1, 2 | nothing |
-| 3 | heartbeat |
-| 4 | nothing |
-| 5 | global update, then its heartbeat |
-| 6, 7 | nothing |
-| 8 | heartbeat |
-| 9 | nothing |
-| 10 | global update, then its heartbeat |
-| 11, 12 | nothing |
-| 13 | heartbeat |
-| 14 | nothing |
-| 15 | final iteration (corrections only); run completes |
+| 1, 2, 3 | nothing (advance to next iteration) |
+| 4 | Global Update 1 (BSR + `State-Synthesis-For-Strategies` $\to$ Strategy Revision $\to$ Parallel Memory Bank Distillation & Pruned Branch `Execution > Critique` $\to$ `State-Synthesis-For-Modules` $\to$ `Modules Generator <-> Impact Reviewer` $\to$ Parallel `Modules Building`) |
+| 5, 6, 7 | nothing (advance to next iteration) |
+| 8 | Global Update 2 (full Global Update + Heartbeat 2) |
+| 9 | nothing (advance to final iteration) |
+| 10 | Final iteration (Execution Agents only); run completes |
 
-**Example of a skipped heartbeat: `i = 14`, `j = 6`, `k = 5`.** After iteration 5 the counter reaches `k`, but the global update comes right after iteration 6, so a heartbeat would serve only one correction. It is skipped, and the global update's heartbeat refreshes everything.
+**Example: `i = 15`, `j = 4` (fixed)**
+
+| After iteration | What runs |
+|---|---|
+| 1, 2, 3 | nothing |
+| 4 | Global Update 1 + Heartbeat 1 |
+| 5, 6, 7 | nothing |
+| 8 | Global Update 2 + Heartbeat 2 |
+| 9, 10, 11 | nothing |
+| 12 | Global Update 3 + Heartbeat 3 |
+| 13, 14 | nothing |
+| 15 | Final iteration (Execution Agents only); run completes |
 
 ## Strategy generation
 
-Strategies come from a generator and a proximity reviewer that take turns. The generator proposes, the reviewer criticizes, and the generator revises, for as many rounds as `strategyProximityLoops` says. The last proposal is used. What each agent receives is listed under What every agent receives.
+Strategies come from a **Strategy Generator** and a **Strategy Proximity Reviewer** that take turns. The generator proposes, the reviewer criticizes, and the generator revises, for as many rounds as `strategyProximityLoops` says. The last proposal is used. What each agent receives is listed under What every agent receives.
 
 The reviewer looks for overlap between strategies, variations that are only on the surface, parts of the problem that no strategy covers, and strategies that depend on each other.
 
@@ -106,82 +106,43 @@ The reviewer looks for overlap between strategies, variations that are only on t
 
 The strategies are assigned to `main1` to `mainN` in order.
 
-**Global update.** The generator returns only the slots that are changing, covered in the global update section below.
+**Global update.** The generator returns only the slots that are changing (`evolved_slots` and `pruned_slots`), covered in the Global update section below.
 
 ## Branch work
 
-### Solution attempt
+### Execution Agent
 
-Runs in iteration 1 and for every replacement branch. It writes its solution into `Strategy-N/`.
+A single unified **Execution Agent** (`executionAgent`) runs in every iteration ($1 \dots i$) and for the initial execution of every replacement branch created in a `PRUNE` slot during a Global Update:
+- In iteration 1 (and replacement branch initial runs), it receives the core challenge and its assigned strategy text and writes its first complete solution into `Strategy-N/`.
+- In iterations $2 \dots i$, it receives the core challenge, its assigned strategy text, `<BranchHistoryAndMemory>` (including any distilled Memory Bank, mapped Curated Context packet, and current window execution-critique pairs), and—when `isolateBranches` is off—`<CrossStrategyPeerIntelligence>`, and writes the branch's next complete solution into `Strategy-N/`.
 
-### Critique
+### Critique Agent
 
-Assesses the solution just produced for correctness, completeness, broken constraints, structural weaknesses, and whether the strategy still looks viable. It does not rewrite the solution.
+The **Critique Agent** (`critiqueAgent`) runs after every Execution Agent in iterations $1 \dots i-1$ and after every replacement branch's initial execution during a Global Update. It assesses the solution just produced for correctness, completeness, broken constraints, structural weaknesses, and whether the strategy still looks viable. It does not rewrite the solution.
 
-### Correction
+### Memory Bank
 
-Writes the branch's next complete solution into `Strategy-N/`. When isolation is off, it is expected to open the other branches' directories and learn from them.
+At each Global Update, every surviving branch (`CONTINUE`, `EVOLVE in place`, and `EVOLVE with rollback`) is distilled by the **Memory Bank** (`memoryBank`) agent in parallel with replacement branch `Execution > Critique`. The agent merges the previous memory bank with the window's execution-critique history into a single cohesive document recording verified insights, recurring failure modes, attempted repairs, and trajectory evolution.
 
-### Memory bank
+The window is the $j = 4$ iterations that end at the Global Update: iterations `n - 3` to `n`.
+- For `CONTINUE` and `EVOLVE (in_place)`, all 4 iterations of the window (`n - 3 .. n`) are distilled.
+- For `EVOLVE (rollback)`, only the window iterations up to and including the rollback target (`windowStart .. last_good_iteration`) are distilled, excluding the regressed iterations that occurred after `last_good_iteration`. If `last_good_iteration` is `window_start`, no window iterations remain after the rollback, so no new Memory Bank call is made and the previous memory bank stays unchanged.
 
-At each global update, every surviving branch gets a new memory bank. The agent merges the previous memory bank with the window's full history. It records what was learned, which failures keep recurring, which repairs were tried, and where the strategy has been heading.
+Nothing is compressed inside a window. Only the Memory Bank compresses across Global Update boundaries.
 
-The window is the `j` iterations that end at the update: iterations `n - j + 1` to `n`. After a rollback, only the iterations that remain are used. If none remain, the previous memory bank stays and no new one is written. Nothing is compressed inside a window. Only the memory bank compresses.
+## Global update & Heartbeat
 
-## Heartbeat
+A Global Update runs after iteration `n` when `n` is a multiple of `4` (`n % 4 === 0`) and `n < i`, immediately after iteration `n`'s `Execution > Critique` completes.
 
-A heartbeat prepares the evidence that corrections will read when modules are on.
+1. **BSR and `State-Synthesis-For-Strategies` run in parallel.** One BSR agent per branch evaluates the 4-iteration window, while one State Synthesis call (`State-Synthesis-For-Strategies`) summarizes where every branch stands.
+2. **Code decides.** The BSR reports go through the deterministic formulas in the BSR section and give each branch one decision: `CONTINUE`, `EVOLVE (in_place)`, `EVOLVE (rollback)`, or `PRUNE`.
+3. **New strategies.** When at least one branch is `EVOLVE` or `PRUNE`, the Strategy Generator and Strategy Proximity Reviewer rewrite only the changing slots.
+4. **The repository is updated and rolled out.** Pruned branches are archived into `Pruned_Strategies/`, branches undergoing `EVOLVE (rollback)` are restored from their `last_good_iteration` (or `window_start`) commit, each freed slot gets a fresh folder, and `State_Synthesis_global_update_XX_for_strategies.md` (+ `.jsonl`), strategy revision histories, `strategies_finalized_and_used_so_far.md`, and updated `Strategy-N/strategy.md` files are committed together in a single rollout commit (recording the `window_start` commit for the next window).
+5. **Memory Bank distillation and replacement branch executions run in parallel.** Each surviving branch (`CONTINUE`, `EVOLVE in place`, `EVOLVE with rollback`) runs its Memory Bank distillation (`windowStart .. n` for `CONTINUE`/`EVOLVE in place`, or `windowStart .. last_good_iteration` for `EVOLVE with rollback`) and commits its `Strategy-N/` folder. Simultaneously, each `PRUNE` replacement branch runs its initial `Execution > Critique` (recorded as iteration `n`) and commits its `Strategy-N/` folder. The system waits for all branches to finish.
+6. **`State-Synthesis-For-Modules` (when `modulesCount > 0`).** State Synthesis runs its second call of the Global Update (`State-Synthesis-For-Modules`), auditing how surviving branches utilized the previous Global Update's modules and synthesizing the post-update state across surviving and newly initialized replacement branches.
+7. **Modules Generation, Impact Review, and Modules Building (when `modulesCount > 0`).** Using the output of `State-Synthesis-For-Modules`, the **Modules Generator** and **Modules Impact Reviewer** run for `modulesImpactReviewLoops` rounds to produce `modulesCount` modules. Each module is then built and tested in parallel by a dedicated **Modules Building** agent in `Modules/Heartbeat-H/Module-M/`, mapped into per-branch packets, and committed together with `State_Synthesis_global_update_XX_for_modules.md` (+ `.jsonl`) and realized `feedback.json` records.
 
-| Modules | Steps |
-|---|---|
-| on | DOS, modules, tests, mapping |
-| off | nothing |
-
-A heartbeat that ends a global update reuses that update's second DOS call instead of running its own (see DOS).
-
-### Modules
-
-A Modules Generator and a Modules Impact Reviewer take turns, as they do for strategies. The reviewer checks that each module can be proven wrong or verified, can be tested alone, and matters to the challenge.
-
-Each module is an object:
-
-```json
-{
-  "module_id": "m2",
-  "text": "A self-contained investigative task or subcomponent that a test can verify or falsify",
-  "target_branches": ["main1", "main3"]
-}
-```
-
-An empty `target_branches` list means the result is useful to every branch.
-
-### Tests
-
-Each module goes to its own tester, and the testers run in parallel. A tester receives the challenge (and any image) and its one module in its prompt, while having full read access across the repository, read and write access to its own `Module-M/` folder and `tmp/`, and access to `shared_workspace`.
-
-A tester ends with a classification line, which is read as `VALIDATED`, `REJECTED`, or `INCONCLUSIVE`.
-
-### Mapping
-
-Each branch gets a packet made of every module marked for all branches plus every module that targets it, each with its full test result. The same selection decides which modules a branch's prompt and sandbox include.
-
-### What a heartbeat produces
-
-For each branch, a packet of mapped module results, which every correction reads until the next heartbeat. The heartbeat also adds a block to the modules history.
-
-## Global update
-
-A global update runs after iteration `n` when `n` is a multiple of `j` and `n < i`.
-
-1. **BSR and the first DOS call run in parallel.** One BSR agent per branch, plus one DOS call that summarizes where every branch stands.
-2. **Code decides.** The BSR reports go through the formulas in the BSR section and give each branch one decision: CONTINUE, EVOLVE, or PRUNE.
-3. **New strategies.** The strategy generator and proximity reviewer rewrite the slots that need it (below).
-4. **The repository is updated and rolled out.** Pruned branches are archived, branches that are rolling back are restored from commit, each freed slot gets a fresh folder, and Step-i DOS, strategy revision histories, `strategies_finalized_and_used_so_far.md`, and updated `Strategy-N/strategy.md` files are committed together in a single rollout commit (recording the `window_start` commit for the next window).
-5. **Memory banks and replacements.** In parallel, each surviving branch gets a new memory bank and commits its `Strategy-N/` folder, and each replacement branch writes a first solution, has it critiqued, and commits its `Strategy-N/` folder. The system waits for all branches to finish.
-6. **Second DOS call.** If modules are on, DOS looks at the updated state and produces feedback on the previous heartbeat's modules.
-7. **Heartbeat.** It runs whatever `k` is, and its DOS step is the second call from step 6. Step-ii DOS, realized feedback on the previous heartbeat's modules, and the new heartbeat's modules and test outputs are committed together in a single commit.
-
-The first DOS call runs even when curated context is off, because strategy generation uses it. The second runs only when modules are on.
+`State-Synthesis-For-Strategies` runs even when curated context modules are off (`modulesCount = 0`), because strategy generation uses it. `State-Synthesis-For-Modules`, `Modules Generator <-> Impact Reviewer`, and `Modules Building` run only when `modulesCount > 0`.
 
 ### Strategy changes
 
@@ -196,25 +157,46 @@ It returns only what changes:
 }
 ```
 
-There must be one entry for every EVOLVE slot, one for every PRUNE slot, and none for any other slot. A branch that continues cannot be touched, because the output format has no place for it. For a pruned slot, the generator decides how much of the old strategy to reuse. It may re-aim the same idea, keep the part that worked, or drop it. The strategy text is the only thing a replacement branch inherits.
+There must be one entry for every `EVOLVE` slot, one for every `PRUNE` slot, and none for any `CONTINUE` slot. A branch that continues cannot be touched, because the output format has no place for it. For a pruned slot, the generator decides how much of the old strategy to reuse. It may re-aim the same idea, keep the part that worked, or drop it. The strategy text is the only thing a replacement branch inherits.
 
-## DOS
+### Modules & Modules Building
 
-DOS summarizes where the branches stand. It remembers nothing between calls. Each call is built fresh from the stored state.
+When `modulesCount > 0`, a **Modules Generator** and a **Modules Impact Reviewer** take turns at the end of each Global Update, just as Strategy Generator and Strategy Proximity Reviewer do for strategies. The reviewer checks that each module can be proven wrong or verified, can be built and tested alone, and matters to the challenge.
 
-| Call | When | Output |
-|---|---|---|
-| Heartbeat DOS | Start of a heartbeat that does not end a global update, modules on | Summary, plus feedback on the last heartbeat's modules if one exists |
-| First call in a global update | Step 1 | Summary only. It goes to the strategy generator |
-| Second call in a global update | Step 6, modules on | Summary and feedback on surviving branches. It also serves as the DOS for the heartbeat that follows |
-
-After the update, replacement branches appear with only their first solution and critique, and pruned branches are gone. A branch that rolled back has lost its later iterations. DOS can give feedback only on branches that survived, since new branches never received the last heartbeat's results. Each call comes with a note explaining which of these cases applies, and the second call's note lists what happened to each slot. The inputs and notes are listed under What every agent receives.
-
-DOS reports only what it can see. It does not claim that a module caused a decision about a branch. For each module and each branch the module was sent to, it says whether the result was used, and if so whether correctly, partly, or wrongly. It also says whether a later critique gives strong evidence against the tester's verdict.
+Each module is an object:
 
 ```json
 {
-  "core_synthesis": { "...": "the structured summary" },
+  "module_id": "m2",
+  "text": "A self-contained investigative task or subcomponent that a build/test run can verify or falsify",
+  "target_branches": ["main1", "main3"]
+}
+```
+
+An empty `target_branches` list means the result is useful to every branch.
+
+Each finalized module goes to its own **Modules Building** (`modulesBuilding`) agent, and the Modules Building agents run in parallel. Each Modules Building agent receives the challenge (and any image) and its one assigned module in its prompt, while having full read access across the repository, read and write access to its own `Modules/Heartbeat-H/Module-M/` folder and `tmp/`, and access to `shared_workspace`.
+
+Every Modules Building agent ends with a classification line, which is parsed as `VALIDATED`, `REJECTED`, or `INCONCLUSIVE`.
+
+Each branch then receives a mapped packet made of every module marked for all branches (`target_branches: []`) plus every module that explicitly targets that branch, each with its full Modules Building output. Execution Agents in the next 4-iteration window read this mapped packet via `<LatestCustomCuratedContext>`.
+
+## State Synthesis
+
+The **State Synthesis** (`stateSynthesis`) agent summarizes where the branches stand. It remembers nothing between calls; each call is built fresh from the stored state and operates in one of two Global Update stages:
+
+| Stage | When | Output |
+|---|---|---|
+| `State-Synthesis-For-Strategies` | At the start of a Global Update (in parallel with BSR) | `core_synthesis` only. Feeds the Strategy Generator & Strategy Proximity Reviewer, and serves as `<StateSynthesisForStrategiesBaseline>` for `State-Synthesis-For-Modules`. |
+| `State-Synthesis-For-Modules` | During the concluding Heartbeat of a Global Update (when `modulesCount > 0`, after Memory Bank distillation and replacement branch `Execution > Critique`) | `core_synthesis` and `module_feedback` on surviving branches. Feeds the Modules Generator & Modules Impact Reviewer. |
+
+Once Memory Bank distillation and replacement branch initialization complete, replacement branches appear in `PRUNE` slots with only their initial execution and critique, and pruned branches have been archived. A branch that underwent `EVOLVE (rollback)` has reverted its folder and history to `last_good_iteration`. Consequently, `State-Synthesis-For-Modules` can produce `module_feedback` only for branches that survived (`CONTINUE` or `EVOLVE`), since replacement branches never received the previous Global Update's module packet. Each call comes with a `<HarnessNote>` explaining the stage and listing what happened to each slot.
+
+State Synthesis reports only what it can observe. It does not claim that a module caused a decision about a branch. For each module from the previous Global Update and each surviving branch the module was mapped to, it reports whether the module was used (`USED_CORRECTLY`, `USED_PARTIALLY`, `NOT_USED`, or `MISUSED`) and whether a later critique provides strong counterevidence against the Modules Building verdict.
+
+```json
+{
+  "core_synthesis": { "...": "the structured cross-branch synthesis" },
   "module_feedback": [
     {
       "module_id": "m2",
@@ -230,25 +212,25 @@ DOS reports only what it can see. It does not claim that a module caused a decis
 }
 ```
 
-The classifications are `USED_CORRECTLY`, `USED_PARTIALLY`, `NOT_USED`, and `MISUSED`. `critique_counterevidence` can be left out when there is none. `module_feedback` appears only when there is a previous heartbeat to report on.
+`critique_counterevidence` can be left out when there is none. `module_feedback` appears only in `State-Synthesis-For-Modules` when a previous Global Update Heartbeat exists to report on.
 
 ## Module feedback
 
-When DOS returns feedback, the harness turns it into a record for each module.
+When `State-Synthesis-For-Modules` returns feedback on the previous Global Update's modules, the harness turns it into a realized feedback record for each module.
 
-**Utilization** is counted over the module-and-branch pairs that DOS could judge. With C, P, N, and M the counts of correct, partial, not used, and misused, and T their total, the result is the vector `[C/T, P/T, N/T, M/T]`. The four numbers are not combined into a single score. If T is 0, the record has no utilization.
+**Utilization** is counted over the module-and-branch pairs that State Synthesis could judge. With C, P, N, and M the counts of correct, partial, not used, and misused, and T their total, the result is the vector `[C/T, P/T, N/T, M/T]`. The four numbers are not combined into a single score. If T is 0, the record has no utilization.
 
 ```json
 {
   "module_id": "m2",
   "observed_test_outcome": "VALIDATED",
   "utilization": { "correct_use": 0.50, "partial_use": 0.25, "not_used": 0.25, "misused": 0.00 },
-  "utilization_note": "Calculated from DOS's observations.",
+  "utilization_note": "Calculated from State Synthesis's observations.",
   "critique_counterevidence": [{ "branch_id": "main1", "classification": "STRONG", "reason": "..." }]
 }
 ```
 
-Each record is saved in the matching `Module-M/` folder and kept in the heartbeat's block, together with the generator and reviewer exchange, the final modules, the test results, and the branch packets. The strategy agents never see utilization or counterevidence.
+Each record is saved as `feedback.json` in the matching `Module-M/` folder and kept in the heartbeat's block, together with the generator and reviewer exchange, the final modules, the Modules Building outputs, and the branch packets. The strategy agents never see utilization or counterevidence.
 
 ## BSR
 
@@ -256,11 +238,11 @@ Each record is saved in the matching `Module-M/` folder and kept in the heartbea
 
 BSR does not judge whether a branch's answer is correct. Confidence in an answer, an exhausted critique, and an answer that looks complete all count as no evidence of truth, since a branch can be firmly stuck in a wrong answer. BSR serves one question: is another window on this branch's strategy worth the compute?
 
-It does not answer that question itself. It reports what changed during the window and how directly the corrections followed the critiques, and code answers the question from the observed window and the branch's standing event ledger.
+It does not answer that question itself. It reports what changed during the window and how directly the executions followed the critiques, and code answers the question from the observed window and the branch's standing event ledger.
 
 A branch can run out of value in two ways. In failure, it is stuck, getting worse, or repeating the same unresolved problems. In saturation, the strategy has given what it can, and another window would add little whether or not the answer is right. Progress that is already standing protects a branch from being pruned. A failing branch is released, and a saturated one gets a new strategy.
 
-BSR runs once per branch at each global update, in parallel, and judges the whole window as a single trajectory. It never outputs an action.
+BSR runs once per branch at the start of each Global Update (in parallel with `State-Synthesis-For-Strategies`), and judges the 4-iteration window as a single trajectory. It never outputs an action.
 
 ### The report
 
@@ -268,22 +250,22 @@ BSR runs once per branch at each global update, in parallel, and judges the whol
 {
   "branch_id": "main2",
   "confirmed_progress":   [{ "iteration": 6, "size": "large", "reason": "..." }],
-  "confirmed_regression": [{ "iteration": 9, "size": "large", "reason": "..." }],
+  "confirmed_regression": [{ "iteration": 8, "size": "large", "reason": "..." }],
   "critique_alignment": { "value": 0.6, "reason": "..." }
 }
 ```
 
-An **event** is a change placed at the iteration whose correction caused it, with a size:
+An **event** is a change placed at the iteration whose execution caused it, with a size:
 
 - `small`: a local change with little consequence
 - `medium`: a change that matters for correctness or completeness
 - `large`: a change that alters the validity or structure of the answer
 
-BSR gives only these sizes and never a number. A branch's first solution is the baseline of its window and carries no events.
+BSR gives only these sizes and never a number. A branch's first solution is the baseline of its first window and carries no events.
 
-An event counts only when something besides the correction's own claim supports it. For progress, that means a critique from the same or a later iteration agrees the issue is resolved, or a sandbox run shows it. For regression, the same kinds of evidence show a defect that was absent before, or one that had been fixed and came back.
+An event counts only when something besides the execution's own claim supports it. For progress, that means a critique from the same or a later iteration agrees the issue is resolved, or a sandbox run shows it. For regression, the same kinds of evidence show a defect that was absent before, or one that had been fixed and came back.
 
-`critique_alignment` runs from -1 to 1. At 1, every point in the critiques was taken up by the next correction. At -1, the corrections went against them. It keeps a branch whose corrections ignored the critiques from being blamed on its strategy. Negative values are treated as 0.
+`critique_alignment` runs from -1 to 1. At 1, every point in the critiques was taken up by the next execution. At -1, the executions went against them. It keeps a branch whose executions ignored the critiques from being blamed on its strategy. Negative values are treated as 0.
 
 ### Scoring the window
 
@@ -292,8 +274,8 @@ These parameters have default values in `formulas.ts` and can be overridden in `
 | Parameter | Default | Role |
 |---|---|---|
 | Size weights | small 0.15, medium 0.30, large 0.50 | Convert event sizes to movement |
-| Noise level τ | 0.05 | Smallest net change that counts as a trend |
-| Pressure floor θ | 0.20 | Smallest pressure that can trigger EVOLVE or PRUNE |
+| Noise level $\tau$ | 0.05 | Smallest net change that counts as a trend |
+| Pressure floor $\theta$ | 0.20 | Smallest pressure that can trigger EVOLVE or PRUNE |
 
 Code builds a running total over the window's iterations, starting at 0. A progress event raises it by its weight and a regression lowers it.
 
@@ -321,36 +303,34 @@ pressure[EVOLVE]   = max(lost_ground, stall_evidence * progress_kept)
 pressure[PRUNE]    = stall_evidence * (1 - progress_kept) * (1 - lost_ground)
 ```
 
-Stall evidence measures how strongly the observed window indicates that another window on the current strategy will produce nothing: it combines lack of positive drift in the window with corrections that faithfully followed the critiques. Pressures run from 0 to 1 and do not sum to 1.
+Stall evidence measures how strongly the observed window indicates that another window on the current strategy will produce nothing: it combines lack of positive drift in the window with executions that faithfully followed the critiques. Pressures run from 0 to 1 and do not sum to 1.
 
 The decision for each branch follows three rules in order:
 
-1. If the EVOLVE and PRUNE pressures are both below θ, the branch continues.
+1. If the EVOLVE and PRUNE pressures are both below $\theta$, the branch continues.
 2. Otherwise, if the CONTINUE pressure is at least as high as both, the branch continues.
 3. Otherwise the higher of EVOLVE and PRUNE wins. Ties go to the less destructive action: CONTINUE, then EVOLVE, then PRUNE.
 
 For EVOLVE, the form is rollback when `lost_ground > stall_evidence * progress_kept`, and in place otherwise. A tie goes to in place.
 
-In practice, a branch that started well and then regressed gets EVOLVE with rollback. A branch that stalled with little progress standing gets PRUNE. A branch that stalled with substantial progress standing gets EVOLVE in place, and its solution stays a candidate for the final answer.
-
-**Worked example.** Events: iteration 6 large progress, 7 small progress, 9 large regression, 10 large regression (with weights 1, 2, 4 and $\tau = 2$, $\theta = 0.30$). The running total is 4, 5, 5, 1, -3, so `net` is -3, `movement` is 13, the outcome is REGRESS, and `last_good_iteration` is 8. Lost ground is 8 / 15 = 0.533, `drift` is -3 / 15 = -0.20, and with `critique_alignment = 0.6`, `stall_evidence` is 0.60. With `progress_kept` at 3 / 23 = 0.130, the EVOLVE pressure is 0.533, PRUNE is 0.243, and CONTINUE is 0. The decision is EVOLVE with rollback to iteration 8.
+In practice, a branch that started well and then regressed gets `EVOLVE with rollback`. A branch that stalled with little progress standing gets `PRUNE`. A branch that stalled with substantial progress standing gets `EVOLVE in place`, and its solution stays a candidate for the final answer.
 
 ### What each decision does
 
-- **CONTINUE.** Nothing changes. The branch carries on from its new memory bank.
-- **EVOLVE in place.** The strategy text is rewritten. History, memory, and the ledger stay as they are.
-- **EVOLVE with rollback.** The branch's folder is restored to the end of `last_good_iteration`. The later iterations leave the folder but remain in git history. The ledger loses the discarded events and keeps the rest. The new strategy text tells the model where not to go. For long-running tasks, restoring is much better than rewriting the strategy and continuing from a memory of a bad trajectory.
-- **PRUNE.** The branch is stopped and archived and its slot is freed. A new branch takes the slot with a new strategy, runs a first solution and critique, and starts with an empty ledger. Nothing the old branch produced reaches the new one except what the strategy generator chooses to carry into the new strategy text.
+- **CONTINUE.** Nothing changes. The branch carries on from its new Memory Bank (distilled over all 4 iterations of the window).
+- **EVOLVE in place.** The strategy text is rewritten. History, memory (distilled over all 4 iterations of the window), and the ledger stay as they are.
+- **EVOLVE with rollback.** The branch's folder is restored to the end of `last_good_iteration` (or `window_start`). The later regressed iterations leave the folder on disk but remain in git commit history. The standing event ledger loses the discarded events and keeps the rest. The Memory Bank distills **only the window iterations up to and including `last_good_iteration`** (`windowStart .. last_good_iteration`), so the branch's memory bank is never polluted by the discarded regressed turns (or skips distillation if `last_good_iteration === 'window_start'`).
+- **PRUNE.** The branch is stopped and archived into `Pruned_Strategies/` and its slot is freed. A replacement branch takes the slot with a new strategy, runs an initial `Execution > Critique` in parallel with the surviving branches' Memory Bank distillation, and starts with an empty ledger and no Memory Bank. Nothing the old branch produced reaches the new one except what the Strategy Generator chooses to carry into the new strategy text.
 
 ### Standing event ledger
 
-The standing event ledger is stored per branch and carried from one global update to the next. It lives outside the repository, along with every BSR report, its computed values, and its decision.
+The standing event ledger is stored per branch and carried from one Global Update to the next. It lives outside the repository, along with every BSR report, its computed values, and its decision.
 
 - **The ledger** lists every confirmed event still standing, with its iteration, direction, size, weight, and reason. It feeds `progress_kept`. A rollback removes events after the rollback point, PRUNE closes the ledger along with the branch, and EVOLVE in place leaves it alone.
 
 ### Who sees BSR output
 
-No other agent sees any BSR data except the strategy generator, which gets the decisions and event reasons described in Global update.
+No other agent sees any BSR data except the Strategy Generator and Strategy Proximity Reviewer, which get the decisions and event reasons in `<ConsolidatedBsrDecisions>` (and `State-Synthesis-For-Modules`, which receives a concise summary of the slot decisions in its `<HarnessNote>`).
 
 ## What every agent receives
 
@@ -360,21 +340,20 @@ This section lists the prompt of every agent call in the order its parts appear.
 
 Each call has a system instruction and a user prompt. The system instruction is the agent's own prompt, taken from the prompt editor and falling back to the default. The user prompt is built from the templates in this section at the moment of the call, from the run's current state.
 
-| Agent | System prompt | Output | Working directory |
-|---|---|---|---|
-| Strategy generator | `initialStrategy` | JSON | none, read-only |
-| Strategy proximity (seed and update) | `initialStrategy` | text | none, read-only |
-| Modules Generator | `modulesGeneration` | JSON | none, read-only |
-| Modules Impact Reviewer | `modulesGeneration` | text | none, read-only |
-| Modules Tester | `modulesTester` | text | `Module-M/` |
-| Solution attempt | `solutionAttempt` | text | `Strategy-N/` |
-| Critique | `solutionCritique` | text | `Strategy-N/` |
-| Correction | `solutionCorrection` | text | `Strategy-N/` |
-| Memory bank | `memoryBank` | text | `Strategy-N/` (read-only) |
-| DOS | `dos` | JSON | none, read-only |
-| BSR | `bsr` | JSON | `Strategy-N/` (read-only) |
+| Agent | Registry key | System prompt key | Output | Working directory |
+|---|---|---|---|---|
+| Strategy Generator | `initialStrategy` | `sys_deepthink_initialStrategy` | JSON | none, read-only |
+| Strategy Proximity Reviewer | `initialStrategy` | `sys_deepthink_initialStrategy` | text | none, read-only |
+| Modules Generator | `modulesGeneration` | `sys_deepthink_modulesGeneration` | JSON | none, read-only |
+| Modules Impact Reviewer | `modulesGeneration` | `sys_deepthink_modulesGeneration` | text | none, read-only |
+| Modules Building | `modulesBuilding` | `sys_deepthink_modulesBuilding` | text | `Modules/Heartbeat-H/Module-M/` |
+| Execution Agent | `executionAgent` | `sys_deepthink_executionAgent` | text | `Strategy-N/` |
+| Critique Agent | `critiqueAgent` | `sys_deepthink_critiqueAgent` | text | `Strategy-N/` |
+| Memory Bank | `memoryBank` | `sys_deepthink_memoryBank` | text | `Strategy-N/` (read-only) |
+| State Synthesis | `stateSynthesis` | `sys_deepthink_stateSynthesis` | JSON | none, read-only |
+| BSR | `bsr` | `sys_deepthink_bsr` | JSON | `Strategy-N/` (read-only) |
 
-With sandbox tools off, the prompt goes to the model directly, with JSON mode for the JSON agents and the configured thinking level. With sandbox tools on, the same prompt goes in as the user message to a tool-using agent that has the system prompt, full repository read access, read/write access to `/tmp/`, and the `shared_workspace` tool. The thinking level is not passed in that mode.
+With sandbox tools off, the prompt goes to the model directly, with JSON mode for the JSON agents and the configured thinking level. With sandbox tools on, the same prompt goes in as the user message to a tool-using agent that has the system prompt, full repository read access, read/write access to `/tmp/`, and the `shared_workspace` tool.
 
 **`{challenge}`.** Every prompt starts from the same challenge text, built once when the run starts:
 
@@ -399,8 +378,6 @@ Before a prompt is sent, each image block is cut out of the text and sent as an 
 
 **Labeled blocks.** A block written as `<Label>` ... `</Label>` is built as the label, a newline, the content with surrounding whitespace removed, a newline, and the closing label. Empty content becomes `Not available.`.
 
-**Spacing.** The templates below show one blank line between parts. Some builders join their parts with a double newline and also have empty parts, which makes the real gap wider in places. Content and order are exactly as shown.
-
 ### State that prompts are built from
 
 Prompts are rebuilt from stored fields every time. Nothing is carried over inside a prompt from an earlier call, except where a history is listed below.
@@ -409,94 +386,51 @@ Prompts are rebuilt from stored fields every time. Nothing is carried over insid
 |---|---|---|---|
 | Strategy text | Seed; EVOLVE; PRUNE | Replaced | Everything that names the branch's strategy |
 | First solution | Iteration 1, and a replacement branch's first execution | Set once per branch | Fallback when there is no latest solution |
-| Latest solution | Iteration 1, then every correction | Replaced | Peers' context, DOS, Modules Generator and Modules Impact Reviewer, strategy generator and proximity |
-| Latest critique | Every critique | Replaced | Peers' context, DOS |
-| Iteration history | After the critique of each iteration | Added to | History windows, BSR, memory bank |
-| Memory bank | Each distillation | Replaced | History window of correction and critique, BSR, next memory bank |
-| Heartbeat blocks & module exchanges | End of each heartbeat | Added to | Corrections read only the newest mapped packet. DOS reads the previous block. Modules Generator and Modules Impact Reviewer read the previous block's modules, test outputs, mapped packets, and realized feedback, plus the ledger of modules finalized and used so far (`ModulesFinalizedAndUsedSoFar`) and the current heartbeat's back-and-forth turns (`CurrentHeartbeatImpactReviewTurns`) |
-| Seed strategy exchange | End of seed generation | Set once | Persisted to `strategies_history/` and UI state; within the seed loop, read via `SeedStrategyProximityTurns` |
-| Update strategy exchanges | After each update's strategy step | Added to | Persisted to `strategies_history/` and UI state; within Global Update $u$, read via `CurrentGlobalUpdateProximityTurns` |
-| Strategies & modules used so far | Seed; each EVOLVE or new strategy; each heartbeat | Added to | Strategy generator/proximity at every update (`StrategiesFinalizedAndUsedSoFar`); Modules Generator / Modules Impact Reviewer at every heartbeat after the first (`ModulesFinalizedAndUsedSoFar`) |
-| Standing event ledger | After each update's decisions | Added to (or trimmed on rollback / reset on prune) | BSR |
-| DOS outputs | Each DOS call | Added to | Step-i feeds strategy generator/proximity and step-ii; Heartbeat DOS and step-ii DOS feed Modules Generator / Modules Impact Reviewer |
+| Latest solution | Iteration 1, then every Execution Agent call | Replaced | Peers' context, State Synthesis, Modules Generator & Impact Reviewer, Strategy Generator & Proximity Reviewer |
+| Latest critique | Every Critique Agent call | Replaced | Peers' context, State Synthesis |
+| Iteration history | After the critique of each iteration | Added to | History windows, BSR, Memory Bank |
+| Memory bank | Each Global Update distillation | Replaced | History window of Execution Agent and Critique Agent, BSR, next Memory Bank |
+| Heartbeat blocks & module exchanges | End of each Global Update (when modules on) | Added to | Execution Agents read only the newest mapped packet. `State-Synthesis-For-Modules` reads the previous block. Modules Generator & Impact Reviewer read the previous block's modules, Modules Building outputs, mapped packets, and realized feedback, plus `<ModulesFinalizedAndUsedSoFar>` and `<CurrentHeartbeatImpactReviewTurns>` |
+| Seed strategy exchange | End of seed generation | Set once | Persisted to `strategies_history/` and UI state; within the seed loop, read via `<SeedStrategyProximityTurns>` |
+| Update strategy exchanges | After each Global Update's strategy step | Added to | Persisted to `strategies_history/` and UI state; within Global Update $u$, read via `<CurrentGlobalUpdateProximityTurns>` |
+| Strategies & modules used so far | Seed; each EVOLVE or new strategy; each Global Update Heartbeat | Added to | Strategy Generator & Proximity Reviewer at every Global Update (`<StrategiesFinalizedAndUsedSoFar>`); Modules Generator & Impact Reviewer at every Heartbeat after the first (`<ModulesFinalizedAndUsedSoFar>`) |
+| Standing event ledger | After each Global Update's decisions | Added to (or trimmed on rollback / reset on prune) | BSR |
+| State Synthesis outputs | Each `State-Synthesis-For-Strategies` and `State-Synthesis-For-Modules` call | Added to | `State-Synthesis-For-Strategies` feeds Strategy Generator & Proximity Reviewer (`<StateSynthesisForStrategies>`) and `State-Synthesis-For-Modules` (`<StateSynthesisForStrategiesBaseline>`); `State-Synthesis-For-Modules` feeds Modules Generator & Impact Reviewer (`<StateSynthesisCore>`) |
 
 ### One branch across a run
 
-`i = 15`, `j = 5`, `k = 3`, modules on, isolation off. Each row shows what the correction in that iteration receives for one surviving branch.
+`i = 10`, `j = 4` (fixed), modules on, isolation off. Each row shows what the Execution Agent in that iteration receives for one surviving branch.
 
-| Correction in iteration | `<BranchHistoryAndMemory>` contents | Curated context comes from |
+| Execution Agent in iteration | `<BranchHistoryAndMemory>` contents | Curated context comes from |
 |---|---|---|
+| 1 | none (initial execution) | none yet |
 | 2 | `[Iter 1]` | none yet |
 | 3 | `[Iter 1, Iter 2]` | none yet |
-| 4 | `[Iter 1 .. Iter 3]` | heartbeat 1 (after iteration 3) |
-| 5 | `[Iter 1 .. Iter 4]` | heartbeat 1 |
-| 6 | `[Iter 5] + bank 1 (iterations 1 to 5)` | heartbeat 2 (end of update 1) |
-| 7 | `[Iter 5] + bank 1 + [Iter 6]` | heartbeat 2 |
-| 8 | `[Iter 5] + bank 1 + [Iter 6, Iter 7]` | heartbeat 2 |
-| 9 | `[Iter 5] + bank 1 + [Iter 6 .. Iter 8]` | heartbeat 3 (after iteration 8) |
-| 10 | `[Iter 5] + bank 1 + [Iter 6 .. Iter 9]` | heartbeat 3 |
-| 11 | `[Iter 10] + bank 2 (bank 1 merged with 6 to 10)` | heartbeat 4 (end of update 2) |
-| 12 | `[Iter 10] + bank 2 + [Iter 11]` | heartbeat 4 |
-| 13 | `[Iter 10] + bank 2 + [Iter 11, Iter 12]` | heartbeat 4 |
-| 14 | `[Iter 10] + bank 2 + [Iter 11 .. Iter 13]` | heartbeat 5 (after iteration 13) |
-| 15 (final) | `[Iter 10] + bank 2 + [Iter 11 .. Iter 14]` | heartbeat 5 |
+| 4 | `[Iter 1 .. Iter 3]` | none yet |
+| 5 | `[Iter 4] + bank 1 (iterations 1 to 4)` | Heartbeat 1 (end of Global Update 1, after iter 4) |
+| 6 | `[Iter 4] + bank 1 + [Iter 5]` | Heartbeat 1 |
+| 7 | `[Iter 4] + bank 1 + [Iter 5, Iter 6]` | Heartbeat 1 |
+| 8 | `[Iter 4] + bank 1 + [Iter 5 .. Iter 7]` | Heartbeat 1 |
+| 9 | `[Iter 8] + bank 2 (bank 1 merged with 5 to 8)` | Heartbeat 2 (end of Global Update 2, after iter 8) |
+| 10 (final) | `[Iter 8] + bank 2 + [Iter 9]` | Heartbeat 2 |
 
-The critique in iteration `k` gets the same history and memory bank as the correction in iteration `k`, plus that correction itself. BSR in update 1 sees iterations 1 to 5 and no memory bank. In update 2 it sees iterations 6 to 10 and bank 1. The Modules Generator in heartbeats 1, 3, and 5 uses a heartbeat DOS. In heartbeats 2 and 4 it uses the DOS call that ended the update.
+The Critique Agent in iteration `k` ($1 \le k < i$) gets the same history and memory bank as the Execution Agent in iteration `k`, plus that execution itself inside `<Iteration n="k">`. BSR in Global Update 1 sees iterations 1 to 4 and no memory bank; in Global Update 2 it sees iterations 5 to 8 and `bank 1`.
 
-### Stage 1: seed strategies (Strategy Generator & Strategy Proximity)
+### Stage 1: seed strategies (Strategy Generator & Strategy Proximity Reviewer)
 
-Both **Strategy Generator (SG)** and **Strategy Proximity (SP)** share the same system prompt (`initialStrategy`) and receive the **exact same user prompt** prefix at the start of the seed loop, with the active role indicated on the final line (`Immediate Role: Strategy Generator` or `Immediate Role: Strategy Proximity Reviewer`, with JSON output for SG and text output for SP).
+Both **Strategy Generator (SG)** and **Strategy Proximity Reviewer (SP)** share the same system prompt (`initialStrategy`) and receive the **exact same user prompt** prefix at the start of the seed loop, with the active role indicated on the final line (`Immediate Role: Strategy Generator` or `Immediate Role: Strategy Proximity Reviewer`, with JSON output for SG and text output for SP).
 
 When sandbox tools are enabled, SG and SP each maintain their own separate **continuous append-only trajectory** across all rounds of the seed invocation (preserving KV cache and all tool calls from earlier rounds of the seed loop so neither agent repeats prior exploration):
 - **SG Round 1** starts with `[Challenge + Count]` + `Immediate Role: Strategy Generator`, executes tool calls, and submits `final_output` (`SG-seed-1`).
 - **SP Round 1** starts with `[Challenge + Count]` + `SG-seed-1` + `Immediate Role: Strategy Proximity Reviewer`, executes its own tool calls, and submits `final_output` (`SP-seed-1`).
 - **SG Round $r \ge 2$** continues directly from SG's Round $r-1$ conversation trace: the harness resolves SG's previous `final_output` tool call with a tool result containing `SP-seed-(r-1)` and `Immediate Role: Strategy Generator`, after which SG continues with a fresh per-invocation tool-call budget and submits `final_output` (`SG-seed-r`).
 - **SP Round $r \ge 2$** continues directly from SP's Round $r-1$ conversation trace: the harness resolves SP's previous `final_output` tool call with a tool result containing `SG-seed-r` and `Immediate Role: Strategy Proximity Reviewer`, after which SP continues and submits `final_output` (`SP-seed-r`).
-- Continuous trajectories live only for the current Seed invocation and do not carry over into Global Updates. When sandbox tools are disabled, each turn runs directly with the accumulated `<SeedStrategyProximityTurns>` block in the prompt.
-
-- **`[Challenge + Count]`**:
-  ```text
-  # Core Challenge
-  {challenge}
-
-  Requested Number of Strategies: {strategiesCount}
-  ```
-
-With `strategyProximityLoops = L`, there are `L + 1` generator turns and `L` proximity review turns. Below is the exact chronological order of what each turn receives (for `L = 2`):
-
-- **SG — Turn 1:**
-  1. `[Challenge + Count]`
-  2. `Immediate Role: Strategy Generator`
-- **SP — Turn 1:**
-  1. `[Challenge + Count]`
-  2. `SG-seed-1`
-  3. `Immediate Role: Strategy Proximity Reviewer`
-- **SG — Turn 2:**
-  1. `[Challenge + Count]`
-  2. `SG-seed-1`
-  3. `SP-seed-1`
-  4. `Immediate Role: Strategy Generator`
-- **SP — Turn 2:**
-  1. `[Challenge + Count]`
-  2. `SG-seed-1`
-  3. `SP-seed-1`
-  4. `SG-seed-2`
-  5. `Immediate Role: Strategy Proximity Reviewer`
-- **SG — Turn 3 (Final Seed Output):**
-  1. `[Challenge + Count]`
-  2. `SG-seed-1`
-  3. `SP-seed-1`
-  4. `SG-seed-2`
-  5. `SP-seed-2`
-  6. `Immediate Role: Strategy Generator`
-
-When `SG — Turn 3` outputs `SG-seed-3`, the harness extracts the strategies as `main1`…`mainN` and stores the full 5-turn transcript `[Seed G↔P]`.
 
 ### Stage 2: iteration 1
 
-All attempts finish first. Then all critiques run.
+All branch Execution Agents finish first. Then all Critique Agents run in parallel.
 
-**Solution attempt.**
+**Execution Agent (iteration 1).**
 
 ```text
 # Core Challenge
@@ -508,9 +442,9 @@ Assigned Strategy: main1
 Produce iteration 1 solution attempt.
 ```
 
-The attempt does not see the other strategies. The output is stored as both the first solution and the latest solution.
+The initial execution does not see the other strategies. The output is stored as both the first solution and the latest solution.
 
-**Critique, iteration 1.**
+**Critique Agent (iteration 1).**
 
 ```text
 # Core Challenge
@@ -534,9 +468,9 @@ After the critique finishes, the critique is recorded on iteration 1 in the bran
 
 ### Stage 3: iterations 2 to i
 
-All corrections finish first. Then all critiques run.
+In iterations $2 \dots i-1$, all branch Execution Agents finish first, and then all Critique Agents run in parallel. In final iteration $i$, only the branch Execution Agents run.
 
-**Correction.**
+**Execution Agent (iterations 2 to i).**
 
 ```text
 # Core Challenge
@@ -554,12 +488,28 @@ Assigned Strategy Text: {current strategy text}
 </CrossStrategyPeerIntelligence>
 ```
 
-The branch's own latest solution and critique do not appear as separate blocks. They reach the correction only through the history.
-
-**History.** Built for the correction and the critique as follows (with `<LatestCustomCuratedContext>` included only for the correction when a mapped packet exists):
+**History.** Built for the Execution Agent and the Critique Agent as follows (with `<LatestCustomCuratedContext>` included only for the Execution Agent when a mapped packet exists):
 
 ```text
-<Iteration n="5">                         only after a global update (the last pair before the update)
+<Iteration n="4">                         only after a Global Update (the last retained pair before the update)
+<Correction>
+{solution of iteration 4}
+</Correction>
+<Critique>
+{critique of iteration 4}
+</Critique>
+</Iteration>
+
+<DistilledMemoryBank>                     only when the branch has a memory bank
+{memory bank}
+</DistilledMemoryBank>
+
+<LatestCustomCuratedContext>              only in Execution Agent prompts when there is a mapped packet
+{the branch's module packet}
+</LatestCustomCuratedContext>
+
+<WindowCorrectionCritiqueHistory>         when completed iterations exist in the current window
+<Iteration n="5">
 <Correction>
 {solution of iteration 5}
 </Correction>
@@ -568,46 +518,26 @@ The branch's own latest solution and critique do not appear as separate blocks. 
 </Critique>
 </Iteration>
 
-<DistilledMemoryBank>                     only when the branch has a memory bank
-{memory bank}
-</DistilledMemoryBank>
-
-<LatestCustomCuratedContext>              only in correction prompts when there is a packet
-{the branch's module packet}
-</LatestCustomCuratedContext>
-
-<WindowCorrectionCritiqueHistory>         when completed iterations exist in the current window
 <Iteration n="6">
-<Correction>
-{solution of iteration 6}
-</Correction>
-<Critique>
-{critique of iteration 6}
-</Critique>
-</Iteration>
-
-<Iteration n="7">
 {...}
 </Iteration>
 </WindowCorrectionCritiqueHistory>
 ```
 
-- **Which iterations.** For a prompt in iteration `k`, let `w = floor((k - 1) / j) * j + 1` be the first iteration of the current window of `j` iterations (1, 6, 11, and so on for `j = 5`). In the first window (`w = 1`), `<WindowCorrectionCritiqueHistory>` contains every completed iteration `1 <= n < k`. After a global update (`w > 1`), the history starts with the branch's last retained pre-update correction-critique pair (iteration `w - 1`, or the rollback target `last_good_iteration` if the branch underwent `EVOLVE (rollback)`), followed by `<DistilledMemoryBank>`, followed (for correction calls when a packet exists) by `<LatestCustomCuratedContext>`, followed by `<WindowCorrectionCritiqueHistory>` containing every completed iteration `w <= n < k` in the current window.
-- **The memory bank** is the branch's current bank. It is replaced, not accumulated, at each update.
-- **Replacement branches** created at a global update have no memory bank and start from the first execution and critique they ran during that update.
+- **Which iterations.** For a prompt in iteration `k`, let `w = floor((k - 1) / 4) * 4 + 1` be the first iteration of the current 4-iteration window (1, 5, 9, 13, and so on). In the first window (`w = 1`), `<WindowCorrectionCritiqueHistory>` contains every completed iteration `1 <= n < k`. After a Global Update (`w > 1`), the history starts with the branch's last retained pre-update execution-critique pair (iteration `w - 1`, or the rollback target `last_good_iteration` if the branch underwent `EVOLVE (rollback)`), followed by `<DistilledMemoryBank>`, followed (for Execution Agent calls when a packet exists) by `<LatestCustomCuratedContext>`, followed by `<WindowCorrectionCritiqueHistory>` containing every completed iteration `w <= n < k` in the current window.
+- **The memory bank** is the branch's current bank. It is replaced, not accumulated, at each Global Update.
+- **Replacement branches** created at a Global Update have no memory bank and start from the initial `Execution > Critique` they ran during that Global Update.
 
-**Packet.** The newest heartbeat block's modules that were marked for all branches or that target this branch, each as:
+**Packet.** The newest Global Update Heartbeat's modules that were marked for all branches or that target this branch, each as:
 
 ```text
 Module {id}: {text}
 Testing of that Module:
-{the tester's complete output}
+{the Modules Building agent's complete output}
 
 Module {id}: {text}
 ...
 ```
-
-The block is left out when there is no heartbeat yet, when modules are off, or when nothing is mapped to the branch. The packet is replaced at every heartbeat, not added to.
 
 **Peers.**
 
@@ -624,35 +554,26 @@ Strategy main3: {strategy text}
 ...
 ```
 
-For a correction in iteration `k`, each peer's latest solution and latest critique are from iteration `k - 1`, captured at the start of the iteration before parallel corrections run.
+For an Execution Agent in iteration `k`, each peer's latest solution and latest critique are from iteration `k - 1`, captured at the start of the iteration before parallel executions run.
 
-**Critique, iteration 2 and later.** Same template as the iteration 1 critique, with `<BranchHistoryAndMemory>` above, where `<WindowCorrectionCritiqueHistory>` includes `<Iteration n="k">` at the end containing `<Correction>{the correction that was just written}</Correction>` (with no `<Critique>` tag yet, since that is what the critique agent is producing). After it finishes, the critique is recorded on iteration `k` in the branch's history.
+**Critique Agent (iterations 2 to i - 1).** Same template as the iteration 1 Critique Agent, with `<BranchHistoryAndMemory>` above, where `<WindowCorrectionCritiqueHistory>` includes `<Iteration n="k">` at the end containing `<Correction>{the execution that was just written}</Correction>` (with no `<Critique>` tag yet, since that is what the Critique Agent is producing).
 
-### Stage 4: heartbeat
+### Stage 4: Global Update & Concluding Heartbeat
 
-Order of calls: DOS (a heartbeat that does not end an update, modules on), Modules Generator and Modules Impact Reviewer turns, testers in parallel. The new heartbeat block is stored and committed at the end.
+A Global Update runs after iteration `n` finishes (`Execution > Critique`) whenever `n % 4 === 0` and `n < i`.
 
-**Heartbeat DOS.**
+**Parallel window evaluation: `State-Synthesis-For-Strategies` and BSR.** Both read the state after the critique of iteration `n`, before any decision is applied.
+
+`State-Synthesis-For-Strategies`:
 
 ```text
 # Core Challenge
 {challenge}
 
-# Dissected Observations Synthesis - Heartbeat DOS
+# State Synthesis - Global Update (State-Synthesis-For-Strategies)
 <HarnessNote>
-{note, below}
+{STATE_SYNTHESIS_FOR_STRATEGIES_NOTE}
 </HarnessNote>
-
-<PreviousHeartbeatModulesAndTests>
-[
-  {
-    "module_id": "{id}",
-    "text": "{text}",
-    "target_branches": ["main1", "main3"],
-    "testing_output": "{the tester's complete output}"
-  }
-]
-</PreviousHeartbeatModulesAndTests>
 
 <ActiveBranchesState>
 ### Branch main1
@@ -669,85 +590,6 @@ Latest Critique:
 </ActiveBranchesState>
 ```
 
-The modules block reads `None.` when there is no previous heartbeat or it had no modules. `ActiveBranchesState` is built from the stored fields at this moment, after the critique of the iteration that just finished.
-
-The heartbeat note: "The modules below were generated at the previous heartbeat, tested independently and mapped to branches, and the branches then ran corrections with those mapped packets. You also have the latest correction and critique of every branch. Synthesize where each branch stands, and for every module → branch assignment report only what you can actually observe: whether the packet was used, and whether the later critique gives real counterevidence against the tester's verdict."
-
-If the DOS returns feedback, it is attached to the previous heartbeat's records before modules are generated.
-
-**Modules Generator & Modules Impact Reviewer (Heartbeat 1, Heartbeat 2, Heartbeat $h$).**
-
-Both **Modules Generator (MG)** and **Modules Impact Reviewer (MIR)** share the same system prompt (`modulesGeneration`) and receive the **exact same user prompt** prefix at the start of a heartbeat loop, with the active role indicated on the final line (`Immediate Role: Modules Generator` or `Immediate Role: Modules Impact Reviewer`, with JSON output for MG and text output for MIR). When sandbox tools are enabled, MG and MIR each maintain their own separate continuous append-only trajectory across all rounds within Heartbeat $h$ (resolving each round's `final_output` tool call with the peer's latest output and `Immediate Role: ...`), scoped strictly to Heartbeat $h$. When sandbox tools are disabled, each turn runs directly with `<CurrentHeartbeatImpactReviewTurns>` in the prompt.
-
-**Short forms:**
-- **`[Challenge + Count]`**:
-  ```text
-  # Core Challenge
-  {challenge}
-
-  Requested Number of Modules: {modulesCount}
-  ```
-- **`[HB-h G↔R]`**: The back-and-forth turns from Heartbeat $h$ (`MG-hb-1` → `MIR-hb-1` → … → `MG-hb-final`).
-- **`{HB_Note(1)}`**: Active note for Heartbeat 1 (no previous modules exist yet):
-  > *"The branches have executed, critiqued, and corrected up to this first heartbeat. You have received the DOS synthesis of where each branch currently stands, along with the currently running strategies and their latest corrections. Now generate the initial modules object."*
-- **`[HB-1 Context]`**:
-  1. Current running strategies (`main1`…`mainN`) + latest correction from each active branch
-  2. DOS core synthesis for Heartbeat 1 (`DOS_heartbeat_01`)
-- **`{HB_Note(h)}`** (for $h \ge 2$): Active note before Heartbeat $h$:
-  > *"The modules from Heartbeat `h-1` were finalized, tested independently by dedicated tester agents, and mapped as packets to the target branches, which then executed corrections with them. Below is the context for Heartbeat `h`: the finalized modules from Heartbeat `h-1` and their independent test outputs, the mapped branch packets showing the current running strategies, their latest corrections, and which modules were routed to which branches, the realized module feedback (observed test outcome, utilization across branches, and critique counterevidence), the ledger of modules finalized and used so far across prior heartbeats, and the new DOS synthesis. Now generate the new modules object."*
-- **`[HB-h Context]`** (for $h \ge 2$): Strictly these items (no raw branch critiques and no back-and-forth transcripts from earlier heartbeats):
-  1. `<PreviousHeartbeatModulesAndTests>`: Final generated module object from Heartbeat $h-1$ + corresponding independent testing outputs
-  2. `<MappedBranchPackets>`: Schema showing current running strategies `main1`…`mainN`, their latest corrections, and which modules from Heartbeat $h-1$ were mapped to which branches
-  3. `<RealizedModuleFeedback>`: Realized module feedback for Heartbeat $h-1$ (`observed_test_outcome`, `utilization` vector `[C/T, P/T, N/T, M/T]`, and `critique_counterevidence`)
-  4. `<ModulesFinalizedAndUsedSoFar>`: Ledger of every module finalized and tested across prior heartbeats (`Modules/modules_finalized_and_used_so_far.md`)
-  5. `<DosCoreSynthesis>`: DOS core synthesis for Heartbeat $h$
-
-**Exact chronological order across Heartbeats (`MG & MIR`):**
-
-- **During Heartbeat 1:**
-  1. `[Challenge + Count]`
-  2. `{HB_Note(1)} + [HB-1 Context]`
-  3. `[HB-1 G↔R so far]` (`<CurrentHeartbeatImpactReviewTurns>`, empty on MG Turn 1; `MG-hb1-1` on MIR Turn 1; `MG-hb1-1 → MIR-hb1-1` on MG Turn 2; etc.)
-
-- **During Heartbeat $h$ ($h \ge 2$):**
-  1. `[Challenge + Count]`
-  2. `{HB_Note(h)} + [HB-h Context]`
-  3. `[HB-h G↔R so far]` (`<CurrentHeartbeatImpactReviewTurns>`, scoped strictly to the current Heartbeat $h$ while prior finalized modules are carried in `<ModulesFinalizedAndUsedSoFar>`)
-
-**Tester.**
-
-```text
-# Core Challenge
-{challenge}
-
-Assigned Module {id}:
-{module text}
-
-Test this module within your assigned folder.
-```
-
-### Stage 5: global update
-
-**Step 1, in parallel: step-i DOS and BSR.** Both read the state after the critique of iteration `n`, before any decision is applied.
-
-Step-i DOS:
-
-```text
-# Core Challenge
-{challenge}
-
-# Dissected Observations Synthesis - Global Update (Step-i)
-<HarnessNote>
-{note, below}
-</HarnessNote>
-
-<ActiveBranchesState>
-{same per-branch blocks as in the heartbeat DOS}
-</ActiveBranchesState>
-```
-
-The step-i note: "Your output is going to the strategy agents that are about to decide which strategies to continue, evolve or replace in this global update. So write it for them: where exactly each branch is failing, what the branches share, what looks worth keeping. Here you only receive the latest correction and critique of every branch, so there is no module feedback to produce in this call."
-
 BSR, one call per branch:
 
 ```text
@@ -758,8 +600,8 @@ Branch ID: main1
 Current Strategy: {strategy text}
 
 <StandingEventLedger>
-[Iter 6] PROGRESS (large): {reason}
-[Iter 9] REGRESSION (large): {reason}
+[Iter 2] PROGRESS (large): {reason}
+[Iter 4] REGRESSION (large): {reason}
 </StandingEventLedger>
 
 <MemoryBankBeforeWindow>
@@ -767,55 +609,31 @@ Current Strategy: {strategy text}
 </MemoryBankBeforeWindow>
 
 <WindowCorrectionCritiqueHistory>
-Iteration 6:
-Correction: {solution of iteration 6}
-Critique: {critique of iteration 6}
+Iteration 5:
+Correction: {solution of iteration 5}
+Critique: {critique of iteration 5}
 
-Iteration 7:
+Iteration 6:
 Correction: {...}
 Critique: {...}
 </WindowCorrectionCritiqueHistory>
 ```
 
-- `<StandingEventLedger>` appears first (since it is append-only across windows), followed by `<MemoryBankBeforeWindow>` (the distilled state prior to the window, read before this update's distillation) and `<WindowCorrectionCritiqueHistory>`.
-- The window is iterations `n - j + 1` through `n`, inclusive: 1 to 5 for the first update and 6 to 10 for the second. It uses plain `Iteration x:` headings, not the tags used in the correction history.
-- The ledger has only events from earlier windows. This window's events are added after the decisions are made. An empty ledger prints `Empty ledger.`.
+**Deterministic BSR scoring.** The harness computes `CONTINUE`, `EVOLVE (in_place)`, `EVOLVE (rollback)`, or `PRUNE` for each branch.
 
-**Step 3: Strategy Generator & Strategy Proximity (Global Update 1, Global Update 2, Global Update $u$).** Runs only when at least one branch is EVOLVE or PRUNE.
+**Strategy Generator & Strategy Proximity Reviewer (Global Update $u$).** Runs when at least one branch is `EVOLVE` or `PRUNE`.
 
-Both **Strategy Generator (SG)** and **Strategy Proximity (SP)** share the same system prompt (`initialStrategy`) and receive the **exact same user prompt** prefix at the start of a global update loop, with the active role indicated on the final line (`Immediate Role: Strategy Generator` or `Immediate Role: Strategy Proximity Reviewer`, with JSON output for SG and text output for SP). When sandbox tools are enabled, SG and SP each maintain their own separate continuous append-only trajectory across all rounds within Global Update $u$ (resolving each round's `final_output` tool call with the peer's latest output and `Immediate Role: ...`), scoped strictly to Global Update $u$. When sandbox tools are disabled, each turn runs directly with `<CurrentGlobalUpdateProximityTurns>` in the prompt.
+- **`[GU-u Context]`**:
+  1. `<CurrentActiveStrategies>`: Current actual strategies (`main1`…`mainN`) + latest execution from every branch
+  2. `<ConsolidatedBsrDecisions>`: Every branch's decision (`CONTINUE`, `EVOLVE (in_place)`, `EVOLVE (rollback to iteration N / window start)`, or `PRUNE`) + event reasons from the window
+  3. `<StateSynthesisForStrategies>`: `core_synthesis` from `State-Synthesis-For-Strategies` for Global Update $u$
+  4. `<StrategiesFinalizedAndUsedSoFar>`: Ledger of every strategy actually finalized and executed so far
 
-**Short forms:**
-- **`[Challenge + Count]`**:
-  ```text
-  # Core Challenge
-  {challenge}
+**Repository rollout commit.** Rolled-back folders are restored from their target commit (`last_good_iteration` or `window_start`), and their iteration history, standing event ledger, and active solution/critique fields are restored to that checkpoint. Pruned folders are archived into `Pruned_Strategies/` and their iteration history and memory bank are cleared. `State_Synthesis_history/State_Synthesis_global_update_XX_for_strategies.md` (+ `.jsonl`), the Global Update strategy revision histories, `strategies_finalized_and_used_so_far.md`, and all updated `Strategy-N/strategy.md` files are then committed together in a single `"Global Update U: State-Synthesis-For-Strategies, strategy updates, and rollout"` commit, which also records the `window_start` commit for the upcoming window.
 
-  Requested Number of Strategies: {strategiesCount}
-  ```
-- **`[GU-u G↔P]`**: The back-and-forth turns from Global Update $u$ (`SG-gu-1` → `SP-gu-1` → … → `SG-gu-final`).
-- **`{GU_Note(u)}`**: Active note for Global Update $u$:
-  > *"These strategies were actually finalized and were executed, critiqued, and corrected for `j` iterations. The DOS output is a synthesis of the critique across each branch so that you understand where each branch is failing exactly. For richer context, you have also received the latest corrections in every branch. Finally, you will receive a BSR object calculated by the harness from each branch's observed window and standing event ledger, containing the decisions about what to continue, evolve, and prune. Now generate the new strategies object for the changed slots only."*
-- **`[GU-u Context]`**: The context for Global Update $u$ (no back-and-forth transcripts from Seed or earlier Global Updates are injected):
-  1. `<CurrentActiveStrategies>`: Current actual strategies (`main1`…`mainN`) + latest correction from every branch
-  2. `<ConsolidatedBsrDecisions>`: Every branch's decision (`CONTINUE`, `EVOLVE (in_place)`, `EVOLVE (rollback to iteration N / window start)`, or `PRUNE`) + event reasons from the window (carries no window scores or pressures)
-  3. `<DosSynthesisForStrategies>`: `dos_output.for_strategies` (`core_synthesis` from Step-i DOS for GU-$u$)
-  4. `<StrategiesFinalizedAndUsedSoFar>`: Ledger of every strategy actually finalized and executed so far (seed strategies at iteration 0, plus one entry per EVOLVE or PRUNE replacement at its update iteration)
+**Parallel Memory Bank distillation and replacement branch `Execution > Critique`.**
 
-**Exact chronological order across Global Updates (`SG & SP`):**
-
-- **During Global Update $u$ ($u \ge 1$):**
-  1. `[Challenge + Count]`
-  2. `{GU_Note(u)} + [GU-u Context]`
-  3. `[GU-u G↔P so far]` (`<CurrentGlobalUpdateProximityTurns>`, empty on SG Turn 1; `SG-gu-1` on SP Turn 1; `SG-gu-1 → SP-gu-1` on SG Turn 2; etc.)
-
-The strategy text of every changed slot is replaced when the last generator turn is applied. Everything after this point sees the new text.
-
-**Step 4: repository rollout & Phase A commit.** Rolled-back folders are restored from their target commit (`last_good_iteration` or `window_start`), and their iteration history, standing event ledger, and active solution/critique fields are restored to that checkpoint. Pruned folders are archived into `Pruned_Strategies/` and their iteration history and memory bank are cleared. Step-i DOS (`DOS_global_update_XX_step_i.md` + `.jsonl`), the Global Update strategy revision histories, `strategies_finalized_and_used_so_far.md`, and all updated `Strategy-N/strategy.md` files are then committed together in a single `"Global Update U: Step-i DOS, strategy updates, and rollout"` commit, which also records the `window_start` commit for the upcoming window.
-
-**Step 5, in parallel: memory bank and replacement branches.**
-
-Memory bank, once per surviving branch:
+Memory Bank, once per surviving branch (`CONTINUE`, `EVOLVE in place`, or `EVOLVE with rollback`):
 
 ```text
 # Core Challenge
@@ -829,18 +647,18 @@ Previous Memory Bank:
 {memory bank}                         or "No previous memory bank."
 
 Window History:
-Iteration 6:
-Correction: {solution of iteration 6}
-Critique: {critique of iteration 6}
+Iteration 5:
+Correction: {solution of iteration 5}
+Critique: {critique of iteration 5}
 
-Iteration 7:
+Iteration 6:
 ...
 ```
 
-- The iterations are `n - j + 1` through `n`, or through the rollback iteration when the branch rolled back. When a branch rolled back to the window start, no memory bank call is made and the old bank stays.
+- The iterations are `n - 3` through `n` for `CONTINUE` and `EVOLVE in place`, or `n - 3` through `last_good_iteration` when the branch underwent `EVOLVE with rollback`. When a branch rolled back to `window_start`, no Memory Bank call is made and the old bank stays.
 - The result replaces the stored memory bank, is written to `Strategy-N/history/memory_bank_NN.md` (+ `.jsonl`), and is immediately committed for that branch (`"Commit Strategy-N memory bank at Global Update U"`).
 
-Replacement branch, first execution:
+Replacement branch, initial Execution Agent + Critique Agent (in parallel with surviving branches' Memory Bank distillation):
 
 ```text
 # Core Challenge
@@ -852,25 +670,32 @@ Assigned Strategy: main4
 First execution for replacement branch in slot main4.
 ```
 
-Then its critique uses the critique template with `<WindowCorrectionCritiqueHistory>` holding `<Iteration n="{n}"><Correction>{first execution}</Correction></Iteration>`. Once the critique completes, the pair is stored as iteration `n` and committed for that branch (`"Commit Strategy-N at iteration X"`).
+Then its Critique Agent runs using `<WindowCorrectionCritiqueHistory>` holding `<Iteration n="{n}"><Correction>{first execution}</Correction></Iteration>`. Once the critique completes, the pair is stored as iteration `n` and committed for that branch (`"Commit Strategy-N at iteration X"`).
 
-**Step 6: step-ii DOS** (modules on).
+**`State-Synthesis-For-Modules` (when `modulesCount > 0`).**
 
 ```text
 # Core Challenge
 {challenge}
 
-# Dissected Observations Synthesis - Global Update (Step-ii)
+# State Synthesis - Global Update (State-Synthesis-For-Modules)
 <HarnessNote>
-{note, below}
+{buildStateSynthesisForModulesNote(slotDecisions)}
 </HarnessNote>
 
-<StepIOutputBaseline>
-{the complete step-i DOS output as pretty JSON}
-</StepIOutputBaseline>
+<StateSynthesisForStrategiesBaseline>
+{the complete State-Synthesis-For-Strategies output as pretty JSON}
+</StateSynthesisForStrategiesBaseline>
 
 <PreviousHeartbeatModulesAndTests>
-{same format as in the heartbeat DOS}
+[
+  {
+    "module_id": "{id}",
+    "text": "{text}",
+    "target_branches": ["main1", "main3"],
+    "testing_output": "{the Modules Building agent's complete output}"
+  }
+]
 </PreviousHeartbeatModulesAndTests>
 
 <SurvivingAndNewBranchesState>
@@ -888,39 +713,38 @@ Latest Critique:
 </SurvivingAndNewBranchesState>
 ```
 
-The step-ii note is built from the decisions:
+**Modules Generator, Modules Impact Reviewer, and Parallel Modules Building (when `modulesCount > 0`).**
+
+Both **Modules Generator (MG)** and **Modules Impact Reviewer (MIR)** share the same system prompt (`modulesGeneration`) and receive the same user prompt prefix, with the active role indicated on the final line (`Immediate Role: Modules Generator` or `Immediate Role: Modules Impact Reviewer`).
+- During Heartbeat 1 (at Global Update 1), `[HB-1 Context]` includes `<CurrentActiveStrategies>` and `<StateSynthesisCore>` from `State-Synthesis-For-Modules`.
+- During Heartbeat $h \ge 2$ (at Global Update $u \ge 2$), `[HB-h Context]` includes:
+  1. `<PreviousHeartbeatModulesAndTests>`: Final generated module objects from Heartbeat $h-1$ + corresponding independent Modules Building outputs
+  2. `<MappedBranchPackets>`: Schema showing current running strategies `main1`…`mainN`, their latest executions, and which modules from Heartbeat $h-1$ were mapped to which branches
+  3. `<RealizedModuleFeedback>`: Realized module feedback for Heartbeat $h-1$ (`observed_test_outcome`, `utilization` vector `[C/T, P/T, N/T, M/T]`, and `critique_counterevidence`)
+  4. `<ModulesFinalizedAndUsedSoFar>`: Ledger of every module finalized and built across prior heartbeats (`Modules/modules_finalized_and_used_so_far.md`)
+  5. `<StateSynthesisCore>`: `core_synthesis` from `State-Synthesis-For-Modules` for Heartbeat $h$
+
+Once MG finalizes the modules JSON, each module is dispatched in parallel to a **Modules Building** agent:
 
 ```text
-This is your second call in this global update. Since your first output, the decisions were applied and the status of every slot is listed below:
-- main1: CONTINUE (surviving uninterrupted)
-- main2: EVOLVE with rollback (reverted to iteration 8, discarded later iterations)
-- main3: EVOLVE in place (re-aimed strategy text, progress standing)
-- main4: PRUNE (archived, freed slot now holds a new branch starting with first execution + critique)
+# Core Challenge
+{challenge}
 
-Branches that were pruned are gone and their slots now hold new branches that only have a first execution and critique.
-A branch that was rolled back no longer contains the iterations after its rollback point.
-You also receive your own first output from this global update, unchanged.
-The previous heartbeat's modules, testing outputs and mappings are included now, so produce module feedback, but only for assignments you can really observe, which means the branches that survived.
-You cannot say anything about the new branches and that is fine, leave them out.
-Do not repeat your first output: use it as a base and give a more nuanced, natural synthesis of the state you see now.
+Assigned Module {id}:
+{module text}
+
+Test this module within your assigned folder.
 ```
 
-A rollback to the window start prints `reverted to window start`.
+Finally, `State_Synthesis_history/State_Synthesis_global_update_XX_for_modules.md` (+ `.jsonl`), realized `feedback.json` updates on the previous heartbeat's modules, and the new heartbeat's `Modules/Heartbeat-H/` generation transcripts and `Module-M/` folders are committed together in a single `"Global Update U: State-Synthesis-For-Modules & Curated Context Heartbeat H"` commit.
 
-**Step 7: Heartbeat inside a Global Update (The Exception).**
-When a Global Update $u$ finishes Step 5 (memory bank distillation on surviving branches + first execution & critique on replacement branches), Step 6 runs `step_ii` DOS, and Step 7 immediately runs a Heartbeat (say Heartbeat $h$) that **reuses `step_ii` DOS** instead of running a standalone Heartbeat DOS.
+### Stage 5: final iteration
 
-During this post-update Heartbeat $h$, **MG & MIR** receive the exact same chronological structure as Stage 4 (`1. [Challenge + Count]`, `{HB_Note(h)} + [HB-h Context]`, and `[HB-h G↔R so far]`), with two Global-Update-specific properties inside `[HB-h Context]`:
-1. **Mapped branch packets** reflect the **post-update active strategies** (including evolved strategy texts and new replacement branches in pruned slots), their **latest corrections** (which for replacement branches is their first execution), and the Heartbeat $h-1$ branch mappings.
-2. **Realized module feedback for Heartbeat $h-1$** and **DOS core synthesis** come directly from **Global Update $u$ Step-ii DOS** (where utilization and counterevidence were graded on surviving branches only).
-
-### Stage 6: final iteration
-
-Iteration `i` uses the exact same Stage 3 correction template and context as iterations `2` to `i-1`, including `LatestCustomCuratedContext` when a heartbeat has run. In iteration `i`, only the branch corrections run (no critiques are generated), and the pipeline completes once all branch corrections finish.
+Iteration `i` uses the exact same Stage 3 Execution Agent template and context as iterations `2` to `i-1`, including `<LatestCustomCuratedContext>` when a Global Update Heartbeat has run. In iteration `i`, only the branch Execution Agents run (no Critique Agents or Global Updates run), and the pipeline completes once all branch executions finish.
 
 ## Repository
 
-Prompts carry the curated context: the memory bank and recent history. The repository holds everything else, so an agent late in a long run can still open any file and see what was tried, what failed, and what has not been touched. Prompts keep their history objects anyway, since a model's memory of a long prompt is imperfect and the files back it up.
+Prompts carry the curated context: the memory bank and recent history. The repository holds everything else, so an agent late in a long run can still open any file and see what was tried, what failed, and what has not been touched.
 
 ### Layout
 
@@ -932,7 +756,9 @@ Results/deepthink_<timestamp>/
 ├── shared_workspace.md              live document (≤ 5,000 tokens), excluded from git commits
 ├── tmp/                             shared R/W scratch & verification harnesses, excluded from git commits
 ├── user_uploaded/                   copies of the files the user attached
-├── DOS_history/                     one .md + .jsonl pair per DOS call
+├── State_Synthesis_history/         one .md + .jsonl pair per State Synthesis call
+│   ├── State_Synthesis_global_update_01_for_strategies.md (+ .jsonl)
+│   └── State_Synthesis_global_update_01_for_modules.md    (+ .jsonl)
 ├── strategies_history/
 │   ├── seed_strategies.md                            (+ .jsonl continuous generator trajectory)
 │   ├── seed_strategies_proximity_review.md           (+ .jsonl continuous reviewer trajectory)
@@ -944,7 +770,7 @@ Results/deepthink_<timestamp>/
 │   ├── Heartbeat-1/
 │   │   ├── generation_history.md                     (+ .jsonl continuous generator trajectory)
 │   │   ├── modules_impact_review_history_heartbeat_01.md (+ .jsonl continuous reviewer trajectory)
-│   │   ├── Module-1/                                 module.md (+ .jsonl), test files, feedback record
+│   │   ├── Module-1/                                 module.md (+ .jsonl), built/tested files, feedback.json
 │   │   └── Module-2/
 │   └── Heartbeat-2/
 ├── Pruned_Strategies/               for example Strategy-1_pruned_01/
@@ -952,14 +778,14 @@ Results/deepthink_<timestamp>/
 │   ├── strategy.md
 │   ├── solution files
 │   ├── iterations/
-│   │   └── iteration_01.md          solution and critique
+│   │   └── iteration_01.md          execution and critique
 │   └── history/
 │       ├── iteration_01.jsonl       raw agent trajectory for iteration 1
 │       └── memory_bank_01.md        one per memory bank (+ memory_bank_01.jsonl)
 └── Strategy-2/
 ```
 
-File numbers in `history/` are global iteration numbers. Every agent invocation that writes a durable `.md` output file is accompanied in the same directory by a `.jsonl` file containing the raw agent trajectory for that invoke. Heartbeat folders are never deleted. File and folder names are indicative.
+File numbers in `history/` are global iteration numbers. Every agent invocation that writes a durable `.md` output file is accompanied in the same directory by a `.jsonl` file containing the raw agent trajectory for that invoke. Heartbeat folders are never deleted.
 
 ### Git
 
@@ -967,20 +793,13 @@ The repository has one git branch and one working tree. Every strategy folder, t
 
 Only the harness uses git. Agents can read history but cannot commit or restore. The harness runs git operations one at a time, always when no agent is writing, so a commit never captures a half-written file. `shared_workspace.md` and `tmp/` are untracked via git exclude / `.gitignore`.
 
-Commits are consolidated into six pause/resume-safe checkpoints:
+Commits are consolidated into five pause/resume-safe checkpoints:
 
 1. **Initial workspace seed** (`"Initial workspace seed"`): Commits `user_uploaded/` context files when the repository is initialized.
 2. **Seed strategies generation** (`"Seed strategies generation"`): Commits `strategies_history/seed_strategies.md` (+ `.jsonl`), `seed_strategies_proximity_review.md` (+ `.jsonl`), `strategies_finalized_and_used_so_far.md`, and the initial `Strategy-N/strategy.md` files, recording the initial `window_start` commit SHA.
-3. **Per-branch iteration completion** (`"Commit Strategy-N at iteration X"`): Each branch commits its own `Strategy-N/iterations/iteration_XX.md` and `Strategy-N/history/iteration_XX.jsonl` immediately after completing its execution/correction + critique pair (or final correction on iteration `i`). These commits are what an `EVOLVE (rollback)` returns to.
-4. **Standalone Heartbeat** (`"Curated Context Heartbeat H: DOS & Modules"`): Bundles `DOS_history/DOS_heartbeat_XX.md` (+ `.jsonl`), previous heartbeat `feedback.json` updates, module generation and impact review transcripts, `modules_finalized_and_used_so_far.md`, and all tested `Module-M/` folders into a single commit.
-5. **Global Update Phase A — Step-i DOS, strategy updates & rollout** (`"Global Update U: Step-i DOS, strategy updates, and rollout"`): Restores rolled-back folders, archives pruned folders into `Pruned_Strategies/`, writes `DOS_global_update_XX_step_i.md` (+ `.jsonl`), strategy revision histories, `strategies_finalized_and_used_so_far.md`, and updated `Strategy-N/strategy.md` files, and commits them together as the next window's `window_start`.
-6. **Global Update Phase B & C**: Surviving branches commit their distilled `memory_bank_XX.md` (+ `.jsonl`) per folder (`"Commit Strategy-N memory bank at Global Update U"`), replacement branches commit their first execution + critique per folder (`"Commit Strategy-N at iteration X"`), and Step-ii DOS + realized `feedback.json` + Heartbeat modules & testers commit together in a single `"Global Update U: Step-ii DOS & Curated Context Heartbeat H"` commit (or `"Global Update U: Step-ii DOS"` when curated context is off).
-
-When a branch is pruned, its folder is moved to `Pruned_Strategies/` under an ordinal name such as `Strategy-1_pruned_01`, and a new empty `Strategy-1/` takes its place. The ordinal keeps a reused slot name from clashing with archived data.
-
-When a branch rolls back, its folder on disk is restored from the chosen iteration's commit (`last_good_iteration` or `window_start`), its standing BSR event ledger and iteration history are trimmed to the rollback point, and its active solution and critique fields are restored to that checkpoint. This is a revert on the working directory, so nothing in git commit history is rewritten.
-
-At the end of the run, nothing is merged. The strategy folders are already in the repository, which is the record of the run.
+3. **Per-branch iteration completion** (`"Commit Strategy-N at iteration X"`): Each branch commits its own `Strategy-N/iterations/iteration_XX.md` and `Strategy-N/history/iteration_XX.jsonl` immediately after completing its `Execution > Critique` pair (or final Execution on iteration `i`). These commits are what an `EVOLVE (rollback)` returns to.
+4. **Global Update rollout** (`"Global Update U: State-Synthesis-For-Strategies, strategy updates, and rollout"`): Restores rolled-back folders, archives pruned folders into `Pruned_Strategies/`, writes `State_Synthesis_history/State_Synthesis_global_update_XX_for_strategies.md` (+ `.jsonl`), strategy revision histories, `strategies_finalized_and_used_so_far.md`, and updated `Strategy-N/strategy.md` files, and commits them together as the next window's `window_start`.
+5. **Global Update branch states & Curated Context Heartbeat**: Surviving branches commit their distilled `memory_bank_XX.md` (+ `.jsonl`) per folder (`"Commit Strategy-N memory bank at Global Update U"`), replacement branches commit their initial `Execution > Critique` per folder (`"Commit Strategy-N at iteration X"`), and `State-Synthesis-For-Modules` + realized `feedback.json` + Heartbeat modules & Modules Building outputs commit together in a single `"Global Update U: State-Synthesis-For-Modules & Curated Context Heartbeat H"` commit (when `modulesCount > 0`).
 
 ### Access
 
@@ -988,68 +807,51 @@ Every agent can read the entire repository and has full read and write access to
 
 | Role | Working directory |
 |---|---|
-| Strategy generator and proximity | Repo root, read-only. Read/write in `tmp/` |
-| DOS | Repo root, read-only. Read/write in `tmp/` |
+| Strategy Generator and Strategy Proximity Reviewer | Repo root, read-only. Read/write in `tmp/` |
+| State Synthesis | Repo root, read-only. Read/write in `tmp/` |
 | Modules Generator and Modules Impact Reviewer | Repo root, read-only. Read/write in `tmp/` |
-| Modules Tester | Its own `Module-M/` folder (read/write), full repository read, and read/write in `tmp/` |
-| Solution attempt, critique, correction | `Strategy-N/` (read/write), full repository read, and read/write in `tmp/` |
-| Memory bank, BSR | `Strategy-N/` (read-only), full repository read, and read/write in `tmp/` |
+| Modules Building | Its own `Modules/Heartbeat-H/Module-M/` folder (read/write), full repository read, and read/write in `tmp/` |
+| Execution Agent, Critique Agent | `Strategy-N/` (read/write), full repository read, and read/write in `tmp/` |
+| Memory Bank, BSR | `Strategy-N/` (read-only), full repository read, and read/write in `tmp/` |
 
-The harness creates directories, writes strategy history files and module feedback records (along with `.jsonl` trajectory files), makes the commits, restores folders, and moves pruned folders into `Pruned_Strategies/`.
-
-Agents with sandbox access get three tools: `sandbox_exec`, `shared_workspace`, and `final_output`, plus a runtime-appended `<Virtual Sandbox Tool>` system prompt block describing detected runtimes (Python, Node.js, Lean 4 / Mathlib, Rust, and CLI utilities), mount permissions, and inline file/image marker syntax (`[[image:path|Label]]` and `[[file:path|Label]]`, which expand into inline previews in the UI). Each sandboxed agent invocation has a default budget of $m = 64$ tool-call turns and a 60-minute wall-clock timeout. The harness injects countdown reminders at $m - 10$ and $m - 5$ remaining tool calls, as well as wall-clock warnings at 10 minutes and 5 minutes remaining. If an agent reaches $m$ tool calls without submitting, the harness injects an urgent final-submission prompt and grants 5 overtime grace turns; if still not submitted (or if the 60-minute wall-clock limit expires), `sandbox_exec` and `shared_workspace` are revoked for up to 5 finalization turns where only `final_output` remains. Individual `sandbox_exec` commands have a 120-second default timeout (300-second maximum), automatic `rtk` command wrapping, `view`/`open` shell helpers for inspecting generated images, and 5,000-token truncation on `stdout` and `stderr` individually. `final_output` validates both the role's required output format and its maximum output token cap (5,000 tokens for Strategy Generator, Strategy Proximity, Modules Generator, Modules Impact Reviewer, DOS, BSR, Solution Critique, Modules Tester, and Solution Attempt; 10,000 tokens for Solution Correction and Memory Bank). If a submission exceeds the token cap, the tool call and its error remain in conversation history and a harness note instructs the agent to condense and resubmit within its token limit.
+Agents with sandbox access get three tools: `sandbox_exec`, `shared_workspace`, and `final_output`, plus a runtime-appended `<Virtual Sandbox Tool>` system prompt block describing detected runtimes (Python, Node.js, Lean 4 / Mathlib, Rust, and CLI utilities), mount permissions, and inline file/image marker syntax (`[[image:path|Label]]` and `[[file:path|Label]]`, which expand into inline previews in the UI). `final_output` validates both the role's required output format and its maximum output token cap (5,000 tokens for Strategy Generator, Strategy Proximity Reviewer, Modules Generator, Modules Impact Reviewer, State Synthesis, BSR, Critique Agent, and Modules Building; 10,000 tokens for Execution Agent and Memory Bank).
 
 ### Shared workspace
 
-Every agent gets the `shared_workspace` tool with three actions: `read`, `edit` (targeted `old_string` $\to$ `new_string` replacement with optional `replace_all`), and `append`. Targeted edits update specific sections in place while preserving peer notes across the file. `shared_workspace.md` is capped at 5,000 tokens; any `edit` or `append` that would push the file past 5,000 tokens records the tool error in conversation history and triggers a harness note instructing the agent to trim stale notes or make a more concise update. The latest copy is always at the repo root, even between iterations.
-
-### Attached files
-
-Text files the user attaches are included in `state.challenge`. Images are included as `<!-- EXECUTION_IMAGE_START -->` blocks in `state.challenge` and converted into native provider image inputs when prompts are sent. All attached files are also written into `user_uploaded/` inside the run repository so agents can inspect them on disk.
+Every agent gets the `shared_workspace` tool with three actions: `read`, `edit` (targeted `old_string` $\to$ `new_string` replacement with optional `replace_all`), and `append`. Targeted edits update specific sections in place while preserving peer notes across the file. `shared_workspace.md` is capped at 5,000 tokens.
 
 ## Failures and retries
 
 - **Retries.** Transient provider errors and failed output validation checks are retried with backoff (`1m`, `3m`, `5m` for provider retries, and up to 4 attempts with `30s`, `60s`, `5m` waits for orchestrator format/contract retries), with a rolling 5-minute silence watchdog on streaming turns.
-- **Pausing on unrecovered failure.** If an agent call exhausts its retries (whether on a global synthesis call or a branch's solution attempt, critique, correction, memory bank, or modules tester), the orchestrator pauses the pipeline (`status = 'stopped'`), preserving the latest checkpoint in `latest.gz` so the run can be resumed without losing completed work.
-- **Format checks.** Every structured output is checked before it is used. The checks cover:
-  - exact slot names
-  - one decision per branch
-  - for a global update, exactly one strategy entry per EVOLVE or PRUNE slot and none for any other slot
-  - a BSR report whose `branch_id` matches its branch, with valid progress and regression event arrays
-
-  A failed check is retried, and a partly valid output is never applied.
-- **Stopping.** A stop request takes effect between steps and during waits for a retry.
+- **Pausing on unrecovered failure.** If an agent call exhausts its retries, the orchestrator pauses the pipeline (`status = 'stopped'`), preserving the latest checkpoint in `latest.gz` so the run can be resumed without losing completed work.
+- **Format checks.** Every structured output is checked before it is used. A failed check is retried, and a partly valid output is never applied.
 
 ## Saving and resuming
 
 The run's settings and prompts are fixed when it starts. A snapshot of the run, `latest.gz`, is written into the run's repository whenever the state changes, and it carries the state version.
 
-The orchestrator also saves its place in the run: the current iteration, the heartbeat count, the counter since the last heartbeat, each slot's commit for every iteration (the targets for rollback), the list of strategies used so far, the strategy histories of global updates, and the shared workspace text.
-
-Resuming rebuilds the orchestrator from the saved state and skips whatever is done: seed strategies that exist, and iterations where every branch has a history entry and where the global update or heartbeat that followed is recorded.
-
-The saved state also holds BSR records, ledgers, DOS outputs, heartbeat blocks, archived branches, and the live event feed.
+Resuming rebuilds the orchestrator from the saved state and skips whatever is done: seed strategies that exist, and iterations where every branch has a history entry and where the Global Update that followed is recorded.
 
 ## Interface
 
 | Tab | Shows |
 |---|---|
-| Branches | Active strategies and each branch's history |
-| Curated Context | Generator and impact review history, heartbeats, which branches each module was sent to, test results, and feedback |
+| Branches | Active strategies and each branch's execution, critique, and memory bank history |
+| Curated Context | Modules Generator and Impact Reviewer history, Global Update Heartbeats, which branches each module was mapped to, Modules Building results, and feedback |
 | Live | Each agent's lifecycle, prompts, responses, traces, retries, and failures |
 | Filesystem | The run's repository |
 
-The configuration panel has only the settings listed above. The prompt editor lists these agents: Strategy Generator, Modules Generator, Modules Testing, Solution Attempt, Solution Critique, Solution Correction, Memory Bank, DOS, and BSR.
+The prompt editor lists these 8 configurable agent roles: Strategy Generator, Modules Generator, Modules Building, Execution Agent, Critique Agent, Memory Bank, State Synthesis, and BSR.
 
 ## Code map
 
 | Module | Responsibility |
 |---|---|
-| `pipelineOrchestrator.ts` | The run loop, each iteration phase, heartbeats, global updates, retries, and `GitRepositoryHarness` commits/rollbacks/pruning |
+| `pipelineOrchestrator.ts` | The run loop, each iteration phase, unified Global Updates & Heartbeats, retries, and `GitRepositoryHarness` commits/rollbacks/pruning |
 | `deepthinkCore.ts` | Starting and resuming a run, reading settings, saving snapshots, and assembling the challenge from attached files |
 | `formulas.ts` | BSR window scoring, pressures, and decisions; module utilization |
 | `contextBuilders.ts` | The prompt contents for each agent, and conversion of image blocks |
-| `harnessNotes.ts` | The notes added to the strategy generator, modules generator, and DOS |
+| `harnessNotes.ts` | The notes added to the Strategy Generator, Modules Generator, and State Synthesis (`State-Synthesis-For-Strategies` and `State-Synthesis-For-Modules`) |
 | `agentRegistry.ts` | Each agent's label, sandbox role, system prompt key, and model key |
 | `sharedWorkspace.ts` | The `shared_workspace` tool and its live document |
-| `types.ts` | Types for settings, branches, modules, BSR, DOS, heartbeats, loop scheduling, and run state |
+| `types.ts` | Types for settings, branches, modules, BSR, State Synthesis, heartbeats, loop scheduling, and run state |

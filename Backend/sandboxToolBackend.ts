@@ -347,7 +347,7 @@ function sanitizeRepositoryAccess(accessRequest: SandboxRepositoryAccessRequest 
 // - L1: Direct Prompt Context (Assembled per turn by Harness)
 // - L2: Mutable Agent Workspace (/workspace/Strategy-N, /workspace/Modules/.../Module-M, /workspace/tmp, shared_workspace.md)
 // - L3: Harness Kernel & Immutable Ledger (.git, user_uploaded, Strategy-N/history, Strategy-N/strategy.md,
-//       DOS_history, strategies_history, Pruned_Strategies, Modules/**/*.md|*.jsonl|*.json, root .env Secret Store)
+//       State_Synthesis_history, strategies_history, Pruned_Strategies, Modules/**/*.md|*.jsonl|*.json, root .env Secret Store)
 // ============================================================================
 
 const L3_IMMUTABLE_FILE_MODE = 0o444;

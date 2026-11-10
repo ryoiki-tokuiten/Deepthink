@@ -78,11 +78,11 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) =
     const getAgentCategory = (agentName: string, stepDescription: string): string => {
         const text = `${agentName || ''} ${stepDescription || ''}`.toLowerCase();
         if (text.includes('bsr') || text.includes('branch state')) return 'redteam';
-        if (text.includes('dos') || text.includes('synthesis') || text.includes('critique') || text.includes('critic')) return 'critique';
-        if (text.includes('correction') || text.includes('execution')) return 'correction';
+        if (text.includes('state synthesis') || text.includes('synthesis') || text.includes('critique') || text.includes('critic')) return 'critique';
+        if (text.includes('execution')) return 'correction';
         if (text.includes('memory')) return 'strategy';
-        if (text.includes('modules') || text.includes('tester')) return 'modules';
-        if (text.includes('strategy') || text.includes('attempt') || text.includes('solver') || text.includes('proximity')) return 'strategy';
+        if (text.includes('modules') || text.includes('building')) return 'modules';
+        if (text.includes('strategy') || text.includes('solver') || text.includes('proximity')) return 'strategy';
         return 'general';
     };
 
@@ -97,17 +97,22 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) =
             return filtered.length > 0 ? `${base} (${filtered.join(', ')})` : base;
         };
 
-        if (lowerName.includes('execution agent') || lowerName.includes('solution correction') || lowerName.includes('solution attempt')) {
+        if (lowerName.includes('execution agent')) {
             return withParts('Execution Agent', [target, meta]);
         }
-        if (lowerName.includes('solution critique')) return withParts('Critique Agent', [target, meta]);
-        if (lowerName.includes('dissected observations') || lowerName.includes('synthesis')) {
-            const prefix = desc.toLowerCase().includes('step-i') ? 'step-i, For ' : 'For ';
-            return meta ? `Dissected Observations Synthesis Agent (${prefix}${meta})` : 'Dissected Observations Synthesis Agent';
+        if (lowerName.includes('critique agent')) return withParts('Critique Agent', [target, meta]);
+        if (lowerName.includes('state synthesis') || lowerName.includes('synthesis')) {
+            const lowerDesc = desc.toLowerCase();
+            const prefix = lowerDesc.includes('state-synthesis-for-strategies')
+                ? 'State-Synthesis-For-Strategies, For '
+                : lowerDesc.includes('state-synthesis-for-modules')
+                ? 'State-Synthesis-For-Modules, For '
+                : 'For ';
+            return meta ? `State Synthesis Agent (${prefix}${meta})` : 'State Synthesis Agent';
         }
         if (lowerName.includes('branch state')) return withParts('Branch State Representation Agent', [target, meta]);
         if (lowerName.includes('memory bank')) return withParts('Memory Bank Agent', [target, meta]);
-        if (lowerName.includes('modules testing')) return withParts('Modules Testing Agent', [desc.match(/\b(m\d+)\b/i)?.[1] || '', meta]);
+        if (lowerName.includes('modules building')) return withParts('Modules Building Agent', [desc.match(/\b(m\d+)\b/i)?.[1] || '', meta]);
         if (lowerName.includes('modules generation') || lowerName.includes('modules generator')) return withParts('Modules Generator Agent', [meta]);
         if (lowerName.includes('modules impact review') || lowerName.includes('modules impact reviewer')) return withParts('Modules Impact Reviewer Agent', [meta]);
         return meta ? `${agentName} (${meta})` : agentName;
@@ -203,7 +208,7 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) =
                             <div className="stat-item" title="Current Loop Iteration / Total Scheduled Iterations">
                                 <span className="stat-label">ITERATION:</span>
                                 <span className="stat-value font-mono">
-                                    {(process.currentIteration ?? (process.dosOutputs?.length ? Math.max(...process.dosOutputs.map(d => d.iteration), 1) : 1))} / {process.runConfig?.i ?? 5}
+                                    {(process.currentIteration ?? (process.stateSynthesisOutputs?.length ? Math.max(...process.stateSynthesisOutputs.map(d => d.iteration), 1) : 1))} / {process.runConfig?.i ?? 10}
                                 </span>
                             </div>
                             <div style={{ flex: 1 }} />

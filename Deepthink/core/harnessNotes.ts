@@ -3,7 +3,7 @@ import type { BsrAction, BsrEvolveForm } from './types.ts';
 export function buildStrategyGlobalUpdateNote(j: number): string {
   return [
     `These strategies were actually finalized and were executed, critiqued, and corrected for ${j} iterations.`,
-    `The DOS output is a synthesis of the critique across each branch so that you understand where each branch is failing exactly.`,
+    `The State-Synthesis-For-Strategies output is a synthesis of the critique across each branch so that you understand where each branch is failing exactly.`,
     `For richer context, you have also received the latest corrections in every branch.`,
     `Finally, you will receive a BSR object calculated by the harness from each branch's observed window and standing event ledger, containing the decisions about what to continue, evolve, and prune.`,
     `Now generate the new strategies object for the changed slots only.`
@@ -13,37 +13,29 @@ export function buildStrategyGlobalUpdateNote(j: number): string {
 export function buildModuleHeartbeatNote(heartbeatNo: number): string {
   if (heartbeatNo <= 1) {
     return [
-      `The branches have executed, critiqued, and corrected up to this first heartbeat.`,
-      `You have received the DOS synthesis of where each branch currently stands, along with the currently running strategies and their latest corrections.`,
+      `The branches have executed, critiqued, and completed the branch rollout and distillation for this first Global Update.`,
+      `You have received the State-Synthesis-For-Modules synthesis of where each branch currently stands after the Global Update decisions, along with the currently running strategies and their latest corrections.`,
       `Now generate the initial modules object.`
     ].join(' ');
   }
   const prevHb = heartbeatNo - 1;
   return [
-    `The modules from Heartbeat ${prevHb} were finalized, tested independently by dedicated tester agents, and mapped as packets to the target branches, which then executed corrections with them.`,
-    `Below is the context for Heartbeat ${heartbeatNo}: the finalized modules from Heartbeat ${prevHb} and their independent test outputs,`,
+    `The modules from Global Update / Heartbeat ${prevHb} were finalized, built independently by dedicated Modules Building agents, and mapped as packets to the target branches, which then executed with them across the window.`,
+    `Below is the context for Heartbeat ${heartbeatNo}: the finalized modules from Heartbeat ${prevHb} and their independent build/test outputs,`,
     `the mapped branch packets showing the current running strategies, their latest corrections, and which modules were routed to which branches,`,
-    `the realized module feedback (observed test outcome, utilization across branches, and critique counterevidence),`,
+    `the realized module feedback (observed test outcome, utilization across surviving branches, and critique counterevidence),`,
     `the ledger of modules finalized and used so far across prior heartbeats,`,
-    `and the new DOS synthesis. Now generate the new modules object.`
+    `and the new State-Synthesis-For-Modules synthesis. Now generate the new modules object.`
   ].join(' ');
 }
 
-export const DOS_HEARTBEAT_NOTE = [
-  'The modules below were generated at the previous heartbeat, tested independently and mapped to branches,',
-  'and the branches then ran corrections with those mapped packets.',
-  'You also have the latest correction and critique of every branch.',
-  'Synthesize where each branch stands, and for every module → branch assignment report only what you can actually observe:',
-  'whether the packet was used, and whether the later critique gives real counterevidence against the tester\'s verdict.'
-].join(' ');
-
-export const DOS_STEP_I_NOTE = [
-  'Your output is going to the strategy agents that are about to decide which strategies to continue, evolve or replace in this global update.',
+export const STATE_SYNTHESIS_FOR_STRATEGIES_NOTE = [
+  'Your output is going to the strategy agents that are about to revise strategies for EVOLVE and PRUNE slots in this global update.',
   'So write it for them: where exactly each branch is failing, what the branches share, what looks worth keeping.',
   'Here you only receive the latest correction and critique of every branch, so there is no module feedback to produce in this call.'
 ].join(' ');
 
-export function buildDosStepIiNote(
+export function buildStateSynthesisForModulesNote(
   slotStatuses: Array<{
     slotId: string;
     action: BsrAction;
@@ -53,28 +45,28 @@ export function buildDosStepIiNote(
 ): string {
   const formattedSlots = slotStatuses.map(s => {
     if (s.action === 'CONTINUE') {
-      return `- ${s.slotId}: CONTINUE (surviving uninterrupted)`;
+      return `- ${s.slotId}: CONTINUE (surviving uninterrupted, memory bank distilled)`;
     }
     if (s.action === 'EVOLVE') {
       if (s.form === 'rollback' && s.rollbackTo !== undefined) {
         const targetStr = s.rollbackTo === 'window_start' ? 'window start' : `iteration ${s.rollbackTo}`;
-        return `- ${s.slotId}: EVOLVE with rollback (reverted to ${targetStr}, discarded later iterations)`;
+        return `- ${s.slotId}: EVOLVE with rollback (reverted to ${targetStr}, discarded later iterations, memory bank distilled up to ${targetStr})`;
       }
-      return `- ${s.slotId}: EVOLVE in place (re-aimed strategy text, progress standing)`;
+      return `- ${s.slotId}: EVOLVE in place (re-aimed strategy text, progress standing, memory bank distilled)`;
     }
     return `- ${s.slotId}: PRUNE (archived, freed slot now holds a new branch starting with first execution + critique)`;
   }).join('\n');
 
   return [
-    'This is your second call in this global update. Since your first output, the decisions were applied and the status of every slot is listed below:',
+    'This is State-Synthesis-For-Modules, your second call in this global update. Since your State-Synthesis-For-Strategies output, the branch decisions, memory bank distillations, rollbacks, and replacement branch executions were applied. The status of every slot is listed below:',
     formattedSlots,
     '',
     'Branches that were pruned are gone and their slots now hold new branches that only have a first execution and critique.',
     'A branch that was rolled back no longer contains the iterations after its rollback point.',
-    'You also receive your own first output from this global update, unchanged.',
-    'The previous heartbeat\'s modules, testing outputs and mappings are included now, so produce module feedback, but only for assignments you can really observe, which means the branches that survived.',
-    'You cannot say anything about the new branches and that is fine, leave them out.',
-    'Do not repeat your first output: use it as a base and give a more nuanced, natural synthesis of the state you see now.'
+    'You also receive your own State-Synthesis-For-Strategies output from this global update as your baseline.',
+    'If modules were generated at the previous global update, their definitions, build/test outputs, and mappings are included now: produce module feedback ONLY for assignments you can really observe, which means the branches that survived (CONTINUE and EVOLVE).',
+    'You cannot say anything about the new replacement branches in PRUNE slots and that is fine, leave them out of module_feedback.',
+    'Do not repeat your State-Synthesis-For-Strategies output verbatim: use it as a base and give a nuanced synthesis of the post-update state for the Modules Generator and Modules Impact Reviewer.'
   ].join('\n');
 }
 
@@ -148,4 +140,3 @@ export function buildSharedWorkspaceTokenGateHarnessNote(
 ): string {
   return `[HARNESS NOTE — SHARED WORKSPACE TOKEN LIMIT EXCEEDED]: Your shared_workspace update resulted in ${actualTokens} tokens, which exceeds the maximum limit of ${maxTokens} tokens for shared_workspace.md. Your tool call and its error remain in history. Please output and maintain at most ${maxTokens} total tokens in shared_workspace.md by using shared_workspace(action="edit", old_string=..., new_string=...) to condense or replace existing sections.`;
 }
-

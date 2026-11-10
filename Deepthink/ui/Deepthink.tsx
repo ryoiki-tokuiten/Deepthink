@@ -19,7 +19,7 @@ import {
     stopDeepthinkAnalysisProcess,
     saveLatestDeepthinkState,
 } from '../core/deepthinkCore';
-import type { BsrGlobalUpdateRecord, DosOutput } from '../core/types';
+import type { BsrGlobalUpdateRecord, StateSynthesisOutput } from '../core/types';
 
 export {
     resumeDeepthinkAnalysisProcess,
@@ -43,21 +43,21 @@ function formatBranchLabel(id: string): string {
     return id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-export const DosSynthesisCard: React.FC<{
+export const StateSynthesisCard: React.FC<{
     process: DeepthinkPipelineState;
     heartbeatNo?: number;
-    entry?: { callType: 'heartbeat' | 'step_i' | 'step_ii'; iteration: number; output: DosOutput };
+    entry?: { callType: 'strategies' | 'modules'; iteration: number; output: StateSynthesisOutput };
 }> = ({ process, heartbeatNo, entry }) => {
-    const heartbeatDosList = (process.dosOutputs || []).filter(d => d.callType !== 'step_i');
+    const heartbeatSynthesisList = (process.stateSynthesisOutputs || []).filter(d => d.callType === 'modules');
     const matchingHb = heartbeatNo !== undefined ? (process.heartbeats || []).find(h => h.heartbeat_no === heartbeatNo) : undefined;
     const resolvedSyncedEntry = entry || (heartbeatNo !== undefined
-        ? (matchingHb ? heartbeatDosList.find(d => d.iteration === matchingHb.iteration) : undefined) || heartbeatDosList[heartbeatNo - 1]
+        ? (matchingHb ? heartbeatSynthesisList.find(d => d.iteration === matchingHb.iteration) : undefined) || heartbeatSynthesisList[heartbeatNo - 1]
         : undefined);
-    const activeEntry = resolvedSyncedEntry || heartbeatDosList[heartbeatDosList.length - 1];
+    const activeEntry = resolvedSyncedEntry || heartbeatSynthesisList[heartbeatSynthesisList.length - 1];
     if (!activeEntry) return null;
 
-    const dos: DosOutput = activeEntry.output;
-    const feedbackList = dos.module_feedback || [];
+    const synthesisOutput: StateSynthesisOutput = activeEntry.output;
+    const feedbackList = synthesisOutput.module_feedback || [];
     const branchIds = new Set<string>();
     (process.initialStrategies || []).forEach(s => branchIds.add(s.id));
     feedbackList.forEach(fb => (fb.branch_utilization || []).forEach(u => branchIds.add(u.branch_id)));
@@ -85,8 +85,8 @@ export const DosSynthesisCard: React.FC<{
     });
 
     const paragraphs: Array<{ title: string; color: string; content: React.ReactNode }> = [];
-    if (dos.core_synthesis) {
-        Object.entries(dos.core_synthesis).forEach(([key, val]) => {
+    if (synthesisOutput.core_synthesis) {
+        Object.entries(synthesisOutput.core_synthesis).forEach(([key, val]) => {
             const title = `${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:`;
             const lowerKey = key.toLowerCase();
             const color = lowerKey.includes('strength') ? '#10b981'
@@ -103,39 +103,39 @@ export const DosSynthesisCard: React.FC<{
     }
 
     return (
-        <div className="dos-container">
-            <div className="dos-header-bar">
-                <div className="dos-title-group">
-                    <MIcon name="psychology" className="dos-title-icon" />
-                    <h4 className="dos-pinned-title">
-                        Dissected Observations Synthesis (DOS){heartbeatNo !== undefined ? ` — Heartbeat ${heartbeatNo}` : ''}
+        <div className="state-synthesis-container">
+            <div className="state-synthesis-header-bar">
+                <div className="state-synthesis-title-group">
+                    <MIcon name="psychology" className="state-synthesis-title-icon" />
+                    <h4 className="state-synthesis-pinned-title">
+                        State Synthesis{heartbeatNo !== undefined ? ` — Heartbeat ${heartbeatNo}` : ''}
                     </h4>
                 </div>
             </div>
-            <div className="dos-pinned-body">
-                <div className="dos-unified-text-scroll">
+            <div className="state-synthesis-pinned-body">
+                <div className="state-synthesis-unified-text-scroll">
                     {paragraphs.length === 0 ? (
-                        <p className="dos-paragraph-item dos-muted-text">No core synthesis recorded for this heartbeat.</p>
+                        <p className="state-synthesis-paragraph-item state-synthesis-muted-text">No core synthesis recorded for this heartbeat.</p>
                     ) : (
                         paragraphs.map((p, idx) => (
-                            <div key={idx} className="dos-paragraph-item">
-                                <span className="dos-paragraph-lead" style={{ color: p.color }}>{p.title}</span>{' '}
-                                <span className="dos-paragraph-content">{p.content}</span>
+                            <div key={idx} className="state-synthesis-paragraph-item">
+                                <span className="state-synthesis-paragraph-lead" style={{ color: p.color }}>{p.title}</span>{' '}
+                                <span className="state-synthesis-paragraph-content">{p.content}</span>
                             </div>
                         ))
                     )}
                 </div>
-                <div className="dos-utilization-panel">
-                    <div className="dos-util-panel-title">
-                        <MIcon name="hub" className="dos-panel-icon" />
+                <div className="state-synthesis-utilization-panel">
+                    <div className="state-synthesis-util-panel-title">
+                        <MIcon name="hub" className="state-synthesis-panel-icon" />
                         <span>Branch Utilization</span>
                     </div>
-                    <div className="dos-branch-meter-list">
+                    <div className="state-synthesis-branch-meter-list">
                         {branchMappings.map(b => (
-                            <div key={b.branchId} className={`dos-branch-meter-row status-${b.statusClass}`} title={b.tooltip}>
-                                <span className="dos-branch-name">{b.label}</span>
-                                <div className="dos-meter-wrapper">
-                                    <div className="dos-signal-meter" aria-label={`Strength ${b.level} of 3`}>
+                            <div key={b.branchId} className={`state-synthesis-branch-meter-row status-${b.statusClass}`} title={b.tooltip}>
+                                <span className="state-synthesis-branch-name">{b.label}</span>
+                                <div className="state-synthesis-meter-wrapper">
+                                    <div className="state-synthesis-signal-meter" aria-label={`Strength ${b.level} of 3`}>
                                         <span className={`meter-segment seg-1 ${b.level >= 1 ? 'active' : ''}`} />
                                         <span className={`meter-segment seg-2 ${b.level >= 2 ? 'active' : ''}`} />
                                         <span className={`meter-segment seg-3 ${b.level >= 3 ? 'active' : ''}`} />
@@ -429,7 +429,7 @@ const BranchVisualBsr: React.FC<{ branchId: string; records: BsrGlobalUpdateReco
         }
     }
     const chainedRecords = records.slice(chainStartIdx, activeIdx + 1);
-    const j = process.runConfig?.j ?? 5;
+    const j = process.runConfig?.j ?? 4;
     const seenIters = new Set<number>();
     const iterOrder: number[] = [];
     const iterProgMap = new Map<number, typeof report.confirmed_progress>();
@@ -754,8 +754,8 @@ function buildModuleRoundViews(process: DeepthinkPipelineState) {
     if (process.heartbeatNo && process.heartbeatNo > 0) {
         for (let i = 1; i <= process.heartbeatNo; i++) roundNumberSet.add(i);
     }
-    (process.dosOutputs || []).forEach(d => {
-        if (d.callType === 'heartbeat') {
+    (process.stateSynthesisOutputs || []).forEach(d => {
+        if (d.callType === 'modules') {
             const matchingHb = (process.heartbeats || []).find(h => h.iteration === d.iteration);
             if (matchingHb?.heartbeat_no) roundNumberSet.add(matchingHb.heartbeat_no);
         }
@@ -807,7 +807,7 @@ export const ModulesExplorerTab: React.FC<{ process: DeepthinkPipelineState; onV
                     ))}
                 </div>
                 <div className="modules-round-content">
-                    {modulesEnabled && <DosSynthesisCard process={process} heartbeatNo={currentHeartbeatNo} />}
+                    {modulesEnabled && <StateSynthesisCard process={process} heartbeatNo={currentHeartbeatNo} />}
                     <div className="curated-context-columns has-modules">
                         {modulesEnabled && (
                             <section className="curated-context-modules">

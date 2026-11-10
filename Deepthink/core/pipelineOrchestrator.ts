@@ -17,8 +17,8 @@ import {
   type DeepthinkLiveEvent,
   type DeepthinkMainStrategyData,
   type DeepthinkPipelineState,
-  type DosModuleFeedbackItem,
-  type DosOutput,
+  type StateSynthesisModuleFeedbackItem,
+  type StateSynthesisOutput,
   type HeartbeatBlock,
   type ProximityTurn,
   type RealizedModuleFeedback,
@@ -27,9 +27,9 @@ import {
 } from './types.ts';
 import {
   buildContextForBsr,
-  buildContextForCorrectionAgent,
+  buildContextForExecutionAgent,
   buildContextForCritiqueAgent,
-  buildContextForDos,
+  buildContextForStateSynthesis,
   buildContextForModulesGenerate,
   buildContextForStrategyGlobalUpdate,
   buildContextForStrategySeed,
@@ -399,10 +399,9 @@ export class DeepthinkPipelineOrchestrator {
     }
   }
 
-  public syncCheckpointState(iteration?: number, heartbeatNo?: number, sinceHeartbeat?: number): void {
+  public syncCheckpointState(iteration?: number, heartbeatNo?: number): void {
     if (iteration !== undefined) (this.state as any).currentIteration = iteration;
     if (heartbeatNo !== undefined) (this.state as any).heartbeatNo = heartbeatNo;
-    if (sinceHeartbeat !== undefined) (this.state as any).sinceHeartbeat = sinceHeartbeat;
     (this.state as any).commitHashesPerIteration = Array.from(this.commitHashesPerIteration.entries());
     (this.state as any).strategiesUsedSoFar = this.strategiesUsedSoFar;
     (this.state as any).modulesUsedSoFar = this.modulesUsedSoFar;
@@ -431,7 +430,7 @@ export class DeepthinkPipelineOrchestrator {
 
   public async run(): Promise<void> {
     const config = this.state.runConfig;
-    const boundsCheck = validateLoopBounds(config.i, config.j, config.k);
+    const boundsCheck = validateLoopBounds(config.i, config.j);
     if (!boundsCheck.valid) {
       throw new Error(`Invalid Deepthink loop configuration: ${boundsCheck.error}`);
     }
@@ -473,104 +472,65 @@ export class DeepthinkPipelineOrchestrator {
       }
     }
 
-    let sinceHeartbeat = 0;
     let heartbeatNo = 0;
     const curatedContextEnabled = config.modulesCount > 0;
 
-    const isIterationFullyComplete = (it: number, currentSinceHeartbeat: number): { complete: boolean; nextSinceHeartbeat: number; nextHeartbeatNo: number } => {
+    const isIterationFullyComplete = (it: number): { complete: boolean; nextHeartbeatNo: number } => {
       const branches = this.state.initialStrategies || [];
-      if (!branches.length) return { complete: false, nextSinceHeartbeat: currentSinceHeartbeat, nextHeartbeatNo: heartbeatNo };
+      if (!branches.length) return { complete: false, nextHeartbeatNo: heartbeatNo };
       const allBranchesDone = branches.every(b => {
         const entry = b.iterationHistory?.iterations?.find(e => e.iterationNumber === it);
         if (!entry || !entry.correctedSolution || (it < config.i && !entry.critique)) return false;
         return true;
       });
-      if (!allBranchesDone) return { complete: false, nextSinceHeartbeat: currentSinceHeartbeat, nextHeartbeatNo: heartbeatNo };
+      if (!allBranchesDone) return { complete: false, nextHeartbeatNo: heartbeatNo };
 
-      const step = determinePostIterationStep(
-        it,
-        currentSinceHeartbeat,
-        config.i,
-        config.j,
-        config.k,
-        curatedContextEnabled
-      );
+      const action = determinePostIterationStep(it, config.i, config.j);
 
-      let stepDone = true;
-      if (step.action.type === 'GLOBAL_UPDATE') {
+      if (action.type === 'GLOBAL_UPDATE') {
         const guDone = this.state.bsrRecords?.some(r => r.iteration === it) &&
-                       (!curatedContextEnabled || this.state.heartbeats?.some(h => (h as any).iteration === it));
-        if (!guDone) stepDone = false;
-      } else if (step.action.type === 'HEARTBEAT') {
-        const hbDone = !curatedContextEnabled || this.state.heartbeats?.some(h => (h as any).iteration === it);
-        if (!hbDone) stepDone = false;
+                       (!curatedContextEnabled || this.state.heartbeats?.some(h => h.iteration === it));
+        if (!guDone) {
+          return { complete: false, nextHeartbeatNo: heartbeatNo };
+        }
+        return { complete: true, nextHeartbeatNo: heartbeatNo + 1 };
       }
 
-      if (!stepDone) {
-        return { complete: false, nextSinceHeartbeat: currentSinceHeartbeat, nextHeartbeatNo: heartbeatNo };
-      }
-
-      let nextHbNo = heartbeatNo;
-      let nextSince = step.nextSinceHeartbeat;
-      if (step.action.type === 'GLOBAL_UPDATE' || step.action.type === 'HEARTBEAT') {
-        nextHbNo++;
-        nextSince = 0;
-      }
-      return { complete: true, nextSinceHeartbeat: nextSince, nextHeartbeatNo: nextHbNo };
+      return { complete: true, nextHeartbeatNo: heartbeatNo };
     };
 
     for (let iteration = 1; iteration <= config.i; iteration++) {
       this.checkStopRequested();
 
-      const completionCheck = isIterationFullyComplete(iteration, sinceHeartbeat);
+      const completionCheck = isIterationFullyComplete(iteration);
       if (completionCheck.complete) {
         this.emitEvent('Loop', `Iteration ${iteration} of ${config.i} already completed, advancing`, 'info');
-        sinceHeartbeat = completionCheck.nextSinceHeartbeat;
         heartbeatNo = completionCheck.nextHeartbeatNo;
         continue;
       }
 
-      this.syncCheckpointState(iteration, heartbeatNo, sinceHeartbeat);
+      this.syncCheckpointState(iteration, heartbeatNo);
       this.emitEvent('Loop', `Starting Iteration ${iteration} of ${config.i}`, 'info');
 
-      await this.runCorrectionAndCritiqueIteration(iteration, heartbeatNo);
+      await this.runExecutionAndCritiqueIteration(iteration, heartbeatNo);
 
-      const step = determinePostIterationStep(
-        iteration,
-        sinceHeartbeat,
-        config.i,
-        config.j,
-        config.k,
-        curatedContextEnabled
-      );
-
-      sinceHeartbeat = step.nextSinceHeartbeat;
+      const action = determinePostIterationStep(iteration, config.i, config.j);
 
       if (iteration >= config.i) {
-        this.emitEvent('Loop', 'Reached final iteration barrier. All branch corrections completed.', 'info');
+        this.emitEvent('Loop', 'Reached final iteration barrier. All branch executions completed.', 'info');
         break;
-      } else if (step.action.type === 'GLOBAL_UPDATE') {
+      } else if (action.type === 'GLOBAL_UPDATE') {
         const alreadyDone = this.state.bsrRecords?.some(r => r.iteration === iteration) &&
-                            (!curatedContextEnabled || this.state.heartbeats?.some(h => (h as any).iteration === iteration));
+                            (!curatedContextEnabled || this.state.heartbeats?.some(h => h.iteration === iteration));
         if (!alreadyDone) {
           this.emitEvent('Loop', `Running Global Update at iteration ${iteration}`, 'info');
           heartbeatNo++;
-          this.syncCheckpointState(iteration, heartbeatNo, sinceHeartbeat);
+          this.syncCheckpointState(iteration, heartbeatNo);
           await this.performGlobalUpdate(iteration, heartbeatNo);
-          sinceHeartbeat = 0;
-        }
-      } else if (step.action.type === 'HEARTBEAT') {
-        const alreadyDone = this.state.heartbeats?.some(h => (h as any).iteration === iteration);
-        if (!alreadyDone) {
-          this.emitEvent('Loop', `Running Curated Context Heartbeat at iteration ${iteration}`, 'info');
-          heartbeatNo++;
-          this.syncCheckpointState(iteration, heartbeatNo, sinceHeartbeat);
-          await this.runCuratedContextHeartbeat(iteration, heartbeatNo);
-          sinceHeartbeat = 0;
         }
       }
 
-      this.syncCheckpointState(iteration + 1, heartbeatNo, sinceHeartbeat);
+      this.syncCheckpointState(iteration + 1, heartbeatNo);
       this.callbacks.onStateChange?.(this.state);
     }
 
@@ -768,7 +728,7 @@ export class DeepthinkPipelineOrchestrator {
     this.callbacks.onStateChange?.(this.state);
   }
 
-  private async runCorrectionAndCritiqueIteration(iteration: number, _heartbeatNo: number): Promise<void> {
+  private async runExecutionAndCritiqueIteration(iteration: number, _heartbeatNo: number): Promise<void> {
     const branches = this.state.initialStrategies;
     const config = this.state.runConfig;
     const currentWindowStart = Math.floor((iteration - 1) / config.j) * config.j + 1;
@@ -827,7 +787,7 @@ export class DeepthinkPipelineOrchestrator {
             .join('\n\n')
         : null;
 
-      const correctionPrompt = buildContextForCorrectionAgent(
+      const executionPrompt = buildContextForExecutionAgent(
         this.state.challenge,
         branch.id,
         branch.strategyText,
@@ -837,26 +797,26 @@ export class DeepthinkPipelineOrchestrator {
       );
 
       try {
-        let correctionTrajectoryJsonl = '';
-        const correctedOutput = await this.callAgentModelWithRetry({
-          kind: 'solutionCorrection',
-          promptText: correctionPrompt,
+        let executionTrajectoryJsonl = '';
+        const executedOutput = await this.callAgentModelWithRetry({
+          kind: 'executionAgent',
+          promptText: executionPrompt,
           stepDescription: `Execution for ${branch.id} (Iteration ${iteration})`,
           workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
           isCritical: false,
           executionGroupId: `group-iter-${iteration}-execution`,
           executionGroupName: `Iteration ${iteration}: Branch Executions (Parallel)`,
           onTrajectoryJsonl: (jsonl) => {
-            correctionTrajectoryJsonl = jsonl;
+            executionTrajectoryJsonl = jsonl;
           },
         });
 
         if (iteration === 1 || !branch.solutionAttempt) {
-          branch.solutionAttempt = correctedOutput;
-          branch.solutionAttemptDisplay = correctedOutput;
+          branch.solutionAttempt = executedOutput;
+          branch.solutionAttemptDisplay = executedOutput;
         }
-        branch.refinedSolution = correctedOutput;
-        branch.refinedSolutionDisplay = correctedOutput;
+        branch.refinedSolution = executedOutput;
+        branch.refinedSolutionDisplay = executedOutput;
         branch.correctionStatus = 'completed';
         branch.status = 'completed';
 
@@ -865,16 +825,16 @@ export class DeepthinkPipelineOrchestrator {
         }
         const existingIdx = branch.iterationHistory.iterations.findIndex(it => it.iterationNumber === iteration);
         if (existingIdx >= 0) {
-          branch.iterationHistory.iterations[existingIdx].correctedSolution = correctedOutput;
+          branch.iterationHistory.iterations[existingIdx].correctedSolution = executedOutput;
           branch.iterationHistory.iterations[existingIdx].timestamp = Date.now();
-          (branch.iterationHistory.iterations[existingIdx] as any).solutionTrajectoryJsonl = correctionTrajectoryJsonl;
+          (branch.iterationHistory.iterations[existingIdx] as any).solutionTrajectoryJsonl = executionTrajectoryJsonl;
         } else {
           branch.iterationHistory.iterations.push({
             iterationNumber: iteration,
-            correctedSolution: correctedOutput,
+            correctedSolution: executedOutput,
             critique: '',
             timestamp: Date.now(),
-            solutionTrajectoryJsonl: correctionTrajectoryJsonl,
+            solutionTrajectoryJsonl: executionTrajectoryJsonl,
           } as any);
         }
 
@@ -931,9 +891,9 @@ export class DeepthinkPipelineOrchestrator {
       try {
         let critiqueTrajectoryJsonl = '';
         const critiqueOutput = await this.callAgentModelWithRetry({
-          kind: 'solutionCritique',
+          kind: 'critiqueAgent',
           promptText: critiquePrompt,
-          stepDescription: `Solution Critique for ${branch.id} (Iteration ${iteration})`,
+          stepDescription: `Critique Agent for ${branch.id} (Iteration ${iteration})`,
           workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
           isCritical: false,
           executionGroupId: `group-iter-${iteration}-critique`,
@@ -996,8 +956,8 @@ export class DeepthinkPipelineOrchestrator {
   public async runCuratedContextHeartbeat(
     iteration: number,
     heartbeatNo: number,
-    reusedDos?: DosOutput,
-    reusedDosFilePath?: string,
+    stateSynthesisOutput: StateSynthesisOutput,
+    stateSynthesisFilePath: string,
     extraContextFiles: DeepthinkResultsContextFile[] = [],
     commitMessageOverride?: string
   ): Promise<void> {
@@ -1007,77 +967,7 @@ export class DeepthinkPipelineOrchestrator {
     }
 
     const previousHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
-    const currentDosFilePath = reusedDosFilePath || `DOS_history/DOS_heartbeat_${String(heartbeatNo).padStart(2, '0')}.md`;
     const heartbeatFiles: DeepthinkResultsContextFile[] = [...extraContextFiles];
-
-    let dosOutput = reusedDos;
-    let dosTrajectoryJsonl = '';
-    if (!dosOutput && config.modulesCount > 0) {
-      const existingDos = this.state.dosOutputs?.find(
-        d => d.callType === 'heartbeat' && d.iteration === iteration
-      );
-      if (existingDos) {
-        dosOutput = existingDos.output;
-        dosTrajectoryJsonl = (existingDos as any).trajectoryJsonl || '';
-      }
-    }
-    if (!dosOutput && config.modulesCount > 0) {
-      const activeState = this.state.initialStrategies.map(s => ({
-        branchId: s.id,
-        strategyText: s.strategyText,
-        latestCorrection: s.refinedSolution || s.solutionAttempt || 'None',
-        latestCritique: s.solutionCritique || 'None',
-      }));
-
-      const dosContract: OutputValidationContract<DosOutput> = {
-        name: 'HeartbeatDosContract',
-        validate: (parsed) => {
-          if (!parsed || typeof parsed !== 'object') {
-            throw new Error('Heartbeat DOS output must be an object.');
-          }
-        },
-      };
-
-      const dosPrompt = buildContextForDos(this.state.challenge, 'heartbeat', activeState, { previousHeartbeat });
-      const rawDos = await this.callAgentModelWithRetry({
-        kind: 'dos',
-        promptText: dosPrompt,
-        stepDescription: `Heartbeat DOS (Heartbeat ${heartbeatNo})`,
-        jsonResponse: true,
-        isCritical: true,
-        contract: dosContract,
-        executionGroupId: `group-heartbeat-${heartbeatNo}-dos`,
-        executionGroupName: `Heartbeat ${heartbeatNo}: DOS Synthesis`,
-        onTrajectoryJsonl: (jsonl) => {
-          dosTrajectoryJsonl = jsonl;
-        },
-      });
-
-      dosOutput = this.parseJsonStrict<DosOutput>(rawDos, `Heartbeat DOS (Heartbeat ${heartbeatNo})`);
-      this.state.dosOutputs.push({
-        callType: 'heartbeat',
-        iteration,
-        output: dosOutput,
-        trajectoryJsonl: dosTrajectoryJsonl,
-      } as any);
-      this.callbacks.onStateChange?.(this.state);
-    }
-
-    if (!reusedDos && dosOutput) {
-      heartbeatFiles.push(
-        {
-          path: currentDosFilePath,
-          content: `# DOS Heartbeat ${heartbeatNo} Output\n\n\`\`\`json\n${JSON.stringify(dosOutput, null, 2)}\n\`\`\``,
-        },
-        {
-          path: `DOS_history/DOS_heartbeat_${String(heartbeatNo).padStart(2, '0')}.jsonl`,
-          content: dosTrajectoryJsonl,
-        }
-      );
-      if (dosOutput.module_feedback && previousHeartbeat) {
-        heartbeatFiles.push(...this.collectRealizedDosFeedbackFiles(dosOutput.module_feedback, previousHeartbeat.heartbeat_no));
-      }
-    }
 
     const newModules: DeepthinkModuleData[] = [];
     const realizedFeedback: RealizedModuleFeedback[] = [];
@@ -1124,7 +1014,7 @@ export class DeepthinkPipelineOrchestrator {
             this.state.challenge,
             heartbeatNo,
             this.state.initialStrategies,
-            dosOutput,
+            stateSynthesisOutput,
             previousHeartbeat,
             modHistory,
             config.modulesCount,
@@ -1188,7 +1078,7 @@ export class DeepthinkPipelineOrchestrator {
               this.state.challenge,
               heartbeatNo,
               this.state.initialStrategies,
-              dosOutput,
+              stateSynthesisOutput,
               previousHeartbeat,
               modHistory,
               config.modulesCount,
@@ -1319,17 +1209,17 @@ export class DeepthinkPipelineOrchestrator {
           const testerPrompt = [
             `# Core Challenge\n${this.state.challenge}`,
             `Assigned Module ${modItem.module_id}:\n${modItem.text}`,
-            'Test this module within your assigned folder.',
+            'Build and test this module within your assigned folder.',
           ].join('\n\n');
 
           testResult = await this.callAgentModelWithRetry({
-            kind: 'modulesTester',
+            kind: 'modulesBuilding',
             promptText: testerPrompt,
-            stepDescription: `Modules Tester for ${modItem.module_id}`,
+            stepDescription: `Modules Building for ${modItem.module_id}`,
             workingDirectory: `Modules/Heartbeat-${heartbeatNo}/Module-${folderIndex}`,
             isCritical: false,
             executionGroupId: `group-heartbeat-${heartbeatNo}-testing`,
-            executionGroupName: `Heartbeat ${heartbeatNo}: Independent Modules Testers (Parallel)`,
+            executionGroupName: `Heartbeat ${heartbeatNo}: Independent Modules Building (Parallel)`,
             onTrajectoryJsonl: (jsonl) => {
               testerTrajectoryJsonl = jsonl;
             },
@@ -1387,7 +1277,7 @@ export class DeepthinkPipelineOrchestrator {
     const heartbeatBlock: HeartbeatBlock = {
       heartbeat_no: heartbeatNo,
       iteration,
-      dosFilePath: currentDosFilePath,
+      stateSynthesisFilePath,
       modules: newModules,
       realized_feedback: realizedFeedback,
     };
@@ -1395,7 +1285,7 @@ export class DeepthinkPipelineOrchestrator {
     this.state.modules = newModules;
 
     await this.gitHarness.commit(
-      commitMessageOverride || `Curated Context Heartbeat ${heartbeatNo}: DOS & Modules`,
+      commitMessageOverride || `Global Update: State-Synthesis-For-Modules & Curated Context Heartbeat ${heartbeatNo}`,
       `heartbeat${heartbeatNo}`,
       heartbeatFiles
     );
@@ -1410,7 +1300,7 @@ export class DeepthinkPipelineOrchestrator {
     const updateNumber = Math.round(iteration / config.j);
     const paddedGu = String(updateNumber).padStart(2, '0');
 
-    this.emitEvent('GlobalUpdate', `Step i: Running Step-i DOS and BSR across branches`, 'info');
+    this.emitEvent('GlobalUpdate', `Running State-Synthesis-For-Strategies and BSR across branches`, 'info');
 
     const activeBranchesState = this.state.initialStrategies.map(s => ({
       branchId: s.id,
@@ -1419,38 +1309,38 @@ export class DeepthinkPipelineOrchestrator {
       latestCritique: s.solutionCritique || 'None',
     }));
 
-    const existingStepIDos = this.state.dosOutputs?.find(
-      d => d.callType === 'step_i' && d.iteration === iteration
+    const existingStrategiesSynthesis = this.state.stateSynthesisOutputs?.find(
+      d => d.callType === 'strategies' && d.iteration === iteration
     );
-    let stepIDosOutput: DosOutput;
-    let stepIDosTrajectoryJsonl = (existingStepIDos as any)?.trajectoryJsonl || '';
+    let stateSynthesisStrategiesOutput: StateSynthesisOutput;
+    let stateSynthesisStrategiesTrajectoryJsonl = (existingStrategiesSynthesis as any)?.trajectoryJsonl || '';
 
     const existingBsrForUpdate = (this.state.bsrRecords || []).filter(r => r.updateNumber === updateNumber);
-    const needStepIDos = !existingStepIDos;
+    const needStrategiesSynthesis = !existingStrategiesSynthesis;
     const needBsr = existingBsrForUpdate.length < this.state.initialStrategies.length;
 
-    const stepIDosPromise = needStepIDos
+    const stateSynthesisStrategiesPromise = needStrategiesSynthesis
       ? (() => {
-          const stepIDosContract: OutputValidationContract<DosOutput> = {
-            name: 'StepIDosContract',
+          const stateSynthesisStrategiesContract: OutputValidationContract<StateSynthesisOutput> = {
+            name: 'StateSynthesisForStrategiesContract',
             validate: (parsed) => {
               if (!parsed || typeof parsed !== 'object') {
-                throw new Error('Step-i DOS response must be an object.');
+                throw new Error('State-Synthesis-For-Strategies response must be an object.');
               }
             },
           };
-          const stepIDosPrompt = buildContextForDos(this.state.challenge, 'step_i', activeBranchesState);
+          const stateSynthesisStrategiesPrompt = buildContextForStateSynthesis(this.state.challenge, 'strategies', activeBranchesState);
           return this.callAgentModelWithRetry({
-            kind: 'dos',
-            promptText: stepIDosPrompt,
-            stepDescription: `Step-i DOS (Global Update ${updateNumber})`,
+            kind: 'stateSynthesis',
+            promptText: stateSynthesisStrategiesPrompt,
+            stepDescription: `State-Synthesis-For-Strategies (Global Update ${updateNumber})`,
             jsonResponse: true,
             isCritical: true,
-            contract: stepIDosContract,
-            executionGroupId: `group-global-update-${updateNumber}-step-i`,
-            executionGroupName: `Global Update ${updateNumber}: Step-i DOS & BSR Evaluation (Parallel)`,
+            contract: stateSynthesisStrategiesContract,
+            executionGroupId: `group-global-update-${updateNumber}-state-synthesis-bsr`,
+            executionGroupName: `Global Update ${updateNumber}: State-Synthesis-For-Strategies & BSR Evaluation (Parallel)`,
             onTrajectoryJsonl: (jsonl) => {
-              stepIDosTrajectoryJsonl = jsonl;
+              stateSynthesisStrategiesTrajectoryJsonl = jsonl;
             },
           });
         })()
@@ -1500,26 +1390,26 @@ export class DeepthinkPipelineOrchestrator {
             jsonResponse: true,
             isCritical: true,
             contract: bsrContract,
-            executionGroupId: `group-global-update-${updateNumber}-step-i`,
-            executionGroupName: `Global Update ${updateNumber}: Step-i DOS & BSR Evaluation (Parallel)`,
+            executionGroupId: `group-global-update-${updateNumber}-state-synthesis-bsr`,
+            executionGroupName: `Global Update ${updateNumber}: State-Synthesis-For-Strategies & BSR Evaluation (Parallel)`,
           });
 
           return this.parseJsonStrict<BsrReport>(rawBsr, `BSR for ${branch.id}`);
         }))
       : Promise.resolve(existingBsrForUpdate.map(r => r.report));
 
-    const [rawStepIDos, bsrReports] = await Promise.all([stepIDosPromise, bsrReportsPromise]);
-    if (needStepIDos) {
-      stepIDosOutput = this.parseJsonStrict<DosOutput>(rawStepIDos, `Step-i DOS (Global Update ${updateNumber})`);
-      this.state.dosOutputs.push({
-        callType: 'step_i',
+    const [rawStrategiesSynthesis, bsrReports] = await Promise.all([stateSynthesisStrategiesPromise, bsrReportsPromise]);
+    if (needStrategiesSynthesis) {
+      stateSynthesisStrategiesOutput = this.parseJsonStrict<StateSynthesisOutput>(rawStrategiesSynthesis, `State-Synthesis-For-Strategies (Global Update ${updateNumber})`);
+      this.state.stateSynthesisOutputs.push({
+        callType: 'strategies',
         iteration,
-        output: stepIDosOutput,
-        trajectoryJsonl: stepIDosTrajectoryJsonl,
+        output: stateSynthesisStrategiesOutput,
+        trajectoryJsonl: stateSynthesisStrategiesTrajectoryJsonl,
       } as any);
       this.callbacks.onStateChange?.(this.state);
     } else {
-      stepIDosOutput = existingStepIDos!.output;
+      stateSynthesisStrategiesOutput = existingStrategiesSynthesis!.output;
     }
 
     const evaluatedRecords: Array<{ report: BsrReport; computed: BsrComputedScores }> = [];
@@ -1593,12 +1483,12 @@ export class DeepthinkPipelineOrchestrator {
     if (!rolloutAlreadyDone) {
       const rolloutFiles: DeepthinkResultsContextFile[] = [
         {
-          path: `DOS_history/DOS_global_update_${paddedGu}_step_i.md`,
-          content: `# Step-i DOS Output (Global Update ${updateNumber})\n\n\`\`\`json\n${JSON.stringify(stepIDosOutput, null, 2)}\n\`\`\``,
+          path: `State_Synthesis_history/State_Synthesis_global_update_${paddedGu}_for_strategies.md`,
+          content: `# State-Synthesis-For-Strategies Output (Global Update ${updateNumber})\n\n\`\`\`json\n${JSON.stringify(stateSynthesisStrategiesOutput, null, 2)}\n\`\`\``,
         },
         {
-          path: `DOS_history/DOS_global_update_${paddedGu}_step_i.jsonl`,
-          content: stepIDosTrajectoryJsonl,
+          path: `State_Synthesis_history/State_Synthesis_global_update_${paddedGu}_for_strategies.jsonl`,
+          content: stateSynthesisStrategiesTrajectoryJsonl,
         },
       ];
 
@@ -1662,7 +1552,7 @@ export class DeepthinkPipelineOrchestrator {
               config.j,
               this.state.initialStrategies,
               consolidatedDecisions,
-              stepIDosOutput,
+              stateSynthesisStrategiesOutput,
               this.strategiesUsedSoFar,
               currentGuTurns,
               config.strategiesCount
@@ -1725,7 +1615,7 @@ export class DeepthinkPipelineOrchestrator {
                 config.j,
                 this.state.initialStrategies,
                 consolidatedDecisions,
-                stepIDosOutput,
+                stateSynthesisStrategiesOutput,
                 this.strategiesUsedSoFar,
                 currentGuTurns,
                 config.strategiesCount
@@ -1945,7 +1835,7 @@ export class DeepthinkPipelineOrchestrator {
       }
 
       const rolloutCommit = await this.gitHarness.commit(
-        `Global Update ${updateNumber}: Step-i DOS, strategy updates, and rollout`,
+        `Global Update ${updateNumber}: State-Synthesis-For-Strategies, strategy updates, and rollout`,
         `gu${updateNumber}_rollout`,
         rolloutFiles
       );
@@ -2039,7 +1929,7 @@ export class DeepthinkPipelineOrchestrator {
 
       const existingIterEntry = branch.iterationHistory?.iterations?.find(it => it.iterationNumber === iteration);
       if (!existingIterEntry || !existingIterEntry.correctedSolution) {
-        const executionPrompt = buildContextForCorrectionAgent(
+        const executionPrompt = buildContextForExecutionAgent(
           this.state.challenge,
           branch.id,
           branch.strategyText,
@@ -2050,7 +1940,7 @@ export class DeepthinkPipelineOrchestrator {
 
         let executionTrajectoryJsonl = '';
         const executionOutput = await this.callAgentModelWithRetry({
-          kind: 'solutionCorrection',
+          kind: 'executionAgent',
           promptText: executionPrompt,
           stepDescription: `First Execution for New Branch in ${slotId}`,
           workingDirectory: `Strategy-${slotIndex + 1}`,
@@ -2097,7 +1987,7 @@ export class DeepthinkPipelineOrchestrator {
 
         let critiqueTrajectoryJsonl = '';
         const critiqueOutput = await this.callAgentModelWithRetry({
-          kind: 'solutionCritique',
+          kind: 'critiqueAgent',
           promptText: critiquePrompt,
           stepDescription: `First Critique for New Branch in ${slotId}`,
           workingDirectory: `Strategy-${slotIndex + 1}`,
@@ -2141,18 +2031,18 @@ export class DeepthinkPipelineOrchestrator {
 
     await Promise.all([distillationPromise, newBranchesPromise]);
 
-    let stepIiDosOutput: DosOutput | undefined;
-    const stepIiFiles: DeepthinkResultsContextFile[] = [];
-    const stepIiDosFilePath = `DOS_history/DOS_global_update_${paddedGu}_step_ii.md`;
-
     if (config.modulesCount > 0) {
-      const existingStepIiDos = this.state.dosOutputs?.find(
-        d => d.callType === 'step_ii' && d.iteration === iteration
-      );
-      let stepIiDosTrajectoryJsonl = (existingStepIiDos as any)?.trajectoryJsonl || '';
+      const stateSynthesisModulesFilePath = `State_Synthesis_history/State_Synthesis_global_update_${paddedGu}_for_modules.md`;
+      const stateSynthesisModulesFiles: DeepthinkResultsContextFile[] = [];
 
-      if (existingStepIiDos) {
-        stepIiDosOutput = existingStepIiDos.output;
+      const existingModulesSynthesis = this.state.stateSynthesisOutputs?.find(
+        d => d.callType === 'modules' && d.iteration === iteration
+      );
+      let stateSynthesisModulesOutput: StateSynthesisOutput;
+      let stateSynthesisModulesTrajectoryJsonl = (existingModulesSynthesis as any)?.trajectoryJsonl || '';
+
+      if (existingModulesSynthesis) {
+        stateSynthesisModulesOutput = existingModulesSynthesis.output;
       } else {
         const postUpdateState = this.state.initialStrategies.map(s => ({
           branchId: s.id,
@@ -2161,7 +2051,7 @@ export class DeepthinkPipelineOrchestrator {
           latestCritique: s.solutionCritique || 'None',
         }));
 
-        const stepIiPrompt = buildContextForDos(this.state.challenge, 'step_ii', postUpdateState, {
+        const stateSynthesisModulesPrompt = buildContextForStateSynthesis(this.state.challenge, 'modules', postUpdateState, {
           previousHeartbeat: this.state.heartbeats[this.state.heartbeats.length - 1],
           slotStatuses: consolidatedDecisions.map(d => ({
             slotId: d.slotId,
@@ -2169,71 +2059,71 @@ export class DeepthinkPipelineOrchestrator {
             form: d.form,
             rollbackTo: d.rollbackTo,
           })),
-          stepIOutput: stepIDosOutput,
+          stateSynthesisStrategiesOutput,
         });
 
-        const stepIiDosContract: OutputValidationContract<DosOutput> = {
-          name: 'StepIiDosContract',
+        const stateSynthesisModulesContract: OutputValidationContract<StateSynthesisOutput> = {
+          name: 'StateSynthesisForModulesContract',
           validate: (parsed) => {
             if (!parsed || typeof parsed !== 'object') {
-              throw new Error('Step-ii DOS response must be an object.');
+              throw new Error('State-Synthesis-For-Modules response must be an object.');
             }
           },
         };
 
-        const rawStepIiDos = await this.callAgentModelWithRetry({
-          kind: 'dos',
-          promptText: stepIiPrompt,
-          stepDescription: `Step-ii DOS (Global Update ${updateNumber})`,
+        const rawModulesSynthesis = await this.callAgentModelWithRetry({
+          kind: 'stateSynthesis',
+          promptText: stateSynthesisModulesPrompt,
+          stepDescription: `State-Synthesis-For-Modules (Global Update ${updateNumber})`,
           jsonResponse: true,
           isCritical: true,
-          contract: stepIiDosContract,
-          executionGroupId: `group-global-update-${updateNumber}-step-ii`,
-          executionGroupName: `Global Update ${updateNumber}: Step-ii DOS Synthesis`,
+          contract: stateSynthesisModulesContract,
+          executionGroupId: `group-global-update-${updateNumber}-state-synthesis-modules`,
+          executionGroupName: `Global Update ${updateNumber}: State-Synthesis-For-Modules`,
           onTrajectoryJsonl: (jsonl) => {
-            stepIiDosTrajectoryJsonl = jsonl;
+            stateSynthesisModulesTrajectoryJsonl = jsonl;
           },
         });
 
-        stepIiDosOutput = this.parseJsonStrict<DosOutput>(rawStepIiDos, `Step-ii DOS (Global Update ${updateNumber})`);
-        this.state.dosOutputs.push({
-          callType: 'step_ii',
+        stateSynthesisModulesOutput = this.parseJsonStrict<StateSynthesisOutput>(rawModulesSynthesis, `State-Synthesis-For-Modules (Global Update ${updateNumber})`);
+        this.state.stateSynthesisOutputs.push({
+          callType: 'modules',
           iteration,
-          output: stepIiDosOutput,
-          trajectoryJsonl: stepIiDosTrajectoryJsonl,
+          output: stateSynthesisModulesOutput,
+          trajectoryJsonl: stateSynthesisModulesTrajectoryJsonl,
         } as any);
         this.callbacks.onStateChange?.(this.state);
       }
 
-      stepIiFiles.push(
+      stateSynthesisModulesFiles.push(
         {
-          path: stepIiDosFilePath,
-          content: `# Step-ii DOS Output (Global Update ${updateNumber})\n\n\`\`\`json\n${JSON.stringify(stepIiDosOutput, null, 2)}\n\`\`\``,
+          path: stateSynthesisModulesFilePath,
+          content: `# State-Synthesis-For-Modules Output (Global Update ${updateNumber})\n\n\`\`\`json\n${JSON.stringify(stateSynthesisModulesOutput, null, 2)}\n\`\`\``,
         },
         {
-          path: `DOS_history/DOS_global_update_${paddedGu}_step_ii.jsonl`,
-          content: stepIiDosTrajectoryJsonl,
+          path: `State_Synthesis_history/State_Synthesis_global_update_${paddedGu}_for_modules.jsonl`,
+          content: stateSynthesisModulesTrajectoryJsonl,
         }
       );
 
       const previousHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
-      if (stepIiDosOutput.module_feedback && previousHeartbeat) {
-        stepIiFiles.push(...this.collectRealizedDosFeedbackFiles(stepIiDosOutput.module_feedback, previousHeartbeat.heartbeat_no));
+      if (stateSynthesisModulesOutput.module_feedback && previousHeartbeat) {
+        stateSynthesisModulesFiles.push(...this.collectRealizedModuleFeedbackFiles(stateSynthesisModulesOutput.module_feedback, previousHeartbeat.heartbeat_no));
       }
-    }
 
-    await this.runCuratedContextHeartbeat(
-      iteration,
-      heartbeatNo,
-      stepIiDosOutput,
-      stepIiDosFilePath,
-      stepIiFiles,
-      `Global Update ${updateNumber}: Step-ii DOS & Curated Context Heartbeat ${heartbeatNo}`
-    );
+      await this.runCuratedContextHeartbeat(
+        iteration,
+        heartbeatNo,
+        stateSynthesisModulesOutput,
+        stateSynthesisModulesFilePath,
+        stateSynthesisModulesFiles,
+        `Global Update ${updateNumber}: State-Synthesis-For-Modules & Curated Context Heartbeat ${heartbeatNo}`
+      );
+    }
   }
 
-  private collectRealizedDosFeedbackFiles(
-    dosFeedback: DosModuleFeedbackItem[],
+  private collectRealizedModuleFeedbackFiles(
+    moduleFeedback: StateSynthesisModuleFeedbackItem[],
     targetHeartbeatNo: number
   ): DeepthinkResultsContextFile[] {
     const heartbeatBlock = this.state.heartbeats.find(h => h.heartbeat_no === targetHeartbeatNo);
@@ -2241,7 +2131,7 @@ export class DeepthinkPipelineOrchestrator {
 
     const filesToWrite: DeepthinkResultsContextFile[] = [];
 
-    for (const item of dosFeedback) {
+    for (const item of moduleFeedback) {
       const existing = heartbeatBlock.realized_feedback.find(rf => rf.module_id === item.module_id);
       const targetMod = heartbeatBlock.modules.find(m => m.id === item.module_id);
       const modIdx = heartbeatBlock.modules.findIndex(m => m.id === item.module_id);
@@ -2252,7 +2142,7 @@ export class DeepthinkPipelineOrchestrator {
       if (existing) {
         if (utilization) {
           existing.utilization = utilization;
-          existing.utilization_note = "Calculated programmatically from the DOS agent's observations.";
+          existing.utilization_note = "Calculated programmatically from the State Synthesis agent's observations.";
         }
         if (item.critique_counterevidence && item.critique_counterevidence.length > 0) {
           existing.critique_counterevidence = item.critique_counterevidence;
@@ -2268,7 +2158,7 @@ export class DeepthinkPipelineOrchestrator {
           module_id: item.module_id,
           observed_test_outcome: observedVerdict,
           utilization,
-          utilization_note: utilization ? "Calculated programmatically from the DOS agent's observations." : undefined,
+          utilization_note: utilization ? "Calculated programmatically from the State Synthesis agent's observations." : undefined,
           critique_counterevidence: item.critique_counterevidence,
         };
 

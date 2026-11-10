@@ -9,10 +9,8 @@ const HTTP_OPTIONS = {
     },
 };
 
-const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    httpOptions: HTTP_OPTIONS,
-});
+let defaultClient: GoogleGenAI | null = null;
+let defaultClientKey: string | undefined;
 
 function getClient(customApiKey?: string): GoogleGenAI {
     const trimmed = customApiKey?.trim();
@@ -22,10 +20,18 @@ function getClient(customApiKey?: string): GoogleGenAI {
             httpOptions: HTTP_OPTIONS,
         });
     }
-    if (!process.env.GEMINI_API_KEY) {
+    const serverKey = process.env.GEMINI_API_KEY?.trim();
+    if (!serverKey) {
         throw new Error('GEMINI_API_KEY is not configured on the server.');
     }
-    return ai;
+    if (!defaultClient || defaultClientKey !== serverKey) {
+        defaultClient = new GoogleGenAI({
+            apiKey: serverKey,
+            httpOptions: HTTP_OPTIONS,
+        });
+        defaultClientKey = serverKey;
+    }
+    return defaultClient;
 }
 
 function getEffectiveApiKey(customApiKey?: string): string {
