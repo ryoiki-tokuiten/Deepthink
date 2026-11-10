@@ -63,7 +63,6 @@ export function buildContextForStrategyGlobalUpdate(
   }>,
   stepIDosOutput: DosOutput,
   strategiesUsedSoFar: Array<{ slotId: string; iterationFinalized: number; text: string }>,
-  priorProximityHistoryText?: string,
   currentGuTurns?: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>,
   strategiesCount?: number
 ): string {
@@ -98,10 +97,6 @@ export function buildContextForStrategyGlobalUpdate(
     '',
     `Requested Number of Strategies: ${count}`,
   ];
-
-  if (priorProximityHistoryText && priorProximityHistoryText.trim()) {
-    parts.push('', fence('StrategyProximityHistory', priorProximityHistoryText));
-  }
 
   parts.push(
     '',
@@ -140,7 +135,6 @@ export function buildContextForModulesGenerate(
   activeStrategies: DeepthinkMainStrategyData[],
   dosOutput?: DosOutput,
   previousHeartbeat?: HeartbeatBlock,
-  priorImpactReviewHistoryText?: string,
   currentHbTurns?: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>,
   modulesCount?: number,
   modulesUsedSoFar?: Array<{ heartbeatNo: number; iterationFinalized: number; moduleId: string; text: string }>
@@ -154,10 +148,6 @@ export function buildContextForModulesGenerate(
     '',
     `Requested Number of Modules: ${count}`,
   ];
-
-  if (priorImpactReviewHistoryText && priorImpactReviewHistoryText.trim()) {
-    parts.push('', fence('ModulesImpactReviewHistory', priorImpactReviewHistoryText));
-  }
 
   parts.push(
     '',
@@ -369,7 +359,9 @@ export function buildCrossStrategyLatestCorrectionCritique(
 ): string | null {
   if (isolateBranches) return null;
 
-  const peers = allBranches.filter(b => b.id !== currentBranchId);
+  const peers = allBranches.filter(
+    b => b.id !== currentBranchId && Boolean((b.refinedSolution && b.refinedSolution.trim()) || (b.solutionAttempt && b.solutionAttempt.trim()))
+  );
   if (peers.length === 0) return null;
 
   return peers.map(p => {

@@ -1005,15 +1005,15 @@ async function updateSolutionModalContent(modalBody: HTMLElement, strategyId: st
     const strategy = pipeline && findSolutionModalStrategy(pipeline, strategyId);
     if (!strategy) return;
 
-    const laterIterations = (strategy.iterationHistory?.iterations || []).map((it: any, index: number) => ({
+    const recordedIterations = (strategy.iterationHistory?.iterations || []).map((it: any, index: number) => ({
         ...it,
-        iterationNumber: it.iterationNumber === 1 ? index + 2 : (it.iterationNumber || index + 2),
-        critique: it.critiqueDisplay || it.critique,
-        correctedSolution: it.correctedSolutionDisplay || it.correctedSolution,
+        iterationNumber: it.iterationNumber || index + 1,
+        critique: it.critiqueDisplay || it.critique || '',
+        correctedSolution: it.correctedSolutionDisplay || it.correctedSolution || '',
     }));
 
-    const iter1 = {
-        iterationNumber: laterIterations.length > 0 ? Math.max(1, laterIterations[0].iterationNumber - 1) : 1,
+    const fallbackIter1 = {
+        iterationNumber: 1,
         correctedSolution: strategy.solutionAttemptDisplay || strategy.solutionAttempt || '',
         correctedSolutionExecutionTraceText: strategy.solutionAttemptExecutionTraceText,
         critique: strategy.solutionCritiqueDisplay || strategy.solutionCritique || '',
@@ -1021,7 +1021,7 @@ async function updateSolutionModalContent(modalBody: HTMLElement, strategyId: st
         timestamp: Date.now() - 10000,
     };
 
-    const allIterations = [iter1, ...laterIterations].filter(it => it.correctedSolution || it.critique);
+    const allIterations = (recordedIterations.length > 0 ? recordedIterations : [fallbackIter1]).filter(it => it.correctedSolution || it.critique);
     const originalSolution = allIterations[0]?.correctedSolution || 'Processing...';
     const currentBestSolution = (allIterations.length > 0 ? allIterations[allIterations.length - 1]?.correctedSolution : null) || originalSolution;
     const isProcessing = ['processing', 'pending'].includes(strategy.status)

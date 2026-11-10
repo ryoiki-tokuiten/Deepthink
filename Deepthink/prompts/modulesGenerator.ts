@@ -21,22 +21,18 @@ One system prompt serves two alternating roles in the heartbeat refinement loop:
 Check the final \`Immediate Role:\` line on every turn to see which role is active. When sandbox tools are enabled, each role maintains its own continuous append-only trajectory across all rounds of the current heartbeat loop (with your counterpart's latest round output appended as the tool result of your previous \`final_output\` submission), so you can build directly on your earlier rounds' sandbox exploration without repeating it.
 
 How to interpret your prompt context across Heartbeats:
-1. \`<ModulesImpactReviewHistory>\` (on Heartbeat $h \\ge 2$):
-   - Compact reframed notes (\`{HB_Reframed_Note}\`) and \`[HB G↔R]\` transcripts from earlier heartbeats show how your thinking evolved. If you have sandbox tools and need to re-read an earlier DOS file or feedback record, the reframed notes give you the exact paths in \`DOS_history/\` and \`Modules/\`.
-
-2. Current Heartbeat Context (\`[HB-h Context]\`):
-   - On Heartbeat 1: You receive \`<HarnessNote>\`, \`<ActiveRunningStrategies>\` (\`main1\`..\`mainN\` and their latest corrections), \`<DosCoreSynthesis>\` (\`DOS_heartbeat_01\`), and \`<CurrentHeartbeatImpactReviewTurns>\` (the generator proposals and impact review critiques completed so far in this heartbeat).
-   - On Heartbeat $h \\ge 2$ (including Heartbeats that conclude a Global Update using \`step_ii\` DOS):
-     * \`<HarnessNote>\`: Explains how the prior heartbeat's modules were produced, executed, and routed, or summarizes the Global Update transitions that just occurred.
-     * \`<PreviousHeartbeatModulesAndTests>\`: What modules you commissioned in Heartbeat $h-1$ and what the dedicated Modules Testers actually produced and found.
-     * \`<MappedBranchPackets>\`: The current active strategies (including any newly evolved or replacement branches after a Global Update), their latest corrections, and which Heartbeat $h-1$ modules were routed to each branch.
-     * \`<RealizedModuleFeedback>\`: For each module from Heartbeat $h-1$, you receive:
-       - \`observed_test_outcome\` (the Modules Tester's verdict)
-       - \`utilization\` vector (\`correct_use\`, \`partial_use\`, \`not_used\`, \`misused\` across target branches)
-       - \`critique_counterevidence\` (if a branch's downstream work or critique exposed a flaw in a module or contradicted the Modules Tester's verdict)
-     * \`<ModulesFinalizedAndUsedSoFar>\`: The complete ledger of every module finalized and executed across all prior heartbeats.
-     * \`<DosCoreSynthesis>\`: The compressed state of all branches right now, including their exact progress, shared failure modes, verification/harness gaps, and high-leverage module targets. (Remember: you do not receive raw branch critiques in your prompt; DOS has distilled them for you here.)
-     * \`<CurrentHeartbeatImpactReviewTurns>\`: The generator proposals and impact review critiques completed so far in the current heartbeat loop.
+- On Heartbeat 1: You receive \`<HarnessNote>\`, \`<ActiveRunningStrategies>\` (\`main1\`..\`mainN\` and their latest corrections), \`<DosCoreSynthesis>\` (\`DOS_heartbeat_01\`), and \`<CurrentHeartbeatImpactReviewTurns>\` (the generator proposals and impact review critiques completed so far in this heartbeat).
+- On Heartbeat $h \\ge 2$ (including Heartbeats that conclude a Global Update using \`step_ii\` DOS):
+  * \`<HarnessNote>\`: Explains how the prior heartbeat's modules were produced, executed, and routed, or summarizes the Global Update transitions that just occurred.
+  * \`<PreviousHeartbeatModulesAndTests>\`: What modules you commissioned in Heartbeat $h-1$ and what the dedicated Modules Testers actually produced and found.
+  * \`<MappedBranchPackets>\`: The current active strategies (including any newly evolved or replacement branches after a Global Update), their latest corrections, and which Heartbeat $h-1$ modules were routed to each branch.
+  * \`<RealizedModuleFeedback>\`: For each module from Heartbeat $h-1$, you receive:
+    - \`observed_test_outcome\` (the Modules Tester's verdict)
+    - \`utilization\` vector (\`correct_use\`, \`partial_use\`, \`not_used\`, \`misused\` across target branches)
+    - \`critique_counterevidence\` (if a branch's downstream work or critique exposed a flaw in a module or contradicted the Modules Tester's verdict)
+  * \`<ModulesFinalizedAndUsedSoFar>\`: The complete ledger of every module finalized and executed across all prior heartbeats.
+  * \`<DosCoreSynthesis>\`: The compressed state of all branches right now, including their exact progress, shared failure modes, verification/harness gaps, and high-leverage module targets. (Remember: you do not receive raw branch critiques in your prompt; DOS has distilled them for you here.)
+  * \`<CurrentHeartbeatImpactReviewTurns>\`: The generator proposals and impact review critiques completed so far in the current heartbeat loop.
 </RoleInTheSystemAndContextInterpretation>
 
 <ModulesGenerationRole>

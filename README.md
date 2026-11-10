@@ -59,7 +59,7 @@ Each branch writes inside its own `Strategy-N/` directory, which holds `strategy
 
 Every agent can read across the entire repository, use the untracked `/workspace/tmp` scratch directory for shared verification scripts and test runners, and read or update `shared_workspace.md` through the `shared_workspace` tool. That file is capped at 5,000 tokens and supports `read`, `edit`, and `append` actions so concurrent agents can leave verified notes for each other without waiting for the next iteration. Agents run their experiments with `sandbox_exec` and submit their final artifact through `final_output`, keeping raw command logs and failed experiments out of downstream prompts.
 
-Agents never run `git commit` or `git checkout` themselves. The runner serializes all git commits between agent turns when nothing is writing, committing each `Strategy-N/` directory at the end of every iteration and at the start of every window. Restoring one rolled-back branch folder from an earlier commit never touches the other branches. The runner also writes a compressed state checkpoint to `latest.gz` after every step so you can stop and resume a run without losing finished work.
+Agents never run `git commit` or `git checkout` themselves. The runner serializes all git operations between agent turns when nothing is writing, consolidating commits into six exact pause/resume-safe checkpoints: initial workspace seed, seed strategies generation, per-branch iteration completion (`Strategy-N/` after each execution/correction + critique pair), standalone heartbeats (DOS + modules + tester outputs in one commit), Global Update Phase A rollout (Step-i DOS + updated strategies + branch rollbacks/pruning in one `window_start` commit), and Global Update Phase B/C (per-branch memory bank or replacement first-execution commits followed by a single Step-ii DOS + Heartbeat commit). Restoring one rolled-back branch folder from an earlier commit never touches the other branches. The runner also writes a compressed state checkpoint to `latest.gz` after every step so you can stop and resume a run without losing finished work.
 
 ![Git repository and file system layout](Deepthink/docs/diagrams/Git-File-System.png)
 
@@ -80,11 +80,9 @@ The app starts at `http://localhost:3000/Iterative-Contextual-Refinements/`. You
 
 ## Sandbox execution environment configuration
 
-When code execution is enabled, agents run bash commands inside an OS sandbox backed by Docker or bubblewrap, `bwrap`. By default, `ITERATIVE_STUDIO_SANDBOX_RUNTIME=auto` uses Docker when the Docker daemon is reachable and falls back to `bwrap`.
+When code execution is enabled, agents run bash commands inside an OS sandbox backed by bubblewrap (`bwrap` on Linux), Seatbelt (`sandbox-exec` on macOS), or Docker (`docker` across Linux, macOS, and Windows). By default, `ITERATIVE_STUDIO_SANDBOX_RUNTIME=auto` selects the native OS sandbox when available and falls back to Docker.
 
-In Docker mode, containers run with a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, and writable mounts only for the agent's assigned folder and `/tmp`. In bubblewrap mode, the backend creates isolated user, PID, IPC, and UTS namespaces, mounts system paths read-only, and restricts writes to the agent's folder and `/tmp`. If the host has a Rust toolchain, the backend mounts only the rustc sysroot read-only at `/sandbox-rust` so agents can run `rustc` and `cargo` without seeing your home directory.
-
-A fresh clone does not silently download gigabytes of packages on startup. You can prewarm a shared read-only environment at `~/.cache/iterative-studio/sandbox-env`, mounted at `/sandbox-env` inside the sandbox, or adjust runtime limits and agent budgets at any time using environment variables when starting the server.
+Across all runtimes, `/workspace` is mounted read-only by default with `.git/` masked, and writable mounts are granted only for the agent's assigned folder (`Strategy-N/` or `Module-M/`) and `/tmp`. Host Python, Node.js, Rust (`~/.cargo`, `~/.rustup`), Lean 4 (`~/.elan`), `~/.local`, and package caches (`~/.cache/pip`, `~/.cache/uv`, `~/.npm`) are exposed read-only while private home directories (`~/.ssh`, cloud keys, `.env`) remain hidden or locked. Any extra packages an agent installs via `pip install <pkg>` or `npm install -g <pkg>` unpack into `/tmp/.shared-python-pkgs` and `/tmp/.shared-node-pkgs`, shared across all agents in the run.
 
 Configure the maximum tool calls per agent invocation, the wall-clock timeout per agent invocation, and the default and maximum timeout for each `sandbox_exec` command:
 
@@ -96,40 +94,7 @@ ITERATIVE_STUDIO_SANDBOX_MAX_COMMAND_TIMEOUT_MS=300000 \
 npm run dev
 ```
 
-Start with the full shared prewarm bundle, which installs the default scientific Python packages, Node utility packages, Lean 4 via `elan`, and a cached Mathlib Lake project:
-
-```bash
-ITERATIVE_STUDIO_SANDBOX_PREWARM=1 npm run dev
-```
-
-Prewarm Python and Node packages only, skipping the multi-gigabyte Lean 4 and Mathlib download:
-
-```bash
-ITERATIVE_STUDIO_SANDBOX_PREWARM=1 ITERATIVE_STUDIO_SANDBOX_LEAN=0 npm run dev
-```
-
-Enable Lean 4 and Mathlib prewarm on its own, and optionally pin a specific Lean toolchain or Mathlib revision:
-
-```bash
-ITERATIVE_STUDIO_SANDBOX_LEAN=1 \
-ITERATIVE_STUDIO_SANDBOX_LEAN_TOOLCHAIN="leanprover/lean4:stable" \
-ITERATIVE_STUDIO_SANDBOX_MATHLIB_REV="v4.31.0" \
-npm run dev
-```
-
-When Lean and Mathlib are enabled, agents can run `lean-check` to verify the toolchain and `lean-init-mathlib ProjectName` to scaffold a workspace Lake project linked against the cached Mathlib build.
-
-Override which Python or Node packages get preinstalled into `/sandbox-env`, or change where the shared cache lives on disk:
-
-```bash
-ITERATIVE_STUDIO_SANDBOX_PREWARM=1 \
-ITERATIVE_STUDIO_SANDBOX_ENV_ROOT="$HOME/.cache/iterative-studio/sandbox-env" \
-ITERATIVE_STUDIO_SANDBOX_PYTHON_PACKAGES="numpy scipy pandas matplotlib sympy networkx pytest hypothesis" \
-ITERATIVE_STUDIO_SANDBOX_NODE_PACKAGES="lodash zod mathjs csv-parse fast-check" \
-npm run dev
-```
-
-Force a specific sandbox runtime, disable network access inside the sandbox, or raise the Docker container CPU, memory, and process limits:
+Force a specific sandbox runtime (`bwrap`, `seatbelt`, or `docker`), disable network access inside the sandbox, or customize Docker container resource limits:
 
 ```bash
 ITERATIVE_STUDIO_SANDBOX_RUNTIME=docker \

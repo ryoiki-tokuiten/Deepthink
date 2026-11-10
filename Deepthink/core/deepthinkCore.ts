@@ -374,7 +374,6 @@ export async function startDeepthinkAnalysisProcess(challengeText: string, direc
     if (directContextFiles.length > 0) {
         try {
             const rt = await import('../../Core/SandboxToolRuntime');
-            await rt?.ensureDeepthinkResultsRepository?.(pipeline.id);
             if (rt?.snapshotDeepthinkResultsRepository) {
                 const seedContextFiles: any[] = directContextFiles.map(file => {
                     const relativePath = `user_uploaded/${file.name || 'unnamed_file'}`;
@@ -387,7 +386,7 @@ export async function startDeepthinkAnalysisProcess(challengeText: string, direc
                         return { path: relativePath, content: file.base64 };
                     }
                 });
-                await rt.snapshotDeepthinkResultsRepository(pipeline.id, 'Seed direct context files', seedContextFiles);
+                await rt.snapshotDeepthinkResultsRepository(pipeline.id, 'Initial workspace seed', seedContextFiles);
             }
         } catch (err) {
             console.warn('Notice: could not seed direct context files into repository:', err);

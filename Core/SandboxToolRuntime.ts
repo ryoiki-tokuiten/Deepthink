@@ -141,7 +141,6 @@ interface SandboxToolResponse {
     error?: string | null;
     durationMs: number;
     timedOut?: boolean;
-    readOnlyCommand?: boolean;
     images?: SandboxToolImage[];
     visibleFiles?: SandboxToolImage[];
 }
@@ -196,15 +195,6 @@ async function postSandboxJson<T = any>(endpoint: string, body: unknown, fallbac
     return payload as T;
 }
 
-export async function snapshotSandboxRepositoryById(repositoryId: string, commitMessage: string): Promise<string> {
-    const payload = await postSandboxJson<{ commit?: string }>('/snapshot', { repositoryId, commitMessage }, 'Sandbox snapshot failed');
-    if (typeof payload?.commit !== 'string' || !payload.commit) {
-        throw new Error('Sandbox snapshot did not return a repository revision.');
-    }
-    dispatchSnapshotEvent(repositoryId, payload.commit);
-    return payload.commit;
-}
-
 export async function restoreSandboxRepositoryStrategy(repositoryId: string, strategyDirectory: string, commit: string): Promise<void> {
     await postSandboxJson('/repository/restore-strategy', { repositoryId, strategyDirectory, commit }, 'Sandbox strategy restore failed');
     dispatchSnapshotEvent(repositoryId);
@@ -213,10 +203,16 @@ export async function restoreSandboxRepositoryStrategy(repositoryId: string, str
 export async function snapshotDeepthinkResultsRepository(
     repositoryId: string,
     commitMessage: string,
-    contextFiles: DeepthinkResultsContextFile[]
-): Promise<void> {
-    await postSandboxJson('/repository/results-snapshot', { repositoryId, commitMessage, contextFiles }, 'Deepthink Results snapshot failed');
-    dispatchSnapshotEvent(repositoryId);
+    contextFiles: DeepthinkResultsContextFile[] = []
+): Promise<string> {
+    const payload = await postSandboxJson<{ commit?: string }>(
+        '/repository/results-snapshot',
+        { repositoryId, commitMessage, contextFiles },
+        'Deepthink Results snapshot failed'
+    );
+    const commit = typeof payload?.commit === 'string' ? payload.commit : '';
+    dispatchSnapshotEvent(repositoryId, commit || undefined);
+    return commit;
 }
 
 export async function ensureDeepthinkResultsRepository(repositoryId: string): Promise<{ resultPath?: string }> {
@@ -534,16 +530,16 @@ function buildEnvironmentProfileText(environmentProfile: SandboxEnvironmentProfi
     return lines.join('\n');
 }
 
-function buildRepositoryFilesystemRules(access: SandboxRepositoryAccess): string[] {
-    const writableDirectory = access.agentDirectoryReadOnly ? undefined : access.agentDirectory;
+function buildRepositoryFilesystemRules(access?: SandboxRepositoryAccess): string[] {
+    const writableDirectory = access?.agentDirectoryReadOnly ? undefined : access?.agentDirectory;
 
     return [
         writableDirectory
-            ? `- This run uses a shared repository mounted at /workspace. Your writable working directory is /workspace/${writableDirectory}, and you also have full read/write access to the shared workspace-root /workspace/tmp (also mounted at /tmp).`
-            : `- This run uses a shared repository mounted read-only at /workspace${access.agentDirectory ? ` (starting in /workspace/${access.agentDirectory})` : ''}, with full read/write access to the shared workspace-root /workspace/tmp (also mounted at /tmp).`,
+            ? `- This run uses a shared repository mounted at /workspace (also exported as $WORKSPACE). Your writable working directory is /workspace/${writableDirectory}, and you also have full read/write access to the shared workspace-root /workspace/tmp (also mounted at /tmp and exported as $TMPDIR).`
+            : `- This run uses a shared repository mounted read-only at /workspace (also exported as $WORKSPACE)${access?.agentDirectory ? ` (starting in /workspace/${access.agentDirectory})` : ''}, with full read/write access to the shared workspace-root /workspace/tmp (also mounted at /tmp and exported as $TMPDIR).`,
         writableDirectory
-            ? '- Every sandbox command starts inside your writable directory.'
-            : `- Every sandbox command starts in the read-only ${access.agentDirectory ? `/workspace/${access.agentDirectory} directory` : 'repository root'}. Use /workspace/tmp (or /tmp) for temporary scripts, shared verification harnesses, caches, or experimental files.`,
+            ? '- Every sandbox command starts inside your writable directory. Prefer relative paths (`./`) or `$WORKSPACE` / `$TMPDIR` inside scripts.'
+            : `- Every sandbox command starts in the read-only ${access?.agentDirectory ? `/workspace/${access.agentDirectory} directory` : 'repository root'}. Use /workspace/tmp (or /tmp / $TMPDIR) for temporary scripts, shared verification harnesses, caches, or experimental files.`,
         '- /workspace itself is read-only except for your assigned writable directory (if any) and the shared /workspace/tmp (/tmp) directory.',
         writableDirectory
             ? `- L2 Mutable Workspace: You may create, modify, and delete working files under /workspace/${writableDirectory} (excluding its L3 read-only /workspace/${writableDirectory}/history/ directory and /workspace/${writableDirectory}/strategy.md) and in the shared untracked /workspace/tmp (/tmp) directory.`
@@ -570,20 +566,12 @@ function buildSystemPrompt(
     const filesystemFileText = filesystemFiles.length > 0
         ? filesystemFiles.map(file => `- /workspace/${file.relativePath || file.name} (${file.mimeType})`).join('\n')
         : 'No additional filesystem files were uploaded.';
-    const filesystemRules = options.repositoryAccess
-        ? buildRepositoryFilesystemRules(options.repositoryAccess)
-        : [
-            '- These agent workspaces do not share generated files with each other. A file created by another agent is not available in your current working directory unless it is also an original uploaded file listed below.',
-            '- You may load files from your own previous tool calls by filename when they appeared in your own visible_image_files or generated image outputs.',
-            '- Do not try to open filenames merely because they appeared in another agent output, UI transcript, markdown image link, or critique text. If you need a similar artifact, reproduce it in your own session by rerunning equivalent code from the original uploaded image/data, then save your own copy with a clear filename.',
-        ];
-    const commandStartRule = options.repositoryAccess
-        ? options.repositoryAccess.agentDirectory
-            ? options.repositoryAccess.agentDirectoryReadOnly
-                ? `Each sandbox command starts in the read-only /workspace/${options.repositoryAccess.agentDirectory} directory. Use /workspace to read visible root and peer directories, and /tmp for scratch work.`
-                : `Each sandbox command starts in /workspace/${options.repositoryAccess.agentDirectory}. Use /workspace to read visible root and peer directories.`
-            : 'Each sandbox command starts in the read-only /workspace repository root. Use /tmp for private scratch work.'
-        : 'Each sandbox command starts in /workspace.';
+    const filesystemRules = buildRepositoryFilesystemRules(options.repositoryAccess);
+    const commandStartRule = options.repositoryAccess?.agentDirectory
+        ? options.repositoryAccess.agentDirectoryReadOnly
+            ? `Each sandbox command starts in the read-only /workspace/${options.repositoryAccess.agentDirectory} directory. Use relative paths or $WORKSPACE to read visible root and peer directories, and /tmp ($TMPDIR) for scratch work.`
+            : `Each sandbox command starts in /workspace/${options.repositoryAccess.agentDirectory}. Use relative paths or $WORKSPACE to read visible root and peer directories.`
+        : 'Each sandbox command starts in the read-only /workspace repository root. Use /tmp ($TMPDIR) for scratch work.';
 
     return [
         systemPrompt,
@@ -592,7 +580,7 @@ function buildSystemPrompt(
         options.sharedWorkspaceHandler
             ? `You have three tools: ${SANDBOX_TOOL_NAME} for private terminal work, ${SHARED_WORKSPACE_TOOL_NAME} for real-time collaboration with peer agents via shared_workspace.md, and ${FINAL_OUTPUT_TOOL_NAME} for the submitted answer.`
             : `You have two tools: ${SANDBOX_TOOL_NAME} for private terminal work and ${FINAL_OUTPUT_TOOL_NAME} for the submitted answer.`,
-        `${SANDBOX_TOOL_NAME} runs non-interactive bash commands inside your sandboxed Linux workspace.`,
+        `${SANDBOX_TOOL_NAME} runs non-interactive bash commands inside your sandboxed workspace.`,
         'Treat this as a real terminal in a real but sandboxed project directory. You can create directories and files, write scripts or source code, run programs, inspect outputs, read files with cat/sed, search with grep/find, edit or delete workspace files, install dependencies into the workspace when possible, and generate data, plots, images, or other artifacts.',
         `Running sequential or parallel commands with ${SANDBOX_TOOL_NAME}:`,
         `- Sequential commands in a single ${SANDBOX_TOOL_NAME}() call: chain dependent commands with \`&&\` (stops on first non-zero exit, e.g. \`mkdir -p build && g++ -O2 solve.cpp -o build/solve && ./build/solve\`) or chain independent commands with \`;\` or newlines (runs one after another regardless of previous exit codes, e.g. \`python3 check_a.py; python3 check_b.py\`).`,
@@ -623,7 +611,7 @@ function buildSystemPrompt(
         '',
         'Verification discipline:',
         '- A claim is externally verified only when the relevant command was actually executed in the sandbox and returned a successful exit code. Otherwise call it a sketch, estimate, conjecture, or unverified attempt.',
-        '- For formal proofs, create the proof file and run the proof checker. If Lean/Lake is available, use lean, lake env lean, lean-check, or a Lake project command as appropriate. Do not call a Lean proof verified unless the checker exits successfully.',
+        '- For formal proofs, create the proof file and run the proof checker (e.g. `lean` or `lake` if available). Do not call a formal proof verified unless the checker exits successfully.',
         '- For compiled or interpreted programs, save the source file, run the compiler/interpreter/tests, inspect stdout/stderr and exit_code, and iterate when errors appear. Do not treat a version check or package availability check as execution of the requested program.',
         '- For generated files and images, verify by listing or opening the saved file when useful, and report the filename produced by the real command.',
         '- If verification fails because a package, theorem, import, runtime, network call, or command is unavailable, say that directly and continue with the strongest honestly supported result.',

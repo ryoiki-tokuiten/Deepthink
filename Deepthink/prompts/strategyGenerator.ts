@@ -23,7 +23,7 @@ How to read and interpret your context in each phase:
      * For engineering, visual, or complex production tasks: strategies should differ in their architecture, staging, trade-off priorities, and how they construct and use verification harnesses to validate the artifact.
 
 2. During a Global Update (after a window of \`j\` iterations):
-   - You receive \`<StrategyProximityHistory>\` (containing the full \`[Seed G↔P]\` transcript plus compact reframed notes and transcripts from earlier Global Updates, which point to historical files in \`DOS_history/\` and \`Strategy-N/history/\` if you have sandbox access and need deeper inspection), \`<HarnessNote>\` (summarizing the slot decisions for this Global Update), and the active Global Update context blocks:
+   - You receive \`<HarnessNote>\` (summarizing the slot decisions for this Global Update) and the active Global Update context blocks:
      * \`<CurrentActiveStrategies>\`: The strategy text and latest correction for every branch \`main1\`..\`mainN\`. Read this to see what each strategy actually produced in practice, not just what its strategy text promised.
      * \`<ConsolidatedBsrDecisions>\`: The deterministic harness decision for every slot (\`CONTINUE\`, \`EVOLVE (in_place)\`, \`EVOLVE (rollback to iteration N / window start)\`, or \`PRUNE\`) paired with the confirmed progress and regression event reasons from the window.
      * \`<DosSynthesisForStrategies>\`: The compressed cross-branch synthesis from Step-i DOS showing shared failure modes, structural bottlenecks, and what is working across the system.

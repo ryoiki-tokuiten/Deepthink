@@ -28,15 +28,11 @@ interface BranchHistoryState {
 type RoleMeta = { icon: string; title: string; cardClass: string; modalTitle?: string };
 
 const ROLE_META: Record<BranchHistoryMessage['role'], RoleMeta> = {
-    solution_attempt: { icon: 'auto_fix_high', title: 'Correction', cardClass: 'solution-attempt-card' },
+    solution_attempt: { icon: 'auto_fix_high', title: 'Execution Agent', cardClass: 'solution-attempt-card' },
     solution_critique: { icon: 'Troubleshoot', title: 'Solution Critique', cardClass: 'solution-critique-card', modalTitle: 'Solution Critique Details' },
 };
 
-const getRoleInfo = (role: BranchHistoryMessage['role'], iterationNumber?: number): RoleMeta => {
-    if (role === 'solution_attempt') {
-        const isInitial = iterationNumber === 1;
-        return { ...ROLE_META.solution_attempt, icon: isInitial ? 'work' : 'auto_fix_high', title: isInitial ? 'Execution' : 'Correction' };
-    }
+const getRoleInfo = (role: BranchHistoryMessage['role'], _iterationNumber?: number): RoleMeta => {
     return ROLE_META[role];
 };
 
@@ -281,7 +277,7 @@ export async function renderBranchHistoryUI(
         if (iter.correctedSolution) {
             branchState.contentHistory.push({
                 content: iter.correctedSolution,
-                title: isFirst ? 'Attempt 1' : `Refinement ${index}`,
+                title: `Execution ${iter.iterationNumber}`,
                 timestamp: iter.timestamp - (isFirst ? 1000 : 0)
             });
 

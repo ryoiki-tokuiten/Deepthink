@@ -566,10 +566,6 @@
           [1, 'Count Target', '', 't'],
           [4, 'Count Target', '', 't']
         ]],
-        ['<Proximity / ImpactReviewHistory>', 'prior seed/update/HB turns + reframed notes', [
-          [1, 'Reframed History', '', 't'],
-          [4, 'Reframed History', '', 't']
-        ]],
         ['<ActiveBranchesState> (Corr + Crit)', 'all active strategies + Latest Corr & Crit', [
           [2, 'All Branches', 'corr + critique', 't'],
           [3, 'All Branches', 'corr + critique', 't']
@@ -819,9 +815,9 @@
         ['Results/deepthink_<ts>/', 'the single git repository', '/workspace', 'read-only by default, including .git/', 'ro'],
         ['Results/…/<agentDirectory>/', 'only for roles that own a folder', '/workspace/<agentDirectory>', 'bound read/write over its read-only parent', 'rw'],
         ['Results/…/tmp/', 'untracked, shared by every agent', '/workspace/tmp  and  /tmp', 'one host folder, two mount points, TMPDIR=/tmp', 'rw'],
-        ['~/.cache/iterative-studio/sandbox-env', 'shared host cache, outside the run', '/sandbox-env', 'Python, Node, Lean + Mathlib, rtk', 'ro'],
-        ['host Rust sysroot', 'only when rustc is installed', '/sandbox-rust', 'rustc, cargo', 'ro'],
-        ['host system directories', 'usr, bin, lib, lib64, etc, opt', '/usr /bin /lib /lib64 /etc /opt', 'the root / itself is a read-only tmpfs', 'ro']
+        ['~/.local, ~/.cargo, ~/.rustup, ~/.elan', 'host user toolchains (read-only)', '/host-user-local · /host-cargo · /host-elan', 'Python user pkgs, Rust, Lean + Mathlib, rtk', 'ro'],
+        ['~/.cache/pip, ~/.cache/uv, ~/.npm', 'host package caches (read-only)', '/var/cache/pip · /var/cache/uv · /var/cache/npm', 'unpacked to /tmp/.shared-{python,node}-pkgs', 'ro'],
+        ['host system directories', 'usr, bin, lib, lib64, etc, opt', '/usr /bin /lib /lib64 /etc /opt', 'private home folders (~/.ssh, keys) stay hidden', 'ro']
       ];
       rows.forEach(([hp, hs, cp, cs, m], i) => {
         const y = 56 + 46 * i, rw = m == 'rw';
@@ -842,7 +838,7 @@
             ['user_uploaded/', 'seeded once, before the seed strategies', 1],
             ['Strategy-N/iterations/, history/', 'end of each iteration and global update', 1],
             ['history/memory_bank_UU.md', 'global update, step 5', 1],
-            ['DOS_history/, strategies_history/', 'right after each DOS or strategy call', 1],
+            ['DOS_history/, strategies_history/', 'bundled with heartbeat or global update commit', 1],
             ['Pruned_Strategies/', 'folder moved here when a slot is pruned', 1],
             ['Module-M/module.md, feedback', 'heartbeat end; feedback one heartbeat later', 1]]
         },
@@ -850,7 +846,7 @@
           x: 300, w: 170, rh: 51, t: 'Agent work, tracked', f: '#E1F5EE', st: G, tc: '#04342C', items: [
             ['Strategy-N/', "written by branch N's roles", 1],
             ['Module-M/', 'written by tester M', 1],
-            ['Committed', 'per iteration and heartbeat', 0],
+            ['Committed', '6 exact pipeline checkpoints', 0],
             ['Rollback', 'EVOLVE restores Strategy-N/', 0]]
         },
         {
@@ -880,23 +876,22 @@
       s += P(`M110 ${top + 64}V${top + 90}`) + P(`M250 ${top + 64}V${top + 90}`) + T(118, top + 77, 'yes', 'start', 'ts', 'font-size:9.5px') + T(258, top + 77, 'no', 'start', 'ts', 'font-size:9.5px');
       s += box(42, top + 92, 134, 56, '#E1F5EE', G, 1, 3) + mono(50, top + 105, 'HOME=<dir>/.tmp', 9, 700, '#04342C') + sub(50, top + 121, 'attempt, critique,', 9.3) + sub(50, top + 134, 'correction, tester', 9.3);
       s += box(186, top + 92, 132, 56, '#FAEEDA', OR, 1, 3) + mono(194, top + 105, 'HOME=/tmp', 9, 700, '#412402') + sub(194, top + 121, 'root roles, BSR,', 9.3) + sub(194, top + 134, 'memory bank', 9.3);
-      s += T(42, top + 166, 'Caches inside $HOME', 'start', 'ts', 'font-size:10px;font-weight:600');
+      s += T(42, top + 166, 'Caches & shared package dirs', 'start', 'ts', 'font-size:10px;font-weight:600');
       ['XDG_CACHE_HOME', 'MPLCONFIGDIR', 'PYTHONUSERBASE', 'PIP_CACHE_DIR', 'CARGO_HOME', 'CARGO_TARGET_DIR'].forEach((n, i) => {
         s += badge(42 + 142 * (i % 2), top + 176 + 21 * Math.floor(i / 2), 134, 17, n, '#EEEDFE', V, '#26215C', 8.6);
       });
-      s += ln(42, top + 244, 318, top + 244, '#cfcdc4', 1, '2 3') + mono(42, top + 258, 'NODE_PATH=/sandbox-env/node/node_modules', 8.2, 500, '#3d3d3a');
-      // the ELAN_HOME line sits just below
-      s += mono(42, top + 271, 'ELAN_HOME=/sandbox-env/lean/elan', 8.2, 500, '#3d3d3a');
+      s += ln(42, top + 244, 318, top + 244, '#cfcdc4', 1, '2 3') + mono(42, top + 258, 'PYTHONPATH=/tmp/.shared-python-pkgs', 8.2, 500, '#3d3d3a');
+      s += mono(42, top + 271, 'NODE_PATH=/tmp/.shared-node-pkgs/lib/node_modules', 8.2, 500, '#3d3d3a');
       // right card: PATH ladder
       s += box(346, top, 304, 286, '#F8F7F2', '#b5b3aa', .9, 4) + T(358, top + 16, 'PATH, first match wins', 'start', 'th', 'font-size:11px');
       const rungs = [
-        ['$HOME/.python_user_base/bin', 'pip --user', 'h'],
-        ['$HOME/.cargo/bin', '', 'h'],
-        ['/sandbox-env/bin', 'rtk, lean helpers', 'v'],
-        ['/sandbox-env/python/bin', 'python, pip, pytest', 'v'],
-        ['/sandbox-env/node/node_modules/.bin', '', 'v'],
-        ['/sandbox-env/lean/elan/bin', 'lean, lake', 'v'],
-        ['/sandbox-rust/bin', 'rustc, cargo', 'v'],
+        ['/tmp/.shared-python-pkgs/bin', 'pip install', 'h'],
+        ['/tmp/.shared-node-pkgs/bin', 'npm install -g', 'h'],
+        ['$HOME/.cargo/bin', 'cargo install', 'h'],
+        ['/host-rtk-bin', 'rtk wrapper', 'v'],
+        ['/host-user-local/bin', '~/.local/bin', 'v'],
+        ['/host-cargo/bin', 'rustc, cargo', 'v'],
+        ['/host-elan/bin', 'lean, lake', 'v'],
         ['/usr/local/bin … /bin', 'system', 's']
       ];
       const rp = { h: ['#FAEEDA', OR], v: ['#EEEDFE', V], s: ['#F1EFE8', N] };
@@ -1157,7 +1152,7 @@
       s += `<rect x="30" y="${ly}" width="22" height="14" rx="2" fill="#E1F5EE" stroke="${G}" stroke-width="1.4"/>` +
         T(58, ly + 7, 'Created at this heartbeat (mapped to branches for upcoming corrections)', 'start', 'ts', sm) +
         `<rect x="30" y="${ly + 20}" width="7" height="14" fill="#9FE1CB" stroke="${G}" stroke-width=".8"/><rect x="37" y="${ly + 20}" width="15" height="14" fill="#EEEDFE" stroke="${V}" stroke-width="1.2"/>` +
-        T(58, ly + 27, 'Audited by this heartbeat’s DOS and passed in <ModulesImpactReviewHistory> to this heartbeat’s Generator', 'start', 'ts', sm) +
+        T(58, ly + 27, 'Audited by this heartbeat’s DOS and passed in <RealizedModuleFeedback> to this heartbeat’s Generator', 'start', 'ts', sm) +
         `<rect x="30" y="${ly + 40}" width="22" height="14" rx="2" fill="#F1EFE8" stroke="#8a8880" stroke-width=".8"/>` +
         T(58, ly + 47, 'Archived in Modules/Heartbeat-M/ on disk', 'start', 'ts', sm);
 
@@ -1374,8 +1369,8 @@
 
       // legend
       const ly = uy + 68;
-      s += dot(36, ly, 'c') + T(50, ly, 'per-folder commit (.md + .jsonl)', 'start', 'ts', sm) + dot(350, ly, 'm') + T(364, ly, 'memory-bank distillation + window_start commit', 'start', 'ts', sm);
-      s += dot(36, ly + 24, 'h') + T(50, ly + 24, 'shared directories, never erased', 'start', 'ts', sm) + dot(350, ly + 24, 'r') + T(364, ly + 24, 'restore commit (EVOLVE with rollback)', 'start', 'ts', sm);
+      s += dot(36, ly, 'c') + T(50, ly, 'per-folder commit (.md + .jsonl)', 'start', 'ts', sm) + dot(350, ly, 'm') + T(364, ly, 'memory-bank distillation commit', 'start', 'ts', sm);
+      s += dot(36, ly + 24, 'h') + T(50, ly + 24, 'bundled HB / GU rollout commit (window_start)', 'start', 'ts', sm) + dot(350, ly + 24, 'r') + T(364, ly + 24, 'restore from commit (EVOLVE rollback)', 'start', 'ts', sm);
       s += dot(36, ly + 48, 'v') + T(50, ly + 48, 'new folder in a freed slot', 'start', 'ts', sm) + dot(350, ly + 48, 'a') + T(364, ly + 48, 'archived by PRUNE (ordinal suffix _01)', 'start', 'ts', sm);
       return [ly + 70, 'Repository history and persistence', s, ''];
     })();

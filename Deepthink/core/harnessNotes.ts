@@ -10,47 +10,6 @@ export function buildStrategyGlobalUpdateNote(j: number): string {
   ].join(' ');
 }
 
-export function buildStrategyReframedHistoricalNote(
-  updateNumber: number,
-  j: number,
-  dosFilePath?: string
-): string {
-  const dosLocation = dosFilePath || `DOS_history/DOS_global_update_${String(updateNumber).padStart(2, '0')}_step_i.md`;
-  return [
-    `Yes, these strategies were actually finalized and were executed, critiqued, and corrected for ${j} iterations.`,
-    `You received the DOS output for previous global update ${updateNumber} too, which you can find inside ${dosLocation}.`,
-    `You can view the past corrections by going to their corresponding Strategy-N/history/ directories.`,
-    `After this, you went back and forth with your proximity friend:`
-  ].join(' ');
-}
-
-export function buildStrategyProximityHistoryWithNotes(
-  seedHistory: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>,
-  globalUpdateHistories: Array<{
-    updateNumber: number;
-    turns: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>;
-  }>,
-  j: number
-): string {
-  const sections: string[] = [];
-
-  sections.push('# Seed Strategy Generation History');
-  for (const turn of seedHistory) {
-    sections.push(`### Strategy ${turn.role === 'generator' ? 'Generator' : 'Proximity Reviewer'} (Turn ${turn.turnNumber ?? 1})\n${turn.content}`);
-  }
-
-  for (const gu of globalUpdateHistories) {
-    sections.push('');
-    sections.push(`---\n${buildStrategyReframedHistoricalNote(gu.updateNumber, j)}\n---`);
-    sections.push(`\n# Global Update ${gu.updateNumber} Strategy Revision History`);
-    for (const turn of gu.turns) {
-      sections.push(`### Strategy ${turn.role === 'generator' ? 'Generator' : 'Proximity Reviewer'} (Turn ${turn.turnNumber ?? 1})\n${turn.content}`);
-    }
-  }
-
-  return sections.join('\n\n');
-}
-
 export function buildModuleHeartbeatNote(heartbeatNo: number): string {
   if (heartbeatNo <= 1) {
     return [
@@ -68,47 +27,6 @@ export function buildModuleHeartbeatNote(heartbeatNo: number): string {
     `the ledger of modules finalized and used so far across prior heartbeats,`,
     `and the new DOS synthesis. Now generate the new modules object.`
   ].join(' ');
-}
-
-export function buildModuleReframedHistoricalNote(
-  heartbeatNo: number,
-  dosFilePath?: string
-): string {
-  const dosLocation = dosFilePath || `DOS_history/DOS_heartbeat_${String(heartbeatNo).padStart(2, '0')}.md`;
-  if (heartbeatNo <= 1) {
-    return [
-      `In Heartbeat 1, you received the initial DOS synthesis (${dosLocation}), the active strategies, and their latest corrections,`,
-      `and went back and forth with your impact reviewer friend:`
-    ].join(' ');
-  }
-  const prevHb = heartbeatNo - 1;
-  return [
-    `Yes, the modules from Heartbeat ${prevHb} were finalized, tested independently, and mapped to branches.`,
-    `For Heartbeat ${heartbeatNo}, you received the DOS synthesis inside ${dosLocation}, the latest corrections from the corresponding strategy directories,`,
-    `and the prior test outputs and realized feedback records inside Modules/Heartbeat-${prevHb}/.`,
-    `After this, you went back and forth with your impact reviewer friend:`
-  ].join(' ');
-}
-
-export function buildModulesImpactReviewHistoryWithNotes(
-  priorHeartbeats: Array<{
-    heartbeatNo: number;
-    dosFilePath?: string;
-    turns: Array<{ role: 'generator' | 'proximity'; content: string; turnNumber?: number }>;
-  }>
-): string {
-  const sections: string[] = [];
-
-  for (const hb of priorHeartbeats) {
-    if (!hb.turns || hb.turns.length === 0) continue;
-    sections.push(`---\n${buildModuleReframedHistoricalNote(hb.heartbeatNo, hb.dosFilePath)}\n---`);
-    sections.push(`# Heartbeat ${hb.heartbeatNo} Modules Generator History`);
-    for (const turn of hb.turns) {
-      sections.push(`### Modules ${turn.role === 'generator' ? 'Generator' : 'Impact Reviewer'} (Turn ${turn.turnNumber ?? 1})\n${turn.content}`);
-    }
-  }
-
-  return sections.join('\n\n');
 }
 
 export const DOS_HEARTBEAT_NOTE = [

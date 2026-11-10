@@ -1,113 +1,38 @@
 # Sandbox Tool Environment
 
-Iterative Studio runs agent terminal commands through a real OS sandbox. Agents
-receive `sandbox_exec` for private terminal work and `final_output` for the
-submitted answer that enters the multi-agent system. Python is available as a
-normal command inside the sandbox. When the host has a Rust toolchain, the
-backend mounts only that toolchain sysroot read-only at `/sandbox-rust` so
-`rustc` and `cargo` can be used without exposing the user's home directory.
+Iterative Studio runs agent terminal commands through an OS-level sandbox (`bwrap` on Linux, `sandbox-exec` Seatbelt on macOS, or `docker` across Linux, macOS, and Windows). Agents receive `sandbox_exec` for terminal work, `shared_workspace` for live cross-branch notes, and `final_output` for the submitted answer that enters the multi-agent pipeline.
 
-Each agent session receives persistent scratch storage. Legacy sessions mount a
-writable directory directly at `/workspace`. Deepthink
-multi-agent sessions use a run-level repository view: `/workspace` is
-read-only, an optional role-owned generated directory is writable, and
-role-specific peer directories are mounted read-only. A read-only repository
-role has no generated directory and uses `/tmp` for private research files.
-Some Deepthink roles receive the full repository read-only; scoped roles cannot
-list or read directories outside their access policy. Python variables and
-process memory do not persist between commands, so durable state should be
-written to files.
+## Workspace & Mount Model
 
-When an agent includes inline markers such as `[[image:plot.png|Plot]]` directly
-in `final_output.response`, the runtime renders the artifact at that exact
-position and includes the exact `/workspace/...` path in the submitted output. The
-virtual environment explorer also uses sandbox session metadata to label the
-writable directory and read-only repository paths.
+Each Deepthink run operates in a single Git-backed repository (`Results/deepthink_<timestamp>/`) mounted at `/workspace`:
 
-The backend can maintain an optional shared, read-only tool bundle at
-`~/.cache/iterative-studio/sandbox-env` by default and mount it at
-`/sandbox-env`. This bundle is summarized to the agent through
-`/api/sandbox/environment`.
+- **Repository root (`/workspace`)**: Mounted read-only by default, with `.git/` masked by a read-only overlay so agents cannot run `git commit`, `git reset`, or rewrite history.
+- **Role-owned directory (`/workspace/<agentDirectory>`)**: Roles that produce artifacts (`Strategy-N/` for branch execution/correction/critique, `Module-M/` for module testers) receive read/write access to their assigned directory while `Strategy-N/history/` and `user_uploaded/` remain read-only.
+- **Shared scratch & verification directory (`/workspace/tmp` and `/tmp`)**: Mounted read/write for every agent in the run (`TMPDIR=/tmp`) so branches, critiques, and testers can co-evolve verification harnesses and share intermediate scripts.
+- **Host toolchains & caches (read-only)**:
+  - Host Python, Node.js, C/C++, Rust, Lean 4, and system utilities are used directly without requiring multi-gigabyte upfront downloads.
+  - User-level toolchain directories (`~/.local`, `~/.cargo`, `~/.rustup`, `~/.elan`, `~/.cache/rtk/bin`) and package caches (`~/.cache/pip`, `~/.cache/uv`, `~/.npm`) are mounted read-only when present.
+  - Private home directories (`~/.ssh`, cloud credentials, shell histories, project `.env` files) are hidden or locked by OS mount namespaces (`bwrap` / `docker`) or explicit Seatbelt `deny file-read*` rules (`seatbelt`).
+- **On-the-fly package installs**: Any package an agent installs via `pip install <pkg>` or `npm install -g <pkg>` is cached in the system wheel/npm cache and unpacked into `/tmp/.shared-python-pkgs` (`PYTHONPATH` / `PATH`) or `/tmp/.shared-node-pkgs` (`NODE_PATH` / `PATH`), making it immediately available to all agents in the run.
+- **L3 Secret Store (`.env`)**: Non-reserved keys defined in `.env` are injected into the sandbox environment for authenticated CLI/API usage, and their raw secret values are automatically redacted from `stdout` and `stderr` before returning to the model or UI.
 
-The large shared prewarm is opt-in. A fresh clone should not silently download
-Python packages, Node packages, Lean, or Mathlib unless the user enables it.
-Without prewarm, the sandbox still runs with the host/container commands that
-are available, and agents can create workspace-local virtual environments or
-project directories under `/workspace`.
+## Inline Artifacts & Output Gates
 
-Runtime defaults can be changed with environment variables:
+When an agent includes inline markers such as `[[image:plot.png|Plot]]` or `[[file:path|Label]]` in `final_output.response`, the runtime resolves and renders the artifact inline in the UI. Generated or modified images in visible workspace paths are also snapshotted into immutable artifacts and attached to the model as native image inputs.
 
-- `ITERATIVE_STUDIO_SANDBOX_RUNTIME`: `auto`, `docker`, or `bwrap`. Defaults to
-  `auto`, which uses Docker when the daemon socket is accessible and falls back
-  to bubblewrap when available.
-- `ITERATIVE_STUDIO_SANDBOX_PREWARM`: set to `1`, `true`, `yes`, `on`, or
-  `enabled` to preinstall the shared Python, Node, Lean, and Mathlib bundle.
-  Disabled by default because the Lean/Mathlib cache can be several gigabytes.
-- `ITERATIVE_STUDIO_SANDBOX_ENV_ROOT`: shared tool bundle directory. Defaults to
-  `~/.cache/iterative-studio/sandbox-env`.
-- `ITERATIVE_STUDIO_SANDBOX_PYTHON_PACKAGES`: whitespace- or comma-separated
-  Python packages to preinstall in the shared read-only Python environment.
-- `ITERATIVE_STUDIO_SANDBOX_NODE_PACKAGES`: whitespace- or comma-separated Node
-  packages to preinstall under the shared Node prefix.
-- `ITERATIVE_STUDIO_SANDBOX_LEAN`: set to `1`, `true`, `yes`, `on`, or
-  `enabled` to install Lean even when the full shared prewarm is disabled. Set
-  to a disabled value to skip Lean setup when full prewarm is enabled.
-- `ITERATIVE_STUDIO_SANDBOX_LEAN_TOOLCHAIN`: Lean toolchain installed by elan.
-  Defaults to `leanprover/lean4:stable`.
-- `ITERATIVE_STUDIO_SANDBOX_MATHLIB`: set to a disabled value to skip the
-  shared prewarmed Mathlib/Lake project.
-- `ITERATIVE_STUDIO_SANDBOX_MATHLIB_REV`: Mathlib git tag/revision to prewarm.
-  Defaults to the installed Lean version, for example `v4.31.0`.
-- `ITERATIVE_STUDIO_DOCKER`: Docker-compatible CLI executable. Defaults to
-  `docker`.
-- `ITERATIVE_STUDIO_BWRAP`: bubblewrap executable. Defaults to `bwrap`.
-- `ITERATIVE_STUDIO_SANDBOX_IMAGE`: Container image. Defaults to
-  `python:3.12-bookworm`. Used by the Docker runtime.
-- `ITERATIVE_STUDIO_SANDBOX_NETWORK`: Docker network mode. Defaults to
-  `bridge`; set to `none` to disable network access. For bubblewrap, `none`
-  creates a private network namespace and other values retain the host network
-  namespace.
-- `ITERATIVE_STUDIO_SANDBOX_RUST_SYSROOT`: Optional Rust sysroot to expose
-  read-only at `/sandbox-rust`. Set to `none` to disable Rust exposure. When
-  unset, the backend probes `rustc --print sysroot` and the user's rustup shim.
-- `ITERATIVE_STUDIO_RUSTC`: Optional rustc executable used for auto-detecting
-  the Rust sysroot. Defaults to `rustc`.
-- `ITERATIVE_STUDIO_SANDBOX_CPUS`: Docker CPU limit. Defaults to `2`.
-- `ITERATIVE_STUDIO_SANDBOX_MEMORY`: Docker memory limit. Defaults to `1g`.
-- `ITERATIVE_STUDIO_SANDBOX_PIDS_LIMIT`: Docker process limit. Defaults to
-  `256`.
+## Environment Variables
 
-The Docker runtime uses a read-only root filesystem, no Linux capabilities,
-`no-new-privileges`, and writable mounts only for the agent's writable directory
-and a workspace-backed `/tmp`. The bubblewrap runtime creates user, pid, ipc,
-uts, and optional network namespaces; mounts system paths read-only; and makes
-only the agent writable directory and workspace-backed `/tmp` writable.
-Generated or modified image files in visible workspace paths are snapshotted
-into immutable artifacts for UI display and are attached back to the model as
-native image inputs.
+- `ITERATIVE_STUDIO_SANDBOX_RUNTIME`: `auto`, `bwrap`, `seatbelt`, or `docker`. Defaults to `auto` (`bwrap` on Linux, `seatbelt` on macOS, `docker` fallback).
+- `ITERATIVE_STUDIO_SANDBOX_MAX_TOOL_TURNS`: Maximum tool-call turns per agent invocation (default `64`).
+- `ITERATIVE_STUDIO_SANDBOX_MAX_DURATION_MINUTES` / `ITERATIVE_STUDIO_SANDBOX_MAX_DURATION_MS`: Maximum wall-clock duration per agent invocation (default `60` minutes).
+- `ITERATIVE_STUDIO_SANDBOX_COMMAND_TIMEOUT_MS`: Default timeout per `sandbox_exec` command in milliseconds (default `120000`).
+- `ITERATIVE_STUDIO_SANDBOX_MAX_COMMAND_TIMEOUT_MS`: Maximum timeout per `sandbox_exec` command in milliseconds (default `300000`).
+- `ITERATIVE_STUDIO_RESULTS_ROOT`: Directory where Deepthink run repositories are stored (default `./Results`).
+- `ITERATIVE_STUDIO_BWRAP`: Bubblewrap executable (default `bwrap`).
+- `ITERATIVE_STUDIO_DOCKER`: Docker CLI executable (default `docker`).
+- `ITERATIVE_STUDIO_SANDBOX_IMAGE`: Container image for Docker mode (default `python:3.12-bookworm`).
+- `ITERATIVE_STUDIO_SANDBOX_NETWORK`: Network mode (`bridge` by default; set to `none` to isolate network access).
+- `ITERATIVE_STUDIO_SANDBOX_CPUS`: Docker CPU limit (default `2`).
+- `ITERATIVE_STUDIO_SANDBOX_MEMORY`: Docker memory limit (default `1g`).
+- `ITERATIVE_STUDIO_SANDBOX_PIDS_LIMIT`: Docker process limit (default `256`).
 
-When shared Python and Node prewarm is enabled, those environments are stored
-under the shared tool bundle, mounted read-only inside the sandbox, and exposed
-on the sandbox `PATH`. Extra package installs should be written into the
-workspace, preferably through a virtual environment or project-local package
-directory created under the writable agent directory. Cargo state is scoped to
-that writable directory with `CARGO_HOME` and `CARGO_TARGET_DIR`.
-
-Lean is installed through elan into the shared tool bundle when enabled. Mathlib
-is prewarmed into a shared Lake project when enabled, so agents do not have to
-clone Mathlib in every workspace. Agents can verify standalone Lean files with
-`lean file.lean`, smoke-test the setup with `lean-check`, and create a
-Mathlib/Lake project in their workspace with `lean-init-mathlib ProjectName`.
-
-Default storage layout:
-
-- `~/.cache/iterative-studio/sandbox-env/python`: shared Python virtual
-  environment and preinstalled Python packages.
-- `~/.cache/iterative-studio/sandbox-env/pip-cache`: pip download/build cache.
-- `~/.cache/iterative-studio/sandbox-env/node`: shared Node package prefix.
-- `~/.cache/iterative-studio/sandbox-env/lean/elan`: elan, Lean, and Lake
-  toolchains.
-- `~/.cache/iterative-studio/sandbox-env/lean/SandboxMathlib`: shared Mathlib
-  Lake project and downloaded Mathlib cache.
-
-`Backend/Python_Environment` is not used for this sandbox prewarm bundle.

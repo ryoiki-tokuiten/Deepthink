@@ -44,13 +44,6 @@ export const DEEPTHINK_AGENT_REGISTRY = {
     modelKey: 'model_modulesTester',
     maxOutputTokens: 5000,
   },
-  solutionAttempt: {
-    label: 'Solution Attempt',
-    sandboxRole: 'Solution Attempt',
-    systemPromptKey: 'sys_deepthink_solutionAttempt',
-    modelKey: 'model_solutionAttempt',
-    maxOutputTokens: 5000,
-  },
   solutionCritique: {
     label: 'Solution Critique',
     sandboxRole: 'Solution Critique',
@@ -59,8 +52,8 @@ export const DEEPTHINK_AGENT_REGISTRY = {
     maxOutputTokens: 5000,
   },
   solutionCorrection: {
-    label: 'Solution Correction',
-    sandboxRole: 'Solution Correction',
+    label: 'Execution Agent',
+    sandboxRole: 'Execution Agent',
     systemPromptKey: 'sys_deepthink_solutionCorrection',
     modelKey: 'model_solutionCorrection',
     maxOutputTokens: 10000,

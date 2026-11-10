@@ -28,7 +28,7 @@ export const DEEPTHINK_PROMPT_PANES: readonly PromptPaneConfig<CustomizablePromp
 
 const DEEPTHINK_NAV_STRUCTURE: ReadonlyArray<{ groupTitle: string; prompts: string[] }> = [
     { groupTitle: "1. STRATEGY GENERATION", prompts: ["deepthink-initial-strategy"] },
-    { groupTitle: "2. SOLUTION DEVELOPMENT", prompts: ["deepthink-solution-attempt", "deepthink-solution-critique", "deepthink-solution-correction"] },
+    { groupTitle: "2. SOLUTION DEVELOPMENT", prompts: ["deepthink-solution-correction", "deepthink-solution-critique"] },
     { groupTitle: "3. MODULES EXPLORATION", prompts: ["deepthink-modules-generation", "deepthink-modules-tester"] },
     { groupTitle: "4. EVALUATION", prompts: ["deepthink-memory-bank", "deepthink-dos", "deepthink-bsr"] }
 ];

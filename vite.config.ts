@@ -3,7 +3,7 @@ import path from 'path';
 import { defineConfig, loadEnv, type PreviewServer, type ViteDevServer } from 'vite';
 import { handleGeminiBackendRequest } from './Backend/geminiBackend';
 import { handleOpenAICompatibleProxyRequest } from './Backend/openAICompatibleProxy';
-import { handleSandboxBackendRequest } from './Backend/sandboxToolBackend';
+import { ensureSandboxEnvironmentReady, handleSandboxBackendRequest } from './Backend/sandboxToolBackend';
 
 function installBackendMiddleware(server: ViteDevServer | PreviewServer): void {
   server.middlewares.use(async (req, res, next) => {
@@ -45,9 +45,15 @@ export default defineConfig(({ mode }) => {
       name: 'iterative-studio-sandbox-backend',
       enforce: 'pre',
       configureServer(server) {
+        void ensureSandboxEnvironmentReady({ strict: true }).catch(err => {
+          console.error('[sandbox]', err instanceof Error ? err.message : String(err));
+        });
         installBackendMiddleware(server);
       },
       configurePreviewServer(server) {
+        void ensureSandboxEnvironmentReady({ strict: true }).catch(err => {
+          console.error('[sandbox]', err instanceof Error ? err.message : String(err));
+        });
         installBackendMiddleware(server);
       },
       resolveId(source, _importer, options) {

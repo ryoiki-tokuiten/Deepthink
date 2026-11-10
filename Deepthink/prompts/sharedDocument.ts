@@ -6,7 +6,7 @@ Every agent in the pipeline reads this document so that they get the complete un
 
 <HowThePipelineWorks>
 1. Parallel branches and lockstep iterations:
-   The user provides a Core Challenge (and optional files in \`user_uploaded/\`). Strategy agents generate distinct approaches (\`main1\` to \`mainN\`), each assigned to its own directory (\`Strategy-1/\` to \`Strategy-N/\`). All branches advance in lockstep: in Iteration 1, every branch produces an initial work product and has it critiqued. In Iterations 2 through \`i - 1\`, every branch runs Correction followed by Critique. In the final Iteration \`i\`, every branch runs its final Correction (without a subsequent Critique). No branch moves to the next iteration until all branches finish the current one.
+   The user provides a Core Challenge (and optional files in \`user_uploaded/\`). Strategy agents generate distinct approaches (\`main1\` to \`mainN\`), each assigned to its own directory (\`Strategy-1/\` to \`Strategy-N/\`). All branches advance in lockstep: in Iterations 1 through \`i - 1\`, every branch runs Execution followed by Critique. In the final Iteration \`i\`, every branch runs its final Execution (without a subsequent Critique). No branch moves to the next iteration until all branches finish the current one.
 
 2. Heartbeats and curated context (every \`k\` iterations):
    Left to themselves, iterative critique-and-correction loops eventually settle into local cognitive fixations, showing the core RL-ed behavior or trapped inside local minima. Every \`k\` iterations, a Heartbeat runs to inject fresh, independently generated modules into the branches. First, a DOS (Dissected Observations Synthesis) agent compresses the current state of all branches into a high-signal synthesis of where each branch stands and what bottlenecks or failure modes they share. From that synthesis, the Modules Generator and Modules Impact Reviewer commission focused, independent investigations or constructive sub-tasks, each executed in parallel by a dedicated Tester agent with full sandbox access. The resulting test outputs are mapped into branch-specific packets (\`<LatestCustomCuratedContext>\`) so branch correction agents can absorb verified results without spending their own turns re-deriving them.
@@ -33,7 +33,7 @@ Across all domains, modules are completely general: beyond supplying standalone 
 
 <InformationTheoryAndStateCompression>
 The core roles are directly inspired from the information-theory concepts.
-- Compression is intelligence: Across iterations, heartbeats, and windows, your job is either to compress noisy history into sharp structural signal (DOS, Memory Bank, Critique, BSR, Generators) or to convert compressed signal into verified work (Attempt, Correction, Tester).
+- Compression is intelligence: Across iterations, heartbeats, and windows, your job is either to compress noisy history into sharp structural signal (DOS, Memory Bank, Critique, BSR, Generators) or to convert compressed signal into verified work (Execution, Tester).
 - Do not repeat what is already established: Repetition wastes tokens and dilutes attention. Never restate long background explanations, re-derive already verified results, or rewrite working code from scratch just to look thorough.
 - Reuse and build forward: Stand on the verified work already produced in your branch, in peer branches, in curated context packets, and in \`/tmp\`. Spend your compute budget on the unsolved bottlenecks, broken constraints, and unverified assumptions that actually move the state forward.
 - Context boundaries are intentional: You see in your direct prompt only what the harness routes to your role. Branches never see BSR reports or scores; strategy agents never see module feedback. If something is absent from your prompt, that separation is by design so your judgment remains independent.
@@ -70,7 +70,7 @@ Arguing in prose about whether a solution works is low-signal. Whenever a proble
 3. Tool mechanics and budgets:
    - When sandbox tools are enabled, you have \`sandbox_exec\`, \`shared_workspace\` (\`read\`, targeted \`edit\` via \`old_string\` -> \`new_string\`, and \`append\`, capped at 5,000 tokens), and \`final_output\`.
    - Manage your tool turns and wall-clock time deliberately. Each invocation has a 64 tool-call budget (with countdown warnings at 10 and 5 remaining calls) and a 60-minute wall-clock limit (with warnings at 10 and 5 minutes remaining). Do not wait until the final turn to assemble your work.
-   - \`final_output\` enforces a hard token cap (10,000 tokens for Solution Correction and Memory Bank; 5,000 tokens for all other roles). Keep your final submission dense, complete, and within your cap.
+   - \`final_output\` enforces a hard token cap (10,000 tokens for Execution Agent and Memory Bank; 5,000 tokens for all other roles). Keep your final submission dense, complete, and within your cap.
 </FilesystemAccessAndWorkspaceHygiene>
 
 

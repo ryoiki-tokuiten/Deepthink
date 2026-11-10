@@ -176,10 +176,10 @@ A global update runs after iteration `n` when `n` is a multiple of `j` and `n < 
 1. **BSR and the first DOS call run in parallel.** One BSR agent per branch, plus one DOS call that summarizes where every branch stands.
 2. **Code decides.** The BSR reports go through the formulas in the BSR section and give each branch one decision: CONTINUE, EVOLVE, or PRUNE.
 3. **New strategies.** The strategy generator and proximity reviewer rewrite the slots that need it (below).
-4. **The repository is updated.** Pruned branches are archived, branches that are rolling back are restored, and each freed slot gets a fresh folder.
-5. **Memory banks and replacements.** In parallel, each surviving branch gets a new memory bank, and each replacement branch writes a first solution and has it critiqued. The system waits for both. Every active strategy folder is then committed as the starting point of the next window.
+4. **The repository is updated and rolled out.** Pruned branches are archived, branches that are rolling back are restored from commit, each freed slot gets a fresh folder, and Step-i DOS, strategy revision histories, `strategies_finalized_and_used_so_far.md`, and updated `Strategy-N/strategy.md` files are committed together in a single rollout commit (recording the `window_start` commit for the next window).
+5. **Memory banks and replacements.** In parallel, each surviving branch gets a new memory bank and commits its `Strategy-N/` folder, and each replacement branch writes a first solution, has it critiqued, and commits its `Strategy-N/` folder. The system waits for all branches to finish.
 6. **Second DOS call.** If modules are on, DOS looks at the updated state and produces feedback on the previous heartbeat's modules.
-7. **Heartbeat.** It runs whatever `k` is, and its DOS step is the second call from step 6.
+7. **Heartbeat.** It runs whatever `k` is, and its DOS step is the second call from step 6. Step-ii DOS, realized feedback on the previous heartbeat's modules, and the new heartbeat's modules and test outputs are committed together in a single commit.
 
 The first DOS call runs even when curated context is off, because strategy generation uses it. The second runs only when modules are on.
 
@@ -413,9 +413,9 @@ Prompts are rebuilt from stored fields every time. Nothing is carried over insid
 | Latest critique | Every critique | Replaced | Peers' context, DOS |
 | Iteration history | After the critique of each iteration | Added to | History windows, BSR, memory bank |
 | Memory bank | Each distillation | Replaced | History window of correction and critique, BSR, next memory bank |
-| Heartbeat blocks & module exchanges | End of each heartbeat | Added to | Corrections read only the newest mapped packet. DOS reads the previous block. Modules Generator and Modules Impact Reviewer read the reframed history of all prior heartbeats plus the previous block's modules, test outputs, mapped packets, realized feedback, and the ledger of modules finalized and used so far |
-| Seed strategy exchange | End of seed generation | Set once | Strategy generator and proximity at every update |
-| Update strategy exchanges | After each update's strategy step | Added to | Strategy generator and proximity at later updates (with prior update contexts replaced by reframed notes) |
+| Heartbeat blocks & module exchanges | End of each heartbeat | Added to | Corrections read only the newest mapped packet. DOS reads the previous block. Modules Generator and Modules Impact Reviewer read the previous block's modules, test outputs, mapped packets, and realized feedback, plus the ledger of modules finalized and used so far (`ModulesFinalizedAndUsedSoFar`) and the current heartbeat's back-and-forth turns (`CurrentHeartbeatImpactReviewTurns`) |
+| Seed strategy exchange | End of seed generation | Set once | Persisted to `strategies_history/` and UI state; within the seed loop, read via `SeedStrategyProximityTurns` |
+| Update strategy exchanges | After each update's strategy step | Added to | Persisted to `strategies_history/` and UI state; within Global Update $u$, read via `CurrentGlobalUpdateProximityTurns` |
 | Strategies & modules used so far | Seed; each EVOLVE or new strategy; each heartbeat | Added to | Strategy generator/proximity at every update (`StrategiesFinalizedAndUsedSoFar`); Modules Generator / Modules Impact Reviewer at every heartbeat after the first (`ModulesFinalizedAndUsedSoFar`) |
 | Standing event ledger | After each update's decisions | Added to (or trimmed on rollback / reset on prune) | BSR |
 | DOS outputs | Each DOS call | Added to | Step-i feeds strategy generator/proximity and step-ii; Heartbeat DOS and step-ii DOS feed Modules Generator / Modules Impact Reviewer |
@@ -695,50 +695,24 @@ Both **Modules Generator (MG)** and **Modules Impact Reviewer (MIR)** share the 
   2. DOS core synthesis for Heartbeat 1 (`DOS_heartbeat_01`)
 - **`{HB_Note(h)}`** (for $h \ge 2$): Active note before Heartbeat $h$:
   > *"The modules from Heartbeat `h-1` were finalized, tested independently by dedicated tester agents, and mapped as packets to the target branches, which then executed corrections with them. Below is the context for Heartbeat `h`: the finalized modules from Heartbeat `h-1` and their independent test outputs, the mapped branch packets showing the current running strategies, their latest corrections, and which modules were routed to which branches, the realized module feedback (observed test outcome, utilization across branches, and critique counterevidence), the ledger of modules finalized and used so far across prior heartbeats, and the new DOS synthesis. Now generate the new modules object."*
-- **`[HB-h Context]`** (for $h \ge 2$): Strictly these items (no raw branch critiques):
-  1. Final generated module object from Heartbeat $h-1$ + corresponding independent testing outputs
-  2. Mapped branch packets (schema showing current running strategies `main1`…`mainN`, their latest corrections, and which modules from Heartbeat $h-1$ were mapped to which branches)
-  3. Realized module feedback for Heartbeat $h-1$ (`observed_test_outcome`, `utilization` vector `[C/T, P/T, N/T, M/T]`, and `critique_counterevidence`)
+- **`[HB-h Context]`** (for $h \ge 2$): Strictly these items (no raw branch critiques and no back-and-forth transcripts from earlier heartbeats):
+  1. `<PreviousHeartbeatModulesAndTests>`: Final generated module object from Heartbeat $h-1$ + corresponding independent testing outputs
+  2. `<MappedBranchPackets>`: Schema showing current running strategies `main1`…`mainN`, their latest corrections, and which modules from Heartbeat $h-1$ were mapped to which branches
+  3. `<RealizedModuleFeedback>`: Realized module feedback for Heartbeat $h-1$ (`observed_test_outcome`, `utilization` vector `[C/T, P/T, N/T, M/T]`, and `critique_counterevidence`)
   4. `<ModulesFinalizedAndUsedSoFar>`: Ledger of every module finalized and tested across prior heartbeats (`Modules/modules_finalized_and_used_so_far.md`)
-  5. DOS core synthesis for Heartbeat $h$
-- **`{HB_Reframed_Note(h)}`**: Compact note that **replaces** `{HB_Note(h)} + [HB-h Context]` once Heartbeat $h$ is in the past:
-  - For $h = 1$:
-    > *"In Heartbeat 1, you received the initial DOS synthesis (`{dosFilePath}`), the active strategies, and their latest corrections, and went back and forth with your impact reviewer friend:"*
-  - For $h \ge 2$:
-    > *"Yes, the modules from Heartbeat `h-1` were finalized, tested independently, and mapped to branches. For Heartbeat `h`, you received the DOS synthesis inside `{dosFilePath}`, the latest corrections from the corresponding strategy directories, and the prior test outputs and realized feedback records inside `Modules/Heartbeat-{h-1}/`. After this, you went back and forth with your impact reviewer friend:"*
-  *(Here `{dosFilePath}` is `DOS_history/DOS_heartbeat_0{h}.md` for a standalone heartbeat, or `DOS_history/DOS_global_update_0{u}_step_ii.md` when Heartbeat $h$ concluded Global Update $u$.)*
+  5. `<DosCoreSynthesis>`: DOS core synthesis for Heartbeat $h$
 
 **Exact chronological order across Heartbeats (`MG & MIR`):**
 
 - **During Heartbeat 1:**
   1. `[Challenge + Count]`
   2. `{HB_Note(1)} + [HB-1 Context]`
-  3. `[HB-1 G↔R so far]` (empty on MG Turn 1; `MG-hb1-1` on MIR Turn 1; `MG-hb1-1 → MIR-hb1-1` on MG Turn 2; etc.)
+  3. `[HB-1 G↔R so far]` (`<CurrentHeartbeatImpactReviewTurns>`, empty on MG Turn 1; `MG-hb1-1` on MIR Turn 1; `MG-hb1-1 → MIR-hb1-1` on MG Turn 2; etc.)
 
-- **During Heartbeat 2** (`{HB_Note(1)} + [HB-1 Context]` is removed and replaced by `{HB_Reframed_Note(1)}`):
+- **During Heartbeat $h$ ($h \ge 2$):**
   1. `[Challenge + Count]`
-  2. `{HB_Reframed_Note(1)}`
-  3. `[HB-1 G↔R]`
-  4. `{HB_Note(2)} + [HB-2 Context]`
-  5. `[HB-2 G↔R so far]`
-
-- **During Heartbeat 3** (`{HB_Note(2)} + [HB-2 Context]` is removed and replaced by `{HB_Reframed_Note(2)}`):
-  1. `[Challenge + Count]`
-  2. `{HB_Reframed_Note(1)}`
-  3. `[HB-1 G↔R]`
-  4. `{HB_Reframed_Note(2)}`
-  5. `[HB-2 G↔R]`
-  6. `{HB_Note(3)} + [HB-3 Context]`
-  7. `[HB-3 G↔R so far]`
-
-- **During Heartbeat $h$ ($h \ge 3$):**
-  1. `[Challenge + Count]`
-  2. `{HB_Reframed_Note(1)}` → `[HB-1 G↔R]`
-  3. `{HB_Reframed_Note(2)}` → `[HB-2 G↔R]`
-  4. …
-  5. `{HB_Reframed_Note(h-1)}` → `[HB-(h-1) G↔R]`
-  6. `{HB_Note(h)} + [HB-h Context]`
-  7. `[HB-h G↔R so far]`
+  2. `{HB_Note(h)} + [HB-h Context]`
+  3. `[HB-h G↔R so far]` (`<CurrentHeartbeatImpactReviewTurns>`, scoped strictly to the current Heartbeat $h$ while prior finalized modules are carried in `<ModulesFinalizedAndUsedSoFar>`)
 
 **Tester.**
 
@@ -819,47 +793,25 @@ Both **Strategy Generator (SG)** and **Strategy Proximity (SP)** share the same 
 
   Requested Number of Strategies: {strategiesCount}
   ```
-- **`[Seed G↔P]`**: The full back-and-forth turns from Seed (`SG-seed-1` → `SP-seed-1` → … → `SG-seed-final`).
 - **`[GU-u G↔P]`**: The back-and-forth turns from Global Update $u$ (`SG-gu-1` → `SP-gu-1` → … → `SG-gu-final`).
 - **`{GU_Note(u)}`**: Active note for Global Update $u$:
   > *"These strategies were actually finalized and were executed, critiqued, and corrected for `j` iterations. The DOS output is a synthesis of the critique across each branch so that you understand where each branch is failing exactly. For richer context, you have also received the latest corrections in every branch. Finally, you will receive a BSR object calculated by the harness from each branch's observed window and standing event ledger, containing the decisions about what to continue, evolve, and prune. Now generate the new strategies object for the changed slots only."*
-- **`[GU-u Context]`**: The context for Global Update $u$:
+- **`[GU-u Context]`**: The context for Global Update $u$ (no back-and-forth transcripts from Seed or earlier Global Updates are injected):
   1. `<CurrentActiveStrategies>`: Current actual strategies (`main1`…`mainN`) + latest correction from every branch
   2. `<ConsolidatedBsrDecisions>`: Every branch's decision (`CONTINUE`, `EVOLVE (in_place)`, `EVOLVE (rollback to iteration N / window start)`, or `PRUNE`) + event reasons from the window (carries no window scores or pressures)
   3. `<DosSynthesisForStrategies>`: `dos_output.for_strategies` (`core_synthesis` from Step-i DOS for GU-$u$)
   4. `<StrategiesFinalizedAndUsedSoFar>`: Ledger of every strategy actually finalized and executed so far (seed strategies at iteration 0, plus one entry per EVOLVE or PRUNE replacement at its update iteration)
-- **`{GU_Reframed_Note(u)}`**: Compact note that **replaces** `{GU_Note(u)} + [GU-u Context]` once Global Update $u$ is in the past:
-  > *"Yes, these strategies were actually finalized and were executed, critiqued, and corrected for `j` iterations. You received the DOS output for previous global update `u` too, which you can find inside `DOS_history/DOS_global_update_0{u}_step_i.md`. You can view the past corrections by going to their corresponding `Strategy-N/history/` directories. After this, you went back and forth with your proximity friend:"*
 
 **Exact chronological order across Global Updates (`SG & SP`):**
 
-- **During Global Update 1:**
+- **During Global Update $u$ ($u \ge 1$):**
   1. `[Challenge + Count]`
-  2. `[Seed G↔P]`
-  3. `{GU_Note(1)} + [GU-1 Context]`
-  4. `[GU-1 G↔P so far]` (empty on SG Turn 1; `SG-gu1-1` on SP Turn 1; `SG-gu1-1 → SP-gu1-1` on SG Turn 2; etc.)
-
-- **During Global Update 2** (`{GU_Note(1)} + [GU-1 Context]` is removed and replaced by `{GU_Reframed_Note(1)}`):
-  1. `[Challenge + Count]`
-  2. `[Seed G↔P]`
-  3. `{GU_Reframed_Note(1)}`
-  4. `[GU-1 G↔P]`
-  5. `{GU_Note(2)} + [GU-2 Context]`
-  6. `[GU-2 G↔P so far]`
-
-- **During Global Update $u$ ($u \ge 3$):**
-  1. `[Challenge + Count]`
-  2. `[Seed G↔P]`
-  3. `{GU_Reframed_Note(1)}` → `[GU-1 G↔P]`
-  4. `{GU_Reframed_Note(2)}` → `[GU-2 G↔P]`
-  5. …
-  6. `{GU_Reframed_Note(u-1)}` → `[GU-(u-1) G↔P]`
-  7. `{GU_Note(u)} + [GU-u Context]`
-  8. `[GU-u G↔P so far]`
+  2. `{GU_Note(u)} + [GU-u Context]`
+  3. `[GU-u G↔P so far]` (`<CurrentGlobalUpdateProximityTurns>`, empty on SG Turn 1; `SG-gu-1` on SP Turn 1; `SG-gu-1 → SP-gu-1` on SG Turn 2; etc.)
 
 The strategy text of every changed slot is replaced when the last generator turn is applied. Everything after this point sees the new text.
 
-**Step 4: repository.** Rolled-back folders are restored from commit. Pruned folders are archived. This changes files only. The stored latest solution, latest critique, and iteration history of a rolled-back branch are not changed by the rollback, so they keep showing the last iteration until the branch's next correction and critique replace them. For a pruned slot, the iteration history and memory bank are cleared.
+**Step 4: repository rollout & Phase A commit.** Rolled-back folders are restored from their target commit (`last_good_iteration` or `window_start`), and their iteration history, standing event ledger, and active solution/critique fields are restored to that checkpoint. Pruned folders are archived into `Pruned_Strategies/` and their iteration history and memory bank are cleared. Step-i DOS (`DOS_global_update_XX_step_i.md` + `.jsonl`), the Global Update strategy revision histories, `strategies_finalized_and_used_so_far.md`, and all updated `Strategy-N/strategy.md` files are then committed together in a single `"Global Update U: Step-i DOS, strategy updates, and rollout"` commit, which also records the `window_start` commit for the upcoming window.
 
 **Step 5, in parallel: memory bank and replacement branches.**
 
@@ -886,7 +838,7 @@ Iteration 7:
 ```
 
 - The iterations are `n - j + 1` through `n`, or through the rollback iteration when the branch rolled back. When a branch rolled back to the window start, no memory bank call is made and the old bank stays.
-- The result replaces the stored memory bank, and is also written to `Strategy-N/history/memory_bank_NN.md`.
+- The result replaces the stored memory bank, is written to `Strategy-N/history/memory_bank_NN.md` (+ `.jsonl`), and is immediately committed for that branch (`"Commit Strategy-N memory bank at Global Update U"`).
 
 Replacement branch, first execution:
 
@@ -900,9 +852,7 @@ Assigned Strategy: main4
 First execution for replacement branch in slot main4.
 ```
 
-Then its critique uses the critique template with `<WindowCorrectionCritiqueHistory>` holding `<Iteration n="{n}"><Correction>{first execution}</Correction></Iteration>`. Once the critique completes, the pair is stored as iteration `n`.
-
-Every active strategy folder is then committed as the next window's starting state.
+Then its critique uses the critique template with `<WindowCorrectionCritiqueHistory>` holding `<Iteration n="{n}"><Correction>{first execution}</Correction></Iteration>`. Once the critique completes, the pair is stored as iteration `n` and committed for that branch (`"Commit Strategy-N at iteration X"`).
 
 **Step 6: step-ii DOS** (modules on).
 
@@ -960,10 +910,9 @@ A rollback to the window start prints `reverted to window start`.
 **Step 7: Heartbeat inside a Global Update (The Exception).**
 When a Global Update $u$ finishes Step 5 (memory bank distillation on surviving branches + first execution & critique on replacement branches), Step 6 runs `step_ii` DOS, and Step 7 immediately runs a Heartbeat (say Heartbeat $h$) that **reuses `step_ii` DOS** instead of running a standalone Heartbeat DOS.
 
-During this post-update Heartbeat $h$, **MG & MIR** receive the exact same chronological structure as Stage 4 (`1. [Challenge + Count]`, prior `{HB_Reframed_Note} + [HB G↔R]` blocks, `{HB_Note(h)} + [HB-h Context]`, and `[HB-h G↔R so far]`), with two Global-Update-specific properties inside `[HB-h Context]`:
+During this post-update Heartbeat $h$, **MG & MIR** receive the exact same chronological structure as Stage 4 (`1. [Challenge + Count]`, `{HB_Note(h)} + [HB-h Context]`, and `[HB-h G↔R so far]`), with two Global-Update-specific properties inside `[HB-h Context]`:
 1. **Mapped branch packets** reflect the **post-update active strategies** (including evolved strategy texts and new replacement branches in pruned slots), their **latest corrections** (which for replacement branches is their first execution), and the Heartbeat $h-1$ branch mappings.
 2. **Realized module feedback for Heartbeat $h-1$** and **DOS core synthesis** come directly from **Global Update $u$ Step-ii DOS** (where utilization and counterevidence were graded on surviving branches only).
-3. On the *next* heartbeat ($h+1$), when `{HB_Note(h)} + [HB-h Context]` is replaced by `{HB_Reframed_Note(h)}`, that reframed note points to `DOS_history/DOS_global_update_0{u}_step_ii.md`.
 
 ### Stage 6: final iteration
 
@@ -1018,11 +967,14 @@ The repository has one git branch and one working tree. Every strategy folder, t
 
 Only the harness uses git. Agents can read history but cannot commit or restore. The harness runs git operations one at a time, always when no agent is writing, so a commit never captures a half-written file. `shared_workspace.md` and `tmp/` are untracked via git exclude / `.gitignore`.
 
-Commits are kept few:
+Commits are consolidated into six pause/resume-safe checkpoints:
 
-- At the end of every iteration, each strategy folder is committed separately and in turn, named after its strategy and iteration. These commits are what a rollback goes back to.
-- At the end of a global update, after memory banks and replacement branches are done, each active strategy folder is committed again. This is the starting point of the next window, and it is where a rollback to `window_start` returns.
-- Shared folders are committed when a heartbeat finishes and after each strategy history file is written.
+1. **Initial workspace seed** (`"Initial workspace seed"`): Commits `user_uploaded/` context files when the repository is initialized.
+2. **Seed strategies generation** (`"Seed strategies generation"`): Commits `strategies_history/seed_strategies.md` (+ `.jsonl`), `seed_strategies_proximity_review.md` (+ `.jsonl`), `strategies_finalized_and_used_so_far.md`, and the initial `Strategy-N/strategy.md` files, recording the initial `window_start` commit SHA.
+3. **Per-branch iteration completion** (`"Commit Strategy-N at iteration X"`): Each branch commits its own `Strategy-N/iterations/iteration_XX.md` and `Strategy-N/history/iteration_XX.jsonl` immediately after completing its execution/correction + critique pair (or final correction on iteration `i`). These commits are what an `EVOLVE (rollback)` returns to.
+4. **Standalone Heartbeat** (`"Curated Context Heartbeat H: DOS & Modules"`): Bundles `DOS_history/DOS_heartbeat_XX.md` (+ `.jsonl`), previous heartbeat `feedback.json` updates, module generation and impact review transcripts, `modules_finalized_and_used_so_far.md`, and all tested `Module-M/` folders into a single commit.
+5. **Global Update Phase A — Step-i DOS, strategy updates & rollout** (`"Global Update U: Step-i DOS, strategy updates, and rollout"`): Restores rolled-back folders, archives pruned folders into `Pruned_Strategies/`, writes `DOS_global_update_XX_step_i.md` (+ `.jsonl`), strategy revision histories, `strategies_finalized_and_used_so_far.md`, and updated `Strategy-N/strategy.md` files, and commits them together as the next window's `window_start`.
+6. **Global Update Phase B & C**: Surviving branches commit their distilled `memory_bank_XX.md` (+ `.jsonl`) per folder (`"Commit Strategy-N memory bank at Global Update U"`), replacement branches commit their first execution + critique per folder (`"Commit Strategy-N at iteration X"`), and Step-ii DOS + realized `feedback.json` + Heartbeat modules & testers commit together in a single `"Global Update U: Step-ii DOS & Curated Context Heartbeat H"` commit (or `"Global Update U: Step-ii DOS"` when curated context is off).
 
 When a branch is pruned, its folder is moved to `Pruned_Strategies/` under an ordinal name such as `Strategy-1_pruned_01`, and a new empty `Strategy-1/` takes its place. The ordinal keeps a reused slot name from clashing with archived data.
 
@@ -1093,13 +1045,11 @@ The configuration panel has only the settings listed above. The prompt editor li
 
 | Module | Responsibility |
 |---|---|
-| `pipelineOrchestrator.ts` | The run loop, each iteration phase, heartbeats, global updates, retries, and commits |
+| `pipelineOrchestrator.ts` | The run loop, each iteration phase, heartbeats, global updates, retries, and `GitRepositoryHarness` commits/rollbacks/pruning |
 | `deepthinkCore.ts` | Starting and resuming a run, reading settings, saving snapshots, and assembling the challenge from attached files |
-| `loopController.ts` | Bounds on `i`, `j`, `k`, the heartbeat rule, and what runs after each iteration |
 | `formulas.ts` | BSR window scoring, pressures, and decisions; module utilization |
 | `contextBuilders.ts` | The prompt contents for each agent, and conversion of image blocks |
-| `harnessNotes.ts` | The notes added to the strategy generator and DOS, and the assembly of strategy proximity history |
+| `harnessNotes.ts` | The notes added to the strategy generator, modules generator, and DOS |
 | `agentRegistry.ts` | Each agent's label, sandbox role, system prompt key, and model key |
-| `gitRepository.ts` | Repository commits, window starts, rollbacks, and archiving of pruned branches |
 | `sharedWorkspace.ts` | The `shared_workspace` tool and its live document |
-| `types.ts` | Types for settings, branches, modules, BSR, DOS, heartbeats, and run state |
+| `types.ts` | Types for settings, branches, modules, BSR, DOS, heartbeats, loop scheduling, and run state |

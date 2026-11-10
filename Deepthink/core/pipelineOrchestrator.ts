@@ -47,10 +47,6 @@ import {
 import { createDefaultCustomPromptsDeepthink } from '../prompts/index.ts';
 import { SharedWorkspaceManager, type SharedWorkspaceToolInput } from './sharedWorkspace.ts';
 import {
-  buildModulesImpactReviewHistoryWithNotes,
-  buildStrategyProximityHistoryWithNotes,
-} from './harnessNotes.ts';
-import {
   DEFAULT_NORMALIZATION_BOUNDS,
   normalizeTranscript,
   validateTranscript,
@@ -90,49 +86,21 @@ export class GitRepositoryHarness {
     return undefined;
   }
 
-  public async writeFilesAndCommit(commitMessage: string, files: DeepthinkResultsContextFile[]): Promise<void> {
-    if (!files.length) return;
+  public async commit(
+    commitMessage: string,
+    fallbackKey: string,
+    files: DeepthinkResultsContextFile[] = []
+  ): Promise<string> {
     try {
       const rt = await getSandboxRuntime();
       if (rt?.snapshotDeepthinkResultsRepository) {
-        await rt.snapshotDeepthinkResultsRepository(this.repositoryId, commitMessage, files);
+        const commit = await rt.snapshotDeepthinkResultsRepository(this.repositoryId, commitMessage, files);
+        if (commit) return commit;
       }
     } catch (err) {
-      console.warn(`Failed to commit context files (${commitMessage}):`, err);
+      console.warn(`Failed to commit (${commitMessage}):`, err);
     }
-  }
-
-  private async snapshotWithFallback(commitMessage: string, fallback: string, files?: DeepthinkResultsContextFile[]): Promise<string> {
-    if (files?.length) await this.writeFilesAndCommit(commitMessage, files);
-    try {
-      const rt = await getSandboxRuntime();
-      if (rt?.snapshotSandboxRepositoryById) {
-        return await rt.snapshotSandboxRepositoryById(this.repositoryId, commitMessage);
-      }
-    } catch {}
-    return fallback;
-  }
-
-  public commitStrategyIteration(slotIndex: number, iteration: number, contextFiles?: DeepthinkResultsContextFile[]): Promise<string> {
-    return this.snapshotWithFallback(`Commit Strategy-${slotIndex + 1} at iteration ${iteration}`, `commit_${this.repositoryId}_slot${slotIndex}_it${iteration}`, contextFiles);
-  }
-
-  public commitWindowStart(slotIndex: number, windowStart: number, contextFiles?: DeepthinkResultsContextFile[]): Promise<string> {
-    return this.snapshotWithFallback(`Starting state for Strategy-${slotIndex + 1} at window beginning (iteration ${windowStart})`, `commit_${this.repositoryId}_slot${slotIndex}_start${windowStart}`, contextFiles);
-  }
-
-  public commitHeartbeat(heartbeatNo: number, contextFiles?: DeepthinkResultsContextFile[]): Promise<string> {
-    return this.snapshotWithFallback(`Curated Context Heartbeat ${heartbeatNo}`, `commit_${this.repositoryId}_heartbeat${heartbeatNo}`, contextFiles);
-  }
-
-  public commitStrategyHistory(filename: string, content?: string, trajectoryJsonl?: string): Promise<string> {
-    const files: DeepthinkResultsContextFile[] = content
-      ? [
-          { path: `strategies_history/${filename}`, content },
-          ...(trajectoryJsonl !== undefined ? [{ path: `strategies_history/${filename.replace(/\.md$/i, '.jsonl')}`, content: trajectoryJsonl }] : []),
-        ]
-      : [];
-    return this.snapshotWithFallback(`Strategy history update: ${filename}`, `commit_${this.repositoryId}_hist_${filename}`, files);
+    return `commit_${this.repositoryId}_${fallbackKey}`;
   }
 
   public async rollbackStrategy(slotIndex: number, commitHash: string): Promise<void> {
@@ -486,20 +454,22 @@ export class DeepthinkPipelineOrchestrator {
       await this.runInitialStrategyGeneration();
     } else {
       this.emitEvent('Orchestrator', 'Initial strategies already present; resuming execution loop', 'info');
-    }
-
-    for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
-      const commitKey = `${slotIdx}:start_1`;
-      if (!this.commitHashesPerIteration.has(commitKey)) {
-        const strat = this.state.initialStrategies[slotIdx];
-        const contextFiles: DeepthinkResultsContextFile[] = [
-          {
-            path: `Strategy-${slotIdx + 1}/strategy.md`,
-            content: `# Strategy ${slotIdx + 1} (${strat.id})\n\n${strat.strategyText}\n`,
-          },
-        ];
-        const commit = await this.gitHarness.commitWindowStart(slotIdx, 1, contextFiles);
-        this.commitHashesPerIteration.set(commitKey, commit);
+      const missingStartCommit = this.state.initialStrategies.some(
+        (_, slotIdx) => !this.commitHashesPerIteration.has(`${slotIdx}:start_1`)
+      );
+      if (missingStartCommit) {
+        const strategyFiles: DeepthinkResultsContextFile[] = this.state.initialStrategies.map((strat, slotIdx) => ({
+          path: `Strategy-${slotIdx + 1}/strategy.md`,
+          content: `# Strategy ${slotIdx + 1} (${strat.id})\n\n${strat.strategyText}\n`,
+        }));
+        const commit = await this.gitHarness.commit('Seed strategies generation', 'seed_strategies', strategyFiles);
+        for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
+          if (!this.commitHashesPerIteration.has(`${slotIdx}:start_1`)) {
+            this.commitHashesPerIteration.set(`${slotIdx}:start_1`, commit);
+          }
+        }
+        this.syncCheckpointState();
+        this.callbacks.onStateChange?.(this.state);
       }
     }
 
@@ -563,13 +533,7 @@ export class DeepthinkPipelineOrchestrator {
       this.syncCheckpointState(iteration, heartbeatNo, sinceHeartbeat);
       this.emitEvent('Loop', `Starting Iteration ${iteration} of ${config.i}`, 'info');
 
-      if (iteration === 1) {
-        await this.runIterationOne();
-      } else {
-        await this.runCorrectionAndCritiqueIteration(iteration, heartbeatNo);
-      }
-
-      await this.commitIterationBarriers(iteration);
+      await this.runCorrectionAndCritiqueIteration(iteration, heartbeatNo);
 
       const step = determinePostIterationStep(
         iteration,
@@ -784,157 +748,23 @@ export class DeepthinkPipelineOrchestrator {
     const seedGenJsonl = buildLoopRoleTrajectoryJsonl(seedGenTurns as any, !!config.deepthinkCodeExecutionEnabled);
     const seedProxJsonl = buildLoopRoleTrajectoryJsonl(seedProxTurns as any, !!config.deepthinkCodeExecutionEnabled);
 
-    await this.gitHarness.commitStrategyHistory('seed_strategies.md', seedGenMarkdown, seedGenJsonl);
-    await this.gitHarness.commitStrategyHistory('seed_strategies_proximity_review.md', seedProxMarkdown, seedProxJsonl);
-    await this.updateStrategiesUsedSoFarFile();
+    const seedCommitFiles: DeepthinkResultsContextFile[] = [
+      { path: 'strategies_history/seed_strategies.md', content: seedGenMarkdown },
+      { path: 'strategies_history/seed_strategies.jsonl', content: seedGenJsonl },
+      { path: 'strategies_history/seed_strategies_proximity_review.md', content: seedProxMarkdown },
+      { path: 'strategies_history/seed_strategies_proximity_review.jsonl', content: seedProxJsonl },
+      this.buildStrategiesUsedSoFarFile(),
+      ...this.state.initialStrategies.map((strat, slotIdx) => ({
+        path: `Strategy-${slotIdx + 1}/strategy.md`,
+        content: `# Strategy ${slotIdx + 1} (${strat.id})\n\n${strat.strategyText}\n`,
+      })),
+    ];
 
-    this.callbacks.onStateChange?.(this.state);
-  }
-
-  private async runIterationOne(): Promise<void> {
-    const branches = this.state.initialStrategies;
-
-    await Promise.all(branches.map(async (branch) => {
-      this.checkStopRequested();
-      if (branch.solutionAttempt && branch.status === 'completed') {
-        return;
-      }
-      branch.status = 'processing';
-      this.callbacks.onStateChange?.(this.state);
-
-      const prompt = [
-        `# Core Challenge\n${this.state.challenge}`,
-        `Assigned Strategy: ${branch.id}\n${branch.strategyText}`,
-        'Produce iteration 1 solution attempt.',
-      ].join('\n\n');
-
-      try {
-        let attemptTrajectoryJsonl = '';
-        const attemptOutput = await this.callAgentModelWithRetry({
-          kind: 'solutionAttempt',
-          promptText: prompt,
-          stepDescription: `Solution Attempt for ${branch.id} (Iteration 1)`,
-          workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
-          isCritical: false,
-          executionGroupId: 'group-iter-1-attempt',
-          executionGroupName: 'Iteration 1: Initial Solution Attempts (Parallel)',
-          onTrajectoryJsonl: (jsonl) => {
-            attemptTrajectoryJsonl = jsonl;
-          },
-        });
-
-        branch.solutionAttempt = attemptOutput;
-        branch.solutionAttemptDisplay = attemptOutput;
-        branch.refinedSolution = attemptOutput;
-        branch.status = 'completed';
-
-        if (!branch.iterationHistory) {
-          branch.iterationHistory = { iterations: [], status: 'completed' };
-        }
-        const existingIdx = branch.iterationHistory.iterations.findIndex(it => it.iterationNumber === 1);
-        if (existingIdx >= 0) {
-          branch.iterationHistory.iterations[existingIdx].correctedSolution = attemptOutput;
-          (branch.iterationHistory.iterations[existingIdx] as any).solutionTrajectoryJsonl = attemptTrajectoryJsonl;
-        } else {
-          branch.iterationHistory.iterations.push({
-            iterationNumber: 1,
-            correctedSolution: attemptOutput,
-            critique: '',
-            timestamp: Date.now(),
-            solutionTrajectoryJsonl: attemptTrajectoryJsonl,
-          } as any);
-        }
-      } catch (err: any) {
-        if (
-          err instanceof PipelineStopRequestedError ||
-          err?.name === 'PipelineStopRequestedError' ||
-          this.isStopRequested
-        ) {
-          throw err;
-        }
-        return this.pausePipelineOnInferenceFailure(err?.message || String(err));
-      }
-    }));
-
-    await Promise.all(branches.map(async (branch) => {
-      this.checkStopRequested();
-      if (branch.solutionCritique && branch.solutionCritiqueStatus === 'completed') {
-        return;
-      }
-      branch.solutionCritiqueStatus = 'processing';
-      this.callbacks.onStateChange?.(this.state);
-
-      const windowIterations = (branch.iterationHistory?.iterations || []).filter(
-        it => it.iterationNumber === 1
-      );
-      const historyContext = buildCritiqueCorrectionMemoryBankHistory(branch.memoryBank, windowIterations);
-      const critiquePrompt = buildContextForCritiqueAgent(
-        this.state.challenge,
-        branch.id,
-        branch.strategyText,
-        historyContext
-      );
-
-      try {
-        let critiqueTrajectoryJsonl = '';
-        const critiqueOutput = await this.callAgentModelWithRetry({
-          kind: 'solutionCritique',
-          promptText: critiquePrompt,
-          stepDescription: `Solution Critique for ${branch.id} (Iteration 1)`,
-          workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
-          isCritical: false,
-          executionGroupId: 'group-iter-1-critique',
-          executionGroupName: 'Iteration 1: Solution Critiques (Parallel)',
-          onTrajectoryJsonl: (jsonl) => {
-            critiqueTrajectoryJsonl = jsonl;
-          },
-        });
-
-        branch.solutionCritique = critiqueOutput;
-        branch.solutionCritiqueDisplay = critiqueOutput;
-        branch.solutionCritiqueStatus = 'completed';
-
-        if (!this.state.solutionCritiques) this.state.solutionCritiques = [];
-        this.state.solutionCritiques.push({
-          id: `critique-${branch.id}-1`,
-          mainStrategyId: branch.id,
-          globalIteration: 1,
-          status: 'completed',
-          critiqueResponse: critiqueOutput,
-          critiqueResponseDisplay: critiqueOutput,
-        });
-        this.state.solutionCritiquesStatus = 'completed';
-
-        if (!branch.iterationHistory) {
-          branch.iterationHistory = { iterations: [], status: 'completed' };
-        }
-        const existingCritIdx = branch.iterationHistory.iterations.findIndex(it => it.iterationNumber === 1);
-        if (existingCritIdx >= 0) {
-          branch.iterationHistory.iterations[existingCritIdx].correctedSolution = branch.solutionAttempt || '';
-          branch.iterationHistory.iterations[existingCritIdx].critique = critiqueOutput;
-          branch.iterationHistory.iterations[existingCritIdx].timestamp = Date.now();
-          (branch.iterationHistory.iterations[existingCritIdx] as any).critiqueTrajectoryJsonl = critiqueTrajectoryJsonl;
-        } else {
-          branch.iterationHistory.iterations.push({
-            iterationNumber: 1,
-            correctedSolution: branch.solutionAttempt || '',
-            critique: critiqueOutput,
-            timestamp: Date.now(),
-            critiqueTrajectoryJsonl,
-          } as any);
-        }
-      } catch (err: any) {
-        if (
-          err instanceof PipelineStopRequestedError ||
-          err?.name === 'PipelineStopRequestedError' ||
-          this.isStopRequested
-        ) {
-          throw err;
-        }
-        return this.pausePipelineOnInferenceFailure(err?.message || String(err));
-      }
-    }));
-
+    const seedCommit = await this.gitHarness.commit('Seed strategies generation', 'seed_strategies', seedCommitFiles);
+    for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
+      this.commitHashesPerIteration.set(`${slotIdx}:start_1`, seedCommit);
+    }
+    this.syncCheckpointState();
     this.callbacks.onStateChange?.(this.state);
   }
 
@@ -949,17 +779,22 @@ export class DeepthinkPipelineOrchestrator {
         .slice(-1)[0];
       return {
         ...b,
-        refinedSolution: prevIter?.correctedSolution || b.refinedSolution || b.solutionAttempt,
-        solutionCritique: prevIter?.critique || b.solutionCritique,
+        refinedSolution: prevIter?.correctedSolution || (iteration > 1 ? (b.refinedSolution || b.solutionAttempt) : undefined),
+        solutionAttempt: prevIter?.correctedSolution || (iteration > 1 ? b.solutionAttempt : undefined),
+        solutionCritique: prevIter?.critique || (iteration > 1 ? b.solutionCritique : undefined),
       };
     });
 
-    await Promise.all(branches.map(async (branch) => {
+    await Promise.all(branches.map(async (branch, slotIdx) => {
       this.checkStopRequested();
       const existingIteration = branch.iterationHistory?.iterations?.find(it => it.iterationNumber === iteration);
       if (existingIteration && existingIteration.correctedSolution) {
+        if (iteration >= config.i) {
+          await this.commitBranchIterationIfNeeded(slotIdx, iteration);
+        }
         return;
       }
+      branch.status = 'processing';
       branch.correctionStatus = 'processing';
       this.callbacks.onStateChange?.(this.state);
 
@@ -976,11 +811,13 @@ export class DeepthinkPipelineOrchestrator {
         preUpdateIteration
       );
 
-      const peerCorrectionContext = buildCrossStrategyLatestCorrectionCritique(
-        branch.id,
-        peerBranchesSnapshot,
-        config.isolateBranches
-      );
+      const peerCorrectionContext = iteration > 1
+        ? buildCrossStrategyLatestCorrectionCritique(
+            branch.id,
+            peerBranchesSnapshot,
+            config.isolateBranches
+          )
+        : null;
 
       const latestHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
       const mappedPacket = latestHeartbeat
@@ -990,7 +827,8 @@ export class DeepthinkPipelineOrchestrator {
             .join('\n\n')
         : null;
 
-      const correctionPrompt = buildContextForCorrectionAgent(this.state.challenge, 
+      const correctionPrompt = buildContextForCorrectionAgent(
+        this.state.challenge,
         branch.id,
         branch.strategyText,
         historyContext,
@@ -1003,19 +841,24 @@ export class DeepthinkPipelineOrchestrator {
         const correctedOutput = await this.callAgentModelWithRetry({
           kind: 'solutionCorrection',
           promptText: correctionPrompt,
-          stepDescription: `Solution Correction for ${branch.id} (Iteration ${iteration})`,
+          stepDescription: `Execution for ${branch.id} (Iteration ${iteration})`,
           workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
           isCritical: false,
-          executionGroupId: `group-iter-${iteration}-correction`,
-          executionGroupName: `Iteration ${iteration}: Branch Corrections (Parallel)`,
+          executionGroupId: `group-iter-${iteration}-execution`,
+          executionGroupName: `Iteration ${iteration}: Branch Executions (Parallel)`,
           onTrajectoryJsonl: (jsonl) => {
             correctionTrajectoryJsonl = jsonl;
           },
         });
 
+        if (iteration === 1 || !branch.solutionAttempt) {
+          branch.solutionAttempt = correctedOutput;
+          branch.solutionAttemptDisplay = correctedOutput;
+        }
         branch.refinedSolution = correctedOutput;
         branch.refinedSolutionDisplay = correctedOutput;
         branch.correctionStatus = 'completed';
+        branch.status = 'completed';
 
         if (!branch.iterationHistory) {
           branch.iterationHistory = { iterations: [], status: 'completed' };
@@ -1034,6 +877,10 @@ export class DeepthinkPipelineOrchestrator {
             solutionTrajectoryJsonl: correctionTrajectoryJsonl,
           } as any);
         }
+
+        if (iteration >= config.i) {
+          await this.commitBranchIterationIfNeeded(slotIdx, iteration);
+        }
       } catch (err: any) {
         if (
           err instanceof PipelineStopRequestedError ||
@@ -1051,10 +898,11 @@ export class DeepthinkPipelineOrchestrator {
       return;
     }
 
-    await Promise.all(branches.map(async (branch) => {
+    await Promise.all(branches.map(async (branch, slotIdx) => {
       this.checkStopRequested();
       const existingIteration = branch.iterationHistory?.iterations?.find(it => it.iterationNumber === iteration);
       if (existingIteration && existingIteration.critique) {
+        await this.commitBranchIterationIfNeeded(slotIdx, iteration);
         return;
       }
       branch.solutionCritiqueStatus = 'processing';
@@ -1128,6 +976,8 @@ export class DeepthinkPipelineOrchestrator {
             critiqueTrajectoryJsonl,
           } as any);
         }
+
+        await this.commitBranchIterationIfNeeded(slotIdx, iteration);
       } catch (err: any) {
         if (
           err instanceof PipelineStopRequestedError ||
@@ -1147,7 +997,9 @@ export class DeepthinkPipelineOrchestrator {
     iteration: number,
     heartbeatNo: number,
     reusedDos?: DosOutput,
-    reusedDosFilePath?: string
+    reusedDosFilePath?: string,
+    extraContextFiles: DeepthinkResultsContextFile[] = [],
+    commitMessageOverride?: string
   ): Promise<void> {
     const config = this.state.runConfig;
     if (config.modulesCount === 0) {
@@ -1156,14 +1008,17 @@ export class DeepthinkPipelineOrchestrator {
 
     const previousHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
     const currentDosFilePath = reusedDosFilePath || `DOS_history/DOS_heartbeat_${String(heartbeatNo).padStart(2, '0')}.md`;
+    const heartbeatFiles: DeepthinkResultsContextFile[] = [...extraContextFiles];
 
     let dosOutput = reusedDos;
+    let dosTrajectoryJsonl = '';
     if (!dosOutput && config.modulesCount > 0) {
       const existingDos = this.state.dosOutputs?.find(
         d => d.callType === 'heartbeat' && d.iteration === iteration
       );
       if (existingDos) {
         dosOutput = existingDos.output;
+        dosTrajectoryJsonl = (existingDos as any).trajectoryJsonl || '';
       }
     }
     if (!dosOutput && config.modulesCount > 0) {
@@ -1184,7 +1039,6 @@ export class DeepthinkPipelineOrchestrator {
       };
 
       const dosPrompt = buildContextForDos(this.state.challenge, 'heartbeat', activeState, { previousHeartbeat });
-      let dosTrajectoryJsonl = '';
       const rawDos = await this.callAgentModelWithRetry({
         kind: 'dos',
         promptText: dosPrompt,
@@ -1200,30 +1054,33 @@ export class DeepthinkPipelineOrchestrator {
       });
 
       dosOutput = this.parseJsonStrict<DosOutput>(rawDos, `Heartbeat DOS (Heartbeat ${heartbeatNo})`);
-      this.state.dosOutputs.push({ callType: 'heartbeat', iteration, output: dosOutput });
+      this.state.dosOutputs.push({
+        callType: 'heartbeat',
+        iteration,
+        output: dosOutput,
+        trajectoryJsonl: dosTrajectoryJsonl,
+      } as any);
+      this.callbacks.onStateChange?.(this.state);
+    }
 
-      await this.gitHarness.writeFilesAndCommit(
-        `Heartbeat ${heartbeatNo} DOS output`,
-        [
-          {
-            path: currentDosFilePath,
-            content: `# DOS Heartbeat ${heartbeatNo} Output\n\n\`\`\`json\n${JSON.stringify(dosOutput, null, 2)}\n\`\`\``,
-          },
-          {
-            path: `DOS_history/DOS_heartbeat_${String(heartbeatNo).padStart(2, '0')}.jsonl`,
-            content: dosTrajectoryJsonl,
-          },
-        ]
+    if (!reusedDos && dosOutput) {
+      heartbeatFiles.push(
+        {
+          path: currentDosFilePath,
+          content: `# DOS Heartbeat ${heartbeatNo} Output\n\n\`\`\`json\n${JSON.stringify(dosOutput, null, 2)}\n\`\`\``,
+        },
+        {
+          path: `DOS_history/DOS_heartbeat_${String(heartbeatNo).padStart(2, '0')}.jsonl`,
+          content: dosTrajectoryJsonl,
+        }
       );
-
       if (dosOutput.module_feedback && previousHeartbeat) {
-        await this.attachRealizedDosFeedback(dosOutput.module_feedback, previousHeartbeat.heartbeat_no);
+        heartbeatFiles.push(...this.collectRealizedDosFeedbackFiles(dosOutput.module_feedback, previousHeartbeat.heartbeat_no));
       }
     }
 
     const newModules: DeepthinkModuleData[] = [];
     const realizedFeedback: RealizedModuleFeedback[] = [];
-    const heartbeatFiles: DeepthinkResultsContextFile[] = [];
 
     if (config.modulesCount > 0) {
       let parsedGen: {
@@ -1245,29 +1102,6 @@ export class DeepthinkPipelineOrchestrator {
           }
         },
       };
-
-      const priorHeartbeatEntries: Array<{
-        heartbeatNo: number;
-        dosFilePath?: string;
-        turns: ProximityTurn[];
-      }> = [];
-      for (let m = 1; m < heartbeatNo; m++) {
-        const hbBlock = this.state.heartbeats.find(h => h.heartbeat_no === m);
-        const defaultDosPath = hbBlock && hbBlock.iteration % config.j === 0
-          ? `DOS_history/DOS_global_update_${String(Math.round(hbBlock.iteration / config.j)).padStart(2, '0')}_step_ii.md`
-          : `DOS_history/DOS_heartbeat_${String(m).padStart(2, '0')}.md`;
-        const turnsForHb = Array.isArray(this.state.modulesImpactReviewHistory)
-          ? this.state.modulesImpactReviewHistory.filter(h => (h as any).roundNumber === m)
-          : [];
-        if (turnsForHb.length > 0) {
-          priorHeartbeatEntries.push({
-            heartbeatNo: m,
-            dosFilePath: hbBlock?.dosFilePath || defaultDosPath,
-            turns: turnsForHb,
-          });
-        }
-      }
-      const priorModImpactReviewHistory = buildModulesImpactReviewHistoryWithNotes(priorHeartbeatEntries);
 
       const modHistory: ProximityTurn[] = Array.isArray(this.state.modulesImpactReviewHistory)
         ? this.state.modulesImpactReviewHistory.filter(h => (h as any).roundNumber === heartbeatNo)
@@ -1292,7 +1126,6 @@ export class DeepthinkPipelineOrchestrator {
             this.state.initialStrategies,
             dosOutput,
             previousHeartbeat,
-            priorModImpactReviewHistory,
             modHistory,
             config.modulesCount,
             this.modulesUsedSoFar
@@ -1357,7 +1190,6 @@ export class DeepthinkPipelineOrchestrator {
               this.state.initialStrategies,
               dosOutput,
               previousHeartbeat,
-              priorModImpactReviewHistory,
               modHistory,
               config.modulesCount,
               this.modulesUsedSoFar
@@ -1469,44 +1301,64 @@ export class DeepthinkPipelineOrchestrator {
       await Promise.all(parsedGen.modules.slice(0, config.modulesCount).map(async (modItem, idx) => {
         this.checkStopRequested();
 
-        const testerPrompt = [
-          `# Core Challenge\n${this.state.challenge}`,
-          `Assigned Module ${modItem.module_id}:\n${modItem.text}`,
-          'Test this module within your assigned folder.',
-        ].join('\n\n');
-
         const folderIndex = idx + 1;
+        const existingMod = (this.state.modules || []).find(
+          m => m.roundNumber === heartbeatNo && m.id === modItem.module_id && m.testerStatus === 'completed'
+        );
+
+        let testResult: string;
+        let verdict: 'VALIDATED' | 'REJECTED' | 'INCONCLUSIVE';
         let testerTrajectoryJsonl = '';
-        const testResult = await this.callAgentModelWithRetry({
-          kind: 'modulesTester',
-          promptText: testerPrompt,
-          stepDescription: `Modules Tester for ${modItem.module_id}`,
-          workingDirectory: `Modules/Heartbeat-${heartbeatNo}/Module-${folderIndex}`,
-          isCritical: false,
-          executionGroupId: `group-heartbeat-${heartbeatNo}-testing`,
-          executionGroupName: `Heartbeat ${heartbeatNo}: Independent Modules Testers (Parallel)`,
-          onTrajectoryJsonl: (jsonl) => {
-            testerTrajectoryJsonl = jsonl;
-          },
-        });
 
-        let verdict: 'VALIDATED' | 'REJECTED' | 'INCONCLUSIVE' = 'INCONCLUSIVE';
-        if (testResult.includes('CLASSIFICATION: VALIDATED')) verdict = 'VALIDATED';
-        else if (testResult.includes('CLASSIFICATION: REFUTED') || testResult.includes('CLASSIFICATION: REJECTED')) verdict = 'REJECTED';
-        else if (testResult.includes('CLASSIFICATION: INCONCLUSIVE')) verdict = 'INCONCLUSIVE';
+        if (existingMod && existingMod.testerAttempt) {
+          testResult = existingMod.testerAttempt;
+          verdict = existingMod.testerVerdict || 'INCONCLUSIVE';
+          testerTrajectoryJsonl = (existingMod as any).testerTrajectoryJsonl || '';
+          newModules.push(existingMod);
+        } else {
+          const testerPrompt = [
+            `# Core Challenge\n${this.state.challenge}`,
+            `Assigned Module ${modItem.module_id}:\n${modItem.text}`,
+            'Test this module within your assigned folder.',
+          ].join('\n\n');
 
-        const modData: DeepthinkModuleData = {
-          id: modItem.module_id,
-          moduleText: modItem.text,
-          targetBranchIds: modItem.target_branches,
-          testerAttempt: testResult,
-          testerStatus: 'completed',
-          testerVerdict: verdict,
-          roundNumber: heartbeatNo,
-          globalIteration: iteration,
-        };
+          testResult = await this.callAgentModelWithRetry({
+            kind: 'modulesTester',
+            promptText: testerPrompt,
+            stepDescription: `Modules Tester for ${modItem.module_id}`,
+            workingDirectory: `Modules/Heartbeat-${heartbeatNo}/Module-${folderIndex}`,
+            isCritical: false,
+            executionGroupId: `group-heartbeat-${heartbeatNo}-testing`,
+            executionGroupName: `Heartbeat ${heartbeatNo}: Independent Modules Testers (Parallel)`,
+            onTrajectoryJsonl: (jsonl) => {
+              testerTrajectoryJsonl = jsonl;
+            },
+          });
 
-        newModules.push(modData);
+          verdict = 'INCONCLUSIVE';
+          if (testResult.includes('CLASSIFICATION: VALIDATED')) verdict = 'VALIDATED';
+          else if (testResult.includes('CLASSIFICATION: REFUTED') || testResult.includes('CLASSIFICATION: REJECTED')) verdict = 'REJECTED';
+          else if (testResult.includes('CLASSIFICATION: INCONCLUSIVE')) verdict = 'INCONCLUSIVE';
+
+          const modData: DeepthinkModuleData = {
+            id: modItem.module_id,
+            moduleText: modItem.text,
+            targetBranchIds: modItem.target_branches,
+            testerAttempt: testResult,
+            testerStatus: 'completed',
+            testerVerdict: verdict,
+            roundNumber: heartbeatNo,
+            globalIteration: iteration,
+            testerTrajectoryJsonl,
+          } as any;
+
+          newModules.push(modData);
+          this.state.modules = [
+            ...(this.state.modules || []).filter(m => !(m.roundNumber === heartbeatNo && m.id === modItem.module_id)),
+            modData,
+          ];
+          this.callbacks.onStateChange?.(this.state);
+        }
 
         heartbeatFiles.push(
           {
@@ -1542,14 +1394,21 @@ export class DeepthinkPipelineOrchestrator {
     this.state.heartbeats.push(heartbeatBlock);
     this.state.modules = newModules;
 
-    await this.gitHarness.commitHeartbeat(heartbeatNo, heartbeatFiles);
+    await this.gitHarness.commit(
+      commitMessageOverride || `Curated Context Heartbeat ${heartbeatNo}: DOS & Modules`,
+      `heartbeat${heartbeatNo}`,
+      heartbeatFiles
+    );
+    this.syncCheckpointState(iteration, heartbeatNo);
     this.callbacks.onStateChange?.(this.state);
   }
 
   public async performGlobalUpdate(iteration: number, heartbeatNo: number): Promise<void> {
     const config = this.state.runConfig;
     const windowStart = iteration - config.j + 1;
+    const nextWindowStart = iteration + 1;
     const updateNumber = Math.round(iteration / config.j);
+    const paddedGu = String(updateNumber).padStart(2, '0');
 
     this.emitEvent('GlobalUpdate', `Step i: Running Step-i DOS and BSR across branches`, 'info');
 
@@ -1560,94 +1419,108 @@ export class DeepthinkPipelineOrchestrator {
       latestCritique: s.solutionCritique || 'None',
     }));
 
-    const stepIDosContract: OutputValidationContract<DosOutput> = {
-      name: 'StepIDosContract',
-      validate: (parsed) => {
-        if (!parsed || typeof parsed !== 'object') {
-          throw new Error('Step-i DOS response must be an object.');
-        }
-      },
-    };
+    const existingStepIDos = this.state.dosOutputs?.find(
+      d => d.callType === 'step_i' && d.iteration === iteration
+    );
+    let stepIDosOutput: DosOutput;
+    let stepIDosTrajectoryJsonl = (existingStepIDos as any)?.trajectoryJsonl || '';
 
-    const stepIDosPrompt = buildContextForDos(this.state.challenge, 'step_i', activeBranchesState);
-    let stepIDosTrajectoryJsonl = '';
-    const stepIDosPromise = this.callAgentModelWithRetry({
-      kind: 'dos',
-      promptText: stepIDosPrompt,
-      stepDescription: `Step-i DOS (Global Update ${updateNumber})`,
-      jsonResponse: true,
-      isCritical: true,
-      contract: stepIDosContract,
-      executionGroupId: `group-global-update-${updateNumber}-step-i`,
-      executionGroupName: `Global Update ${updateNumber}: Step-i DOS & BSR Evaluation (Parallel)`,
-      onTrajectoryJsonl: (jsonl) => {
-        stepIDosTrajectoryJsonl = jsonl;
-      },
-    });
+    const existingBsrForUpdate = (this.state.bsrRecords || []).filter(r => r.updateNumber === updateNumber);
+    const needStepIDos = !existingStepIDos;
+    const needBsr = existingBsrForUpdate.length < this.state.initialStrategies.length;
 
-    const bsrReportsPromise = Promise.all(this.state.initialStrategies.map(async (branch) => {
-      const windowHistory = branch.iterationHistory?.iterations.filter(
-        it => it.iterationNumber >= windowStart && it.iterationNumber <= iteration
-      ) || [];
+    const stepIDosPromise = needStepIDos
+      ? (() => {
+          const stepIDosContract: OutputValidationContract<DosOutput> = {
+            name: 'StepIDosContract',
+            validate: (parsed) => {
+              if (!parsed || typeof parsed !== 'object') {
+                throw new Error('Step-i DOS response must be an object.');
+              }
+            },
+          };
+          const stepIDosPrompt = buildContextForDos(this.state.challenge, 'step_i', activeBranchesState);
+          return this.callAgentModelWithRetry({
+            kind: 'dos',
+            promptText: stepIDosPrompt,
+            stepDescription: `Step-i DOS (Global Update ${updateNumber})`,
+            jsonResponse: true,
+            isCritical: true,
+            contract: stepIDosContract,
+            executionGroupId: `group-global-update-${updateNumber}-step-i`,
+            executionGroupName: `Global Update ${updateNumber}: Step-i DOS & BSR Evaluation (Parallel)`,
+            onTrajectoryJsonl: (jsonl) => {
+              stepIDosTrajectoryJsonl = jsonl;
+            },
+          });
+        })()
+      : Promise.resolve('');
 
-      const formattedWindow = windowHistory.map(it => (
-        `Iteration ${it.iterationNumber}:\nCorrection: ${it.correctedSolution}\nCritique: ${it.critique}`
-      )).join('\n\n');
+    const bsrReportsPromise = needBsr
+      ? Promise.all(this.state.initialStrategies.map(async (branch) => {
+          const alreadyEvaluated = existingBsrForUpdate.find(r => r.branch_id === branch.id);
+          if (alreadyEvaluated) return alreadyEvaluated.report;
 
-      const ledger = this.state.branchLedgers[branch.id] || [];
+          const windowHistory = branch.iterationHistory?.iterations.filter(
+            it => it.iterationNumber >= windowStart && it.iterationNumber <= iteration
+          ) || [];
 
-      const bsrPrompt = buildContextForBsr(this.state.challenge, 
-        branch.id,
-        branch.strategyText,
-        formattedWindow,
-        branch.memoryBank,
-        ledger
-      );
+          const formattedWindow = windowHistory.map(it => (
+            `Iteration ${it.iterationNumber}:\nCorrection: ${it.correctedSolution}\nCritique: ${it.critique}`
+          )).join('\n\n');
 
-      const bsrContract: OutputValidationContract<BsrReport> = {
-        name: 'BsrReportContract',
-        validate: (parsed) => {
-          if (!parsed || parsed.branch_id !== branch.id) {
-            throw new Error(`BSR report branch_id mismatch or missing: expected ${branch.id}`);
-          }
-          if (!Array.isArray(parsed.confirmed_progress) || !Array.isArray(parsed.confirmed_regression)) {
-            throw new Error('BSR report missing progress/regression events arrays.');
-          }
-        },
-      };
+          const ledger = this.state.branchLedgers[branch.id] || [];
 
-      const rawBsr = await this.callAgentModelWithRetry({
-        kind: 'bsr',
-        promptText: bsrPrompt,
-        stepDescription: `BSR for ${branch.id} (Global Update ${updateNumber})`,
-        workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
-        jsonResponse: true,
-        isCritical: true,
-        contract: bsrContract,
-        executionGroupId: `group-global-update-${updateNumber}-step-i`,
-        executionGroupName: `Global Update ${updateNumber}: Step-i DOS & BSR Evaluation (Parallel)`,
-      });
+          const bsrPrompt = buildContextForBsr(
+            this.state.challenge,
+            branch.id,
+            branch.strategyText,
+            formattedWindow,
+            branch.memoryBank,
+            ledger
+          );
 
-      return this.parseJsonStrict<BsrReport>(rawBsr, `BSR for ${branch.id}`);
-    }));
+          const bsrContract: OutputValidationContract<BsrReport> = {
+            name: 'BsrReportContract',
+            validate: (parsed) => {
+              if (!parsed || parsed.branch_id !== branch.id) {
+                throw new Error(`BSR report branch_id mismatch or missing: expected ${branch.id}`);
+              }
+              if (!Array.isArray(parsed.confirmed_progress) || !Array.isArray(parsed.confirmed_regression)) {
+                throw new Error('BSR report missing progress/regression events arrays.');
+              }
+            },
+          };
+
+          const rawBsr = await this.callAgentModelWithRetry({
+            kind: 'bsr',
+            promptText: bsrPrompt,
+            stepDescription: `BSR for ${branch.id} (Global Update ${updateNumber})`,
+            workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
+            jsonResponse: true,
+            isCritical: true,
+            contract: bsrContract,
+            executionGroupId: `group-global-update-${updateNumber}-step-i`,
+            executionGroupName: `Global Update ${updateNumber}: Step-i DOS & BSR Evaluation (Parallel)`,
+          });
+
+          return this.parseJsonStrict<BsrReport>(rawBsr, `BSR for ${branch.id}`);
+        }))
+      : Promise.resolve(existingBsrForUpdate.map(r => r.report));
 
     const [rawStepIDos, bsrReports] = await Promise.all([stepIDosPromise, bsrReportsPromise]);
-    const stepIDosOutput = this.parseJsonStrict<DosOutput>(rawStepIDos, `Step-i DOS (Global Update ${updateNumber})`);
-    this.state.dosOutputs.push({ callType: 'step_i', iteration, output: stepIDosOutput });
-
-    await this.gitHarness.writeFilesAndCommit(
-      `Step-i DOS for Global Update ${updateNumber}`,
-      [
-        {
-          path: `DOS_history/DOS_global_update_${String(updateNumber).padStart(2, '0')}_step_i.md`,
-          content: `# Step-i DOS Output (Global Update ${updateNumber})\n\n\`\`\`json\n${JSON.stringify(stepIDosOutput, null, 2)}\n\`\`\``,
-        },
-        {
-          path: `DOS_history/DOS_global_update_${String(updateNumber).padStart(2, '0')}_step_i.jsonl`,
-          content: stepIDosTrajectoryJsonl,
-        },
-      ]
-    );
+    if (needStepIDos) {
+      stepIDosOutput = this.parseJsonStrict<DosOutput>(rawStepIDos, `Step-i DOS (Global Update ${updateNumber})`);
+      this.state.dosOutputs.push({
+        callType: 'step_i',
+        iteration,
+        output: stepIDosOutput,
+        trajectoryJsonl: stepIDosTrajectoryJsonl,
+      } as any);
+      this.callbacks.onStateChange?.(this.state);
+    } else {
+      stepIDosOutput = existingStepIDos!.output;
+    }
 
     const evaluatedRecords: Array<{ report: BsrReport; computed: BsrComputedScores }> = [];
     const consolidatedDecisions: Array<{
@@ -1670,15 +1543,16 @@ export class DeepthinkPipelineOrchestrator {
     };
 
     for (const report of bsrReports) {
-      const ledger = this.state.branchLedgers[report.branch_id] || [];
-
-      const computed = evaluateBranchState(
-        report,
-        windowStart,
-        iteration,
-        ledger,
-        bsrOptions
-      );
+      const existingRec = existingBsrForUpdate.find(r => r.branch_id === report.branch_id);
+      const computed = existingRec
+        ? existingRec.computed
+        : evaluateBranchState(
+            report,
+            windowStart,
+            iteration,
+            this.state.branchLedgers[report.branch_id] || [],
+            bsrOptions
+          );
 
       evaluatedRecords.push({ report, computed });
 
@@ -1695,141 +1569,94 @@ export class DeepthinkPipelineOrchestrator {
         eventReasons: allEventReasons,
       });
 
-      this.state.bsrRecords.push({
-        updateNumber,
-        iteration,
-        branch_id: report.branch_id,
-        report,
-        computed,
-      });
+      if (!existingRec) {
+        this.state.bsrRecords.push({
+          updateNumber,
+          iteration,
+          branch_id: report.branch_id,
+          report,
+          computed,
+        });
+      }
+    }
+    if (needBsr) {
+      this.callbacks.onStateChange?.(this.state);
     }
 
-    const changedSlots = consolidatedDecisions.filter(d => d.decision !== 'CONTINUE');
-    if (changedSlots.length > 0) {
-      const priorProximityHistory = buildStrategyProximityHistoryWithNotes(
-        this.state.strategyProximityHistory || [],
-        this.globalUpdateStrategyHistories,
-        config.j
-      );
+    const rolloutAlreadyDone = this.state.initialStrategies.every(
+      (_, slotIdx) => this.commitHashesPerIteration.has(`${slotIdx}:start_${nextWindowStart}`)
+    );
 
-      const evolveSlotIds = consolidatedDecisions.filter(d => d.decision === 'EVOLVE').map(d => d.slotId);
-      const pruneSlotIds = consolidatedDecisions.filter(d => d.decision === 'PRUNE').map(d => d.slotId);
+    const newBranchSlotIds: string[] = [];
+    const survivingBranches: DeepthinkMainStrategyData[] = [];
 
-      const stratUpdateContract: OutputValidationContract<{
-        evolved_slots?: Array<{ slot_id: string; updated_strategy_text: string }>;
-        pruned_slots?: Array<{ slot_id: string; new_strategy_text: string }>;
-      }> = {
-        name: 'SurgicalGlobalUpdateStrategyContract',
-        validate: (parsed) => {
-          if (!parsed) throw new Error('Empty surgical strategy update.');
-          const evolved = parsed.evolved_slots || [];
-          const pruned = parsed.pruned_slots || [];
-
-          for (const evId of evolveSlotIds) {
-            if (!evolved.some(e => e.slot_id === evId && e.updated_strategy_text?.trim())) {
-              throw new Error(`Missing required updated strategy for EVOLVE slot ${evId}.`);
-            }
-          }
-          for (const prId of pruneSlotIds) {
-            if (!pruned.some(p => p.slot_id === prId && p.new_strategy_text?.trim())) {
-              throw new Error(`Missing required new strategy for PRUNE slot ${prId}.`);
-            }
-          }
-          const allTouched = [...evolved.map(e => e.slot_id), ...pruned.map(p => p.slot_id)];
-          for (const id of allTouched) {
-            if (!evolveSlotIds.includes(id) && !pruneSlotIds.includes(id)) {
-              throw new Error(`Surgical update contained unexpected slot ID ${id}. CONTINUE slots cannot be modified.`);
-            }
-          }
+    if (!rolloutAlreadyDone) {
+      const rolloutFiles: DeepthinkResultsContextFile[] = [
+        {
+          path: `DOS_history/DOS_global_update_${paddedGu}_step_i.md`,
+          content: `# Step-i DOS Output (Global Update ${updateNumber})\n\n\`\`\`json\n${JSON.stringify(stepIDosOutput, null, 2)}\n\`\`\``,
         },
-      };
+        {
+          path: `DOS_history/DOS_global_update_${paddedGu}_step_i.jsonl`,
+          content: stepIDosTrajectoryJsonl,
+        },
+      ];
 
-      const existingGuHistory = this.globalUpdateStrategyHistories.find(h => h.updateNumber === updateNumber);
-      const currentGuTurns: ProximityTurn[] = existingGuHistory ? [...existingGuHistory.turns] : [];
-      let parsedStrat: {
-        evolved_slots?: Array<{ slot_id: string; updated_strategy_text: string }>;
-        pruned_slots?: Array<{ slot_id: string; new_strategy_text: string }>;
-      } = {};
+      const changedSlots = consolidatedDecisions.filter(d => d.decision !== 'CONTINUE');
+      if (changedSlots.length > 0) {
+        const evolveSlotIds = consolidatedDecisions.filter(d => d.decision === 'EVOLVE').map(d => d.slotId);
+        const pruneSlotIds = consolidatedDecisions.filter(d => d.decision === 'PRUNE').map(d => d.slotId);
 
-      const targetGuProximityReviews = Math.max(0, config.strategyProximityLoops ?? 1);
-      const guGenConversation = createLoopAgentConversation(this.state.id, 'initialStrategy');
-      const guProxConversation = createLoopAgentConversation(this.state.id, 'strategyProximity');
-
-      for (let reviewIndex = 0; reviewIndex <= targetGuProximityReviews; reviewIndex++) {
-        const turn = reviewIndex + 1;
-        this.checkStopRequested();
-
-        let rawStratUpdate: string;
-        const existingGen = currentGuTurns.find(t => t.role === 'generator' && t.turnNumber === turn);
-        if (existingGen) {
-          rawStratUpdate = existingGen.content;
-        } else {
-          const stratPrompt = buildContextForStrategyGlobalUpdate(
-            this.state.challenge,
-            updateNumber,
-            config.j,
-            this.state.initialStrategies,
-            consolidatedDecisions,
-            stepIDosOutput,
-            this.strategiesUsedSoFar,
-            priorProximityHistory,
-            currentGuTurns,
-            config.strategiesCount
-          );
-
-          let guGenTrajectoryJsonl = '';
-          rawStratUpdate = await this.callAgentModelWithRetry({
-            kind: 'initialStrategy',
-            promptText: stratPrompt,
-            stepDescription: `Strategy Generator Update (Global Update ${updateNumber}, Turn ${turn})`,
-            jsonResponse: true,
-            isCritical: true,
-            contract: stratUpdateContract,
-            executionGroupId: `group-global-update-${updateNumber}-strategies`,
-            executionGroupName: `Global Update ${updateNumber}: Strategy Revision Loop`,
-            conversation: guGenConversation,
-            onTrajectoryJsonl: (jsonl) => {
-              guGenTrajectoryJsonl = jsonl;
-            },
-          });
-
-          if (reviewIndex < targetGuProximityReviews) {
-            appendPeerSubmission(
-              guProxConversation,
-              `### Strategy Generator (Turn ${turn})`,
-              rawStratUpdate,
-              'Strategy Proximity Reviewer'
-            );
-          }
-
-          currentGuTurns.push({
-            role: 'generator',
-            content: rawStratUpdate,
-            timestamp: Date.now(),
-            turnNumber: turn,
-            trajectoryJsonl: guGenTrajectoryJsonl,
-          } as any);
-
-          const histIdx = this.globalUpdateStrategyHistories.findIndex(h => h.updateNumber === updateNumber);
-          if (histIdx >= 0) {
-            this.globalUpdateStrategyHistories[histIdx].turns = [...currentGuTurns];
-          } else {
-            this.globalUpdateStrategyHistories.push({ updateNumber, turns: [...currentGuTurns] });
-          }
-          (this.state as any).globalUpdateStrategyHistories = this.globalUpdateStrategyHistories;
-          this.callbacks.onStateChange?.(this.state);
-        }
-
-        parsedStrat = this.parseJsonStrict<{
+        const stratUpdateContract: OutputValidationContract<{
           evolved_slots?: Array<{ slot_id: string; updated_strategy_text: string }>;
           pruned_slots?: Array<{ slot_id: string; new_strategy_text: string }>;
-        }>(rawStratUpdate, `Strategy Generator Update (Global Update ${updateNumber}, Turn ${turn})`);
+        }> = {
+          name: 'SurgicalGlobalUpdateStrategyContract',
+          validate: (parsed) => {
+            if (!parsed) throw new Error('Empty surgical strategy update.');
+            const evolved = parsed.evolved_slots || [];
+            const pruned = parsed.pruned_slots || [];
 
-        if (reviewIndex < targetGuProximityReviews) {
-          const existingProx = currentGuTurns.find(t => t.role === 'proximity' && t.turnNumber === turn);
-          if (existingProx) {
+            for (const evId of evolveSlotIds) {
+              if (!evolved.some(e => e.slot_id === evId && e.updated_strategy_text?.trim())) {
+                throw new Error(`Missing required updated strategy for EVOLVE slot ${evId}.`);
+              }
+            }
+            for (const prId of pruneSlotIds) {
+              if (!pruned.some(p => p.slot_id === prId && p.new_strategy_text?.trim())) {
+                throw new Error(`Missing required new strategy for PRUNE slot ${prId}.`);
+              }
+            }
+            const allTouched = [...evolved.map(e => e.slot_id), ...pruned.map(p => p.slot_id)];
+            for (const id of allTouched) {
+              if (!evolveSlotIds.includes(id) && !pruneSlotIds.includes(id)) {
+                throw new Error(`Surgical update contained unexpected slot ID ${id}. CONTINUE slots cannot be modified.`);
+              }
+            }
+          },
+        };
+
+        const existingGuHistory = this.globalUpdateStrategyHistories.find(h => h.updateNumber === updateNumber);
+        const currentGuTurns: ProximityTurn[] = existingGuHistory ? [...existingGuHistory.turns] : [];
+        let parsedStrat: {
+          evolved_slots?: Array<{ slot_id: string; updated_strategy_text: string }>;
+          pruned_slots?: Array<{ slot_id: string; new_strategy_text: string }>;
+        } = {};
+
+        const targetGuProximityReviews = Math.max(0, config.strategyProximityLoops ?? 1);
+        const guGenConversation = createLoopAgentConversation(this.state.id, 'initialStrategy');
+        const guProxConversation = createLoopAgentConversation(this.state.id, 'strategyProximity');
+
+        for (let reviewIndex = 0; reviewIndex <= targetGuProximityReviews; reviewIndex++) {
+          const turn = reviewIndex + 1;
+          this.checkStopRequested();
+
+          let rawStratUpdate: string;
+          const existingGen = currentGuTurns.find(t => t.role === 'generator' && t.turnNumber === turn);
+          if (existingGen) {
+            rawStratUpdate = existingGen.content;
           } else {
-            const proxPrompt = buildContextForStrategyGlobalUpdate(
+            const stratPrompt = buildContextForStrategyGlobalUpdate(
               this.state.challenge,
               updateNumber,
               config.j,
@@ -1837,38 +1664,41 @@ export class DeepthinkPipelineOrchestrator {
               consolidatedDecisions,
               stepIDosOutput,
               this.strategiesUsedSoFar,
-              priorProximityHistory,
               currentGuTurns,
               config.strategiesCount
             );
 
-            let guProxTrajectoryJsonl = '';
-            const proxOutput = await this.callAgentModelWithRetry({
-              kind: 'strategyProximity',
-              promptText: proxPrompt,
-              stepDescription: `Strategy Proximity Review (Global Update ${updateNumber}, Turn ${turn})`,
+            let guGenTrajectoryJsonl = '';
+            rawStratUpdate = await this.callAgentModelWithRetry({
+              kind: 'initialStrategy',
+              promptText: stratPrompt,
+              stepDescription: `Strategy Generator Update (Global Update ${updateNumber}, Turn ${turn})`,
+              jsonResponse: true,
               isCritical: true,
+              contract: stratUpdateContract,
               executionGroupId: `group-global-update-${updateNumber}-strategies`,
               executionGroupName: `Global Update ${updateNumber}: Strategy Revision Loop`,
-              conversation: guProxConversation,
+              conversation: guGenConversation,
               onTrajectoryJsonl: (jsonl) => {
-                guProxTrajectoryJsonl = jsonl;
+                guGenTrajectoryJsonl = jsonl;
               },
             });
 
-            appendPeerSubmission(
-              guGenConversation,
-              `### Strategy Proximity Reviewer (Turn ${turn})`,
-              proxOutput,
-              'Strategy Generator'
-            );
+            if (reviewIndex < targetGuProximityReviews) {
+              appendPeerSubmission(
+                guProxConversation,
+                `### Strategy Generator (Turn ${turn})`,
+                rawStratUpdate,
+                'Strategy Proximity Reviewer'
+              );
+            }
 
             currentGuTurns.push({
-              role: 'proximity',
-              content: proxOutput,
+              role: 'generator',
+              content: rawStratUpdate,
               timestamp: Date.now(),
               turnNumber: turn,
-              trajectoryJsonl: guProxTrajectoryJsonl,
+              trajectoryJsonl: guGenTrajectoryJsonl,
             } as any);
 
             const histIdx = this.globalUpdateStrategyHistories.findIndex(h => h.updateNumber === updateNumber);
@@ -1880,177 +1710,270 @@ export class DeepthinkPipelineOrchestrator {
             (this.state as any).globalUpdateStrategyHistories = this.globalUpdateStrategyHistories;
             this.callbacks.onStateChange?.(this.state);
           }
-        }
-      }
 
-      const histIdx = this.globalUpdateStrategyHistories.findIndex(h => h.updateNumber === updateNumber);
-      if (histIdx >= 0) {
-        this.globalUpdateStrategyHistories[histIdx].turns = currentGuTurns;
-      } else {
-        this.globalUpdateStrategyHistories.push({
-          updateNumber,
-          turns: currentGuTurns,
-        });
-      }
+          parsedStrat = this.parseJsonStrict<{
+            evolved_slots?: Array<{ slot_id: string; updated_strategy_text: string }>;
+            pruned_slots?: Array<{ slot_id: string; new_strategy_text: string }>;
+          }>(rawStratUpdate, `Strategy Generator Update (Global Update ${updateNumber}, Turn ${turn})`);
 
-      if (parsedStrat.evolved_slots) {
-        for (const ev of parsedStrat.evolved_slots) {
-          const branch = this.state.initialStrategies.find(b => b.id === ev.slot_id);
-          if (branch) {
-            branch.strategyText = ev.updated_strategy_text;
-            if (!branch.strategyTextHistory) branch.strategyTextHistory = [];
-            branch.strategyTextHistory.push({ iteration, text: ev.updated_strategy_text });
-            this.strategiesUsedSoFar.push({
-              slotId: branch.id,
-              iterationFinalized: iteration,
-              text: ev.updated_strategy_text,
-            });
+          if (reviewIndex < targetGuProximityReviews) {
+            const existingProx = currentGuTurns.find(t => t.role === 'proximity' && t.turnNumber === turn);
+            if (!existingProx) {
+              const proxPrompt = buildContextForStrategyGlobalUpdate(
+                this.state.challenge,
+                updateNumber,
+                config.j,
+                this.state.initialStrategies,
+                consolidatedDecisions,
+                stepIDosOutput,
+                this.strategiesUsedSoFar,
+                currentGuTurns,
+                config.strategiesCount
+              );
+
+              let guProxTrajectoryJsonl = '';
+              const proxOutput = await this.callAgentModelWithRetry({
+                kind: 'strategyProximity',
+                promptText: proxPrompt,
+                stepDescription: `Strategy Proximity Review (Global Update ${updateNumber}, Turn ${turn})`,
+                isCritical: true,
+                executionGroupId: `group-global-update-${updateNumber}-strategies`,
+                executionGroupName: `Global Update ${updateNumber}: Strategy Revision Loop`,
+                conversation: guProxConversation,
+                onTrajectoryJsonl: (jsonl) => {
+                  guProxTrajectoryJsonl = jsonl;
+                },
+              });
+
+              appendPeerSubmission(
+                guGenConversation,
+                `### Strategy Proximity Reviewer (Turn ${turn})`,
+                proxOutput,
+                'Strategy Generator'
+              );
+
+              currentGuTurns.push({
+                role: 'proximity',
+                content: proxOutput,
+                timestamp: Date.now(),
+                turnNumber: turn,
+                trajectoryJsonl: guProxTrajectoryJsonl,
+              } as any);
+
+              const histIdx = this.globalUpdateStrategyHistories.findIndex(h => h.updateNumber === updateNumber);
+              if (histIdx >= 0) {
+                this.globalUpdateStrategyHistories[histIdx].turns = [...currentGuTurns];
+              } else {
+                this.globalUpdateStrategyHistories.push({ updateNumber, turns: [...currentGuTurns] });
+              }
+              (this.state as any).globalUpdateStrategyHistories = this.globalUpdateStrategyHistories;
+              this.callbacks.onStateChange?.(this.state);
+            }
           }
         }
-      }
 
-      if (parsedStrat.pruned_slots) {
-        for (const pr of parsedStrat.pruned_slots) {
-          const branch = this.state.initialStrategies.find(b => b.id === pr.slot_id);
-          if (branch) {
-            branch.strategyText = pr.new_strategy_text;
-            branch.strategyTextHistory = [{ iteration: iteration, text: pr.new_strategy_text }];
-            this.strategiesUsedSoFar.push({
-              slotId: branch.id,
-              iterationFinalized: iteration,
-              text: pr.new_strategy_text,
-            });
+        const histIdx = this.globalUpdateStrategyHistories.findIndex(h => h.updateNumber === updateNumber);
+        if (histIdx >= 0) {
+          this.globalUpdateStrategyHistories[histIdx].turns = currentGuTurns;
+        } else {
+          this.globalUpdateStrategyHistories.push({
+            updateNumber,
+            turns: currentGuTurns,
+          });
+        }
+
+        if (parsedStrat.evolved_slots) {
+          for (const ev of parsedStrat.evolved_slots) {
+            const branch = this.state.initialStrategies.find(b => b.id === ev.slot_id);
+            if (branch) {
+              branch.strategyText = ev.updated_strategy_text;
+              if (!branch.strategyTextHistory) branch.strategyTextHistory = [];
+              branch.strategyTextHistory.push({ iteration, text: ev.updated_strategy_text });
+              this.strategiesUsedSoFar.push({
+                slotId: branch.id,
+                iterationFinalized: iteration,
+                text: ev.updated_strategy_text,
+              });
+            }
           }
         }
+
+        if (parsedStrat.pruned_slots) {
+          for (const pr of parsedStrat.pruned_slots) {
+            const branch = this.state.initialStrategies.find(b => b.id === pr.slot_id);
+            if (branch) {
+              branch.strategyText = pr.new_strategy_text;
+              branch.strategyTextHistory = [{ iteration, text: pr.new_strategy_text }];
+              this.strategiesUsedSoFar.push({
+                slotId: branch.id,
+                iterationFinalized: iteration,
+                text: pr.new_strategy_text,
+              });
+            }
+          }
+        }
+
+        const guGenTurns = currentGuTurns.filter(t => t.role === 'generator');
+        const guProxTurns = currentGuTurns.filter(t => t.role === 'proximity');
+        const guGenMarkdown = [
+          `# Global Update ${updateNumber} Strategy Generation History`,
+          ...guGenTurns.map(t => `### GENERATOR (Turn ${t.turnNumber ?? 1})\n${t.content}`),
+        ].join('\n\n');
+        const guProxMarkdown = [
+          `# Global Update ${updateNumber} Strategy Proximity Review History`,
+          ...guProxTurns.map(t => `### PROXIMITY (Turn ${t.turnNumber ?? 1})\n${t.content}`),
+        ].join('\n\n');
+        const guGenJsonl = buildLoopRoleTrajectoryJsonl(
+          guGenTurns as any,
+          !!config.deepthinkCodeExecutionEnabled
+        );
+        const guProxJsonl = buildLoopRoleTrajectoryJsonl(
+          guProxTurns as any,
+          !!config.deepthinkCodeExecutionEnabled
+        );
+
+        rolloutFiles.push(
+          { path: `strategies_history/strategies_global_update${paddedGu}.md`, content: guGenMarkdown },
+          { path: `strategies_history/strategies_global_update${paddedGu}.jsonl`, content: guGenJsonl },
+          { path: `strategies_history/strategies_global_update${paddedGu}_proximity_review.md`, content: guProxMarkdown },
+          { path: `strategies_history/strategies_global_update${paddedGu}_proximity_review.jsonl`, content: guProxJsonl },
+          this.buildStrategiesUsedSoFarFile()
+        );
       }
 
-      const guGenTurns = currentGuTurns.filter(t => t.role === 'generator');
-      const guProxTurns = currentGuTurns.filter(t => t.role === 'proximity');
-      const guGenMarkdown = [
-        `# Global Update ${updateNumber} Strategy Generation History`,
-        ...guGenTurns.map(t => `### GENERATOR (Turn ${t.turnNumber ?? 1})\n${t.content}`),
-      ].join('\n\n');
-      const guProxMarkdown = [
-        `# Global Update ${updateNumber} Strategy Proximity Review History`,
-        ...guProxTurns.map(t => `### PROXIMITY (Turn ${t.turnNumber ?? 1})\n${t.content}`),
-      ].join('\n\n');
-      const guGenJsonl = buildLoopRoleTrajectoryJsonl(
-        guGenTurns as any,
-        !!config.deepthinkCodeExecutionEnabled
-      );
-      const guProxJsonl = buildLoopRoleTrajectoryJsonl(
-        guProxTurns as any,
-        !!config.deepthinkCodeExecutionEnabled
-      );
-      const paddedGu = String(updateNumber).padStart(2, '0');
-      await this.gitHarness.commitStrategyHistory(
-        `strategies_global_update${paddedGu}.md`,
-        guGenMarkdown,
-        guGenJsonl
-      );
-      await this.gitHarness.commitStrategyHistory(
-        `strategies_global_update${paddedGu}_proximity_review.md`,
-        guProxMarkdown,
-        guProxJsonl
-      );
-      await this.updateStrategiesUsedSoFarFile();
-    }
+      for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
+        const branch = this.state.initialStrategies[slotIdx];
+        const dec = consolidatedDecisions.find(d => d.slotId === branch.id);
 
-    const newBranchSlotIds: string[] = [];
-    const survivingBranches: DeepthinkMainStrategyData[] = [];
-
-    for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
-      const branch = this.state.initialStrategies[slotIdx];
-      const dec = consolidatedDecisions.find(d => d.slotId === branch.id);
-
-      if (!dec || dec.decision === 'CONTINUE') {
-        survivingBranches.push(branch);
-        this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
-      } else if (dec.decision === 'EVOLVE') {
-        survivingBranches.push(branch);
-        if (dec.form === 'rollback' && dec.rollbackTo !== undefined) {
+        if (!dec || dec.decision === 'CONTINUE') {
+          survivingBranches.push(branch);
           this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
-          const cutoffIteration = dec.rollbackTo === 'window_start'
-            ? windowStart - 1
-            : (dec.rollbackTo as number);
+        } else if (dec.decision === 'EVOLVE') {
+          survivingBranches.push(branch);
+          if (dec.form === 'rollback' && dec.rollbackTo !== undefined) {
+            this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
+            const cutoffIteration = dec.rollbackTo === 'window_start'
+              ? windowStart - 1
+              : (dec.rollbackTo as number);
 
-          if (dec.rollbackTo === 'window_start') {
-            const startCommit = this.commitHashesPerIteration.get(`${slotIdx}:start_${windowStart}`);
-            if (startCommit) {
-              await this.gitHarness.rollbackStrategy(slotIdx, startCommit);
+            if (dec.rollbackTo === 'window_start') {
+              const startCommit = this.commitHashesPerIteration.get(`${slotIdx}:start_${windowStart}`);
+              if (startCommit) {
+                await this.gitHarness.rollbackStrategy(slotIdx, startCommit);
+              }
+            } else {
+              const commitKey = `${slotIdx}:${dec.rollbackTo}`;
+              const targetCommit = this.commitHashesPerIteration.get(commitKey);
+              if (targetCommit) {
+                await this.gitHarness.rollbackStrategy(slotIdx, targetCommit);
+              }
+            }
+
+            this.state.branchLedgers[branch.id] = (this.state.branchLedgers[branch.id] || []).filter(
+              e => e.iteration <= cutoffIteration
+            );
+
+            if (branch.iterationHistory?.iterations) {
+              branch.iterationHistory.iterations = branch.iterationHistory.iterations.filter(
+                it => it.iterationNumber <= cutoffIteration
+              );
+            }
+            if (this.state.solutionCritiques) {
+              this.state.solutionCritiques = this.state.solutionCritiques.filter(
+                c => c.mainStrategyId !== branch.id || (c.globalIteration ?? 0) <= cutoffIteration
+              );
+            }
+            const lastRetained = branch.iterationHistory?.iterations?.[branch.iterationHistory.iterations.length - 1];
+            branch.refinedSolution = lastRetained?.correctedSolution;
+            branch.refinedSolutionDisplay = lastRetained?.correctedSolutionDisplay ?? lastRetained?.correctedSolution;
+            branch.refinedSolutionExecutionTraceText = lastRetained?.correctedSolutionExecutionTraceText;
+            branch.solutionCritique = lastRetained?.critique;
+            branch.solutionCritiqueDisplay = lastRetained?.critiqueDisplay ?? lastRetained?.critique;
+            branch.solutionCritiqueExecutionTraceText = lastRetained?.critiqueExecutionTraceText;
+            if (cutoffIteration < 1) {
+              branch.solutionAttempt = undefined;
+              branch.solutionAttemptDisplay = undefined;
+              branch.solutionAttemptExecutionTraceText = undefined;
             }
           } else {
-            const commitKey = `${slotIdx}:${dec.rollbackTo}`;
-            const targetCommit = this.commitHashesPerIteration.get(commitKey);
-            if (targetCommit) {
-              await this.gitHarness.rollbackStrategy(slotIdx, targetCommit);
-            }
+            this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
           }
-
-          this.state.branchLedgers[branch.id] = (this.state.branchLedgers[branch.id] || []).filter(
-            e => e.iteration <= cutoffIteration
-          );
-
-          if (branch.iterationHistory?.iterations) {
-            branch.iterationHistory.iterations = branch.iterationHistory.iterations.filter(
-              it => it.iterationNumber <= cutoffIteration
-            );
-          }
-          if (this.state.solutionCritiques) {
-            this.state.solutionCritiques = this.state.solutionCritiques.filter(
-              c => c.mainStrategyId !== branch.id || (c.globalIteration ?? 0) <= cutoffIteration
-            );
-          }
-          const lastRetained = branch.iterationHistory?.iterations?.[branch.iterationHistory.iterations.length - 1];
-          branch.refinedSolution = lastRetained?.correctedSolution;
-          branch.refinedSolutionDisplay = lastRetained?.correctedSolutionDisplay ?? lastRetained?.correctedSolution;
-          branch.refinedSolutionExecutionTraceText = lastRetained?.correctedSolutionExecutionTraceText;
-          branch.solutionCritique = lastRetained?.critique;
-          branch.solutionCritiqueDisplay = lastRetained?.critiqueDisplay ?? lastRetained?.critique;
-          branch.solutionCritiqueExecutionTraceText = lastRetained?.critiqueExecutionTraceText;
-          if (cutoffIteration < 1) {
-            branch.solutionAttempt = undefined;
-            branch.solutionAttemptDisplay = undefined;
-            branch.solutionAttemptExecutionTraceText = undefined;
-          }
-        } else {
-          this.recordWindowEventsToLedger(branch.id, evaluatedRecords.find(r => r.report.branch_id === branch.id)?.report);
-        }
-      } else if (dec.decision === 'PRUNE') {
-        await this.gitHarness.pruneStrategy(slotIdx);
-        if (!this.state.prunedBranches) this.state.prunedBranches = [];
-        this.state.prunedBranches.push({
-          id: `${branch.id}-pruned-it${iteration}`,
-          originalId: branch.id,
-          slotIndex: slotIdx,
-          strategyText: branch.strategyText,
-          strategyTextHistory: [...(branch.strategyTextHistory || [])],
-          prunedAtIteration: iteration,
-          reason: dec.eventReasons?.join('; ') || 'Pruned by BSR decision',
-          status: 'completed',
-          solutionAttempt: branch.solutionAttempt,
-          solutionAttemptDisplay: branch.solutionAttemptDisplay,
-          solutionAttemptExecutionTraceText: branch.solutionAttemptExecutionTraceText,
-          solutionCritique: branch.solutionCritique,
-          solutionCritiqueDisplay: branch.solutionCritiqueDisplay,
-          solutionCritiqueExecutionTraceText: branch.solutionCritiqueExecutionTraceText,
-          solutionCritiqueStatus: branch.solutionCritiqueStatus,
-          correctionStatus: branch.correctionStatus,
-          iterationHistory: {
-            iterations: [...(branch.iterationHistory?.iterations || [])],
+        } else if (dec.decision === 'PRUNE') {
+          await this.gitHarness.pruneStrategy(slotIdx);
+          if (!this.state.prunedBranches) this.state.prunedBranches = [];
+          this.state.prunedBranches.push({
+            id: `${branch.id}-pruned-it${iteration}`,
+            originalId: branch.id,
+            slotIndex: slotIdx,
+            strategyText: branch.strategyText,
+            strategyTextHistory: [...(branch.strategyTextHistory || [])],
+            prunedAtIteration: iteration,
+            reason: dec.eventReasons?.join('; ') || 'Pruned by BSR decision',
             status: 'completed',
-          },
+            solutionAttempt: branch.solutionAttempt,
+            solutionAttemptDisplay: branch.solutionAttemptDisplay,
+            solutionAttemptExecutionTraceText: branch.solutionAttemptExecutionTraceText,
+            solutionCritique: branch.solutionCritique,
+            solutionCritiqueDisplay: branch.solutionCritiqueDisplay,
+            solutionCritiqueExecutionTraceText: branch.solutionCritiqueExecutionTraceText,
+            solutionCritiqueStatus: branch.solutionCritiqueStatus,
+            correctionStatus: branch.correctionStatus,
+            iterationHistory: {
+              iterations: [...(branch.iterationHistory?.iterations || [])],
+              status: 'completed',
+            },
+          });
+          this.state.branchLedgers[branch.id] = [];
+          branch.iterationHistory = { iterations: [], status: 'idle' };
+          branch.memoryBank = undefined;
+          branch.solutionAttempt = undefined;
+          branch.solutionAttemptDisplay = undefined;
+          branch.solutionAttemptExecutionTraceText = undefined;
+          branch.refinedSolution = undefined;
+          branch.refinedSolutionDisplay = undefined;
+          branch.refinedSolutionExecutionTraceText = undefined;
+          branch.solutionCritique = undefined;
+          branch.solutionCritiqueDisplay = undefined;
+          branch.solutionCritiqueExecutionTraceText = undefined;
+          newBranchSlotIds.push(branch.id);
+        }
+
+        rolloutFiles.push({
+          path: `Strategy-${slotIdx + 1}/strategy.md`,
+          content: `# Strategy ${slotIdx + 1} (${branch.id})\n\n${branch.strategyText}\n`,
         });
-        this.state.branchLedgers[branch.id] = [];
-        branch.iterationHistory = { iterations: [], status: 'idle' };
-        branch.memoryBank = undefined;
-        newBranchSlotIds.push(branch.id);
+      }
+
+      const rolloutCommit = await this.gitHarness.commit(
+        `Global Update ${updateNumber}: Step-i DOS, strategy updates, and rollout`,
+        `gu${updateNumber}_rollout`,
+        rolloutFiles
+      );
+      for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
+        this.commitHashesPerIteration.set(`${slotIdx}:start_${nextWindowStart}`, rolloutCommit);
+      }
+      this.syncCheckpointState(iteration, heartbeatNo);
+      this.callbacks.onStateChange?.(this.state);
+    } else {
+      for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
+        const branch = this.state.initialStrategies[slotIdx];
+        const dec = consolidatedDecisions.find(d => d.slotId === branch.id);
+        if (dec?.decision === 'PRUNE') {
+          newBranchSlotIds.push(branch.id);
+        } else {
+          survivingBranches.push(branch);
+        }
       }
     }
 
     const distillationPromise = Promise.all(survivingBranches.map(async (branch) => {
+      const slotIdx = this.state.initialStrategies.findIndex(b => b.id === branch.id);
       const dec = consolidatedDecisions.find(d => d.slotId === branch.id);
       if (dec?.form === 'rollback' && dec.rollbackTo === 'window_start') {
+        return;
+      }
+      const memCommitKey = `${slotIdx}:gu_${updateNumber}_mem`;
+      if (this.commitHashesPerIteration.has(memCommitKey)) {
         return;
       }
 
@@ -2075,7 +1998,7 @@ export class DeepthinkPipelineOrchestrator {
         kind: 'memoryBank',
         promptText: memContext,
         stepDescription: `Memory Bank Distillation for ${branch.id} (Update ${updateNumber})`,
-        workingDirectory: `Strategy-${branch.id.replace(/\D/g, '')}`,
+        workingDirectory: `Strategy-${slotIdx + 1}`,
         isCritical: false,
         executionGroupId: `group-global-update-${updateNumber}-distillation`,
         executionGroupName: `Global Update ${updateNumber}: Distillation & New Branch Seeding (Parallel)`,
@@ -2086,194 +2009,235 @@ export class DeepthinkPipelineOrchestrator {
 
       branch.memoryBank = memOutput;
 
-      await this.gitHarness.writeFilesAndCommit(
-        `Memory Bank distillation for ${branch.id} at update ${updateNumber}`,
+      const memCommit = await this.gitHarness.commit(
+        `Commit Strategy-${slotIdx + 1} memory bank at Global Update ${updateNumber}`,
+        `gu${updateNumber}_mem_slot${slotIdx}`,
         [
           {
-            path: `Strategy-${branch.id.replace(/\D/g, '')}/history/memory_bank_${String(updateNumber).padStart(2, '0')}.md`,
+            path: `Strategy-${slotIdx + 1}/history/memory_bank_${paddedGu}.md`,
             content: memOutput,
           },
           {
-            path: `Strategy-${branch.id.replace(/\D/g, '')}/history/memory_bank_${String(updateNumber).padStart(2, '0')}.jsonl`,
+            path: `Strategy-${slotIdx + 1}/history/memory_bank_${paddedGu}.jsonl`,
             content: memTrajectoryJsonl,
           },
         ]
       );
+      this.commitHashesPerIteration.set(memCommitKey, memCommit);
+      this.commitHashesPerIteration.set(`${slotIdx}:start_${nextWindowStart}`, memCommit);
+      this.syncCheckpointState(iteration, heartbeatNo);
+      this.callbacks.onStateChange?.(this.state);
     }));
 
     const newBranchesPromise = Promise.all(newBranchSlotIds.map(async (slotId) => {
       const branch = this.state.initialStrategies.find(b => b.id === slotId)!;
       const slotIndex = this.state.initialStrategies.findIndex(b => b.id === slotId);
+      const newBranchCommitKey = `${slotIndex}:gu_${updateNumber}_new`;
+      if (this.commitHashesPerIteration.has(newBranchCommitKey)) {
+        return;
+      }
 
-      const attemptPrompt = [
-        `# Core Challenge\n${this.state.challenge}`,
-        `Assigned Strategy: ${branch.id}\n${branch.strategyText}`,
-        `First execution for replacement branch in slot ${slotId}.`,
-      ].join('\n\n');
+      const existingIterEntry = branch.iterationHistory?.iterations?.find(it => it.iterationNumber === iteration);
+      if (!existingIterEntry || !existingIterEntry.correctedSolution) {
+        const executionPrompt = buildContextForCorrectionAgent(
+          this.state.challenge,
+          branch.id,
+          branch.strategyText,
+          '',
+          null,
+          null
+        );
 
-      let attemptTrajectoryJsonl = '';
-      const attemptOutput = await this.callAgentModelWithRetry({
-        kind: 'solutionAttempt',
-        promptText: attemptPrompt,
-        stepDescription: `First Execution for New Branch in ${slotId}`,
-        workingDirectory: `Strategy-${slotIndex + 1}`,
-        isCritical: false,
-        executionGroupId: `group-global-update-${updateNumber}-distillation`,
-        executionGroupName: `Global Update ${updateNumber}: Distillation & New Branch Seeding (Parallel)`,
-        onTrajectoryJsonl: (jsonl) => {
-          attemptTrajectoryJsonl = jsonl;
-        },
-      });
+        let executionTrajectoryJsonl = '';
+        const executionOutput = await this.callAgentModelWithRetry({
+          kind: 'solutionCorrection',
+          promptText: executionPrompt,
+          stepDescription: `First Execution for New Branch in ${slotId}`,
+          workingDirectory: `Strategy-${slotIndex + 1}`,
+          isCritical: false,
+          executionGroupId: `group-global-update-${updateNumber}-distillation`,
+          executionGroupName: `Global Update ${updateNumber}: Distillation & New Branch Seeding (Parallel)`,
+          onTrajectoryJsonl: (jsonl) => {
+            executionTrajectoryJsonl = jsonl;
+          },
+        });
 
-      branch.solutionAttempt = attemptOutput;
-      branch.refinedSolution = attemptOutput;
-      branch.iterationHistory = {
-        iterations: [{
-          iterationNumber: iteration,
-          correctedSolution: attemptOutput,
-          critique: '',
-          timestamp: Date.now(),
-          solutionTrajectoryJsonl: attemptTrajectoryJsonl,
-        } as any],
-        status: 'processing',
-      };
+        branch.solutionAttempt = executionOutput;
+        branch.solutionAttemptDisplay = executionOutput;
+        branch.refinedSolution = executionOutput;
+        branch.refinedSolutionDisplay = executionOutput;
+        branch.status = 'completed';
+        branch.correctionStatus = 'completed';
+        branch.iterationHistory = {
+          iterations: [{
+            iterationNumber: iteration,
+            correctedSolution: executionOutput,
+            critique: '',
+            timestamp: Date.now(),
+            solutionTrajectoryJsonl: executionTrajectoryJsonl,
+          } as any],
+          status: 'processing',
+        };
+        this.callbacks.onStateChange?.(this.state);
+      }
 
-      const historyContext = buildCritiqueCorrectionMemoryBankHistory(
-        branch.memoryBank,
-        branch.iterationHistory.iterations
-      );
-      const critiquePrompt = buildContextForCritiqueAgent(
-        this.state.challenge,
-        branch.id,
-        branch.strategyText,
-        historyContext
-      );
+      const iterHistory = branch.iterationHistory ?? (branch.iterationHistory = { iterations: [], status: 'processing' });
+      const currentIterEntry = iterHistory.iterations.find(it => it.iterationNumber === iteration);
+      if (!currentIterEntry?.critique) {
+        const historyContext = buildCritiqueCorrectionMemoryBankHistory(
+          branch.memoryBank,
+          iterHistory.iterations
+        );
+        const critiquePrompt = buildContextForCritiqueAgent(
+          this.state.challenge,
+          branch.id,
+          branch.strategyText,
+          historyContext
+        );
 
-      let critiqueTrajectoryJsonl = '';
-      const critiqueOutput = await this.callAgentModelWithRetry({
-        kind: 'solutionCritique',
-        promptText: critiquePrompt,
-        stepDescription: `First Critique for New Branch in ${slotId}`,
-        workingDirectory: `Strategy-${slotIndex + 1}`,
-        isCritical: false,
-        executionGroupId: `group-global-update-${updateNumber}-distillation`,
-        executionGroupName: `Global Update ${updateNumber}: Distillation & New Branch Seeding (Parallel)`,
-        onTrajectoryJsonl: (jsonl) => {
-          critiqueTrajectoryJsonl = jsonl;
-        },
-      });
+        let critiqueTrajectoryJsonl = '';
+        const critiqueOutput = await this.callAgentModelWithRetry({
+          kind: 'solutionCritique',
+          promptText: critiquePrompt,
+          stepDescription: `First Critique for New Branch in ${slotId}`,
+          workingDirectory: `Strategy-${slotIndex + 1}`,
+          isCritical: false,
+          executionGroupId: `group-global-update-${updateNumber}-distillation`,
+          executionGroupName: `Global Update ${updateNumber}: Distillation & New Branch Seeding (Parallel)`,
+          onTrajectoryJsonl: (jsonl) => {
+            critiqueTrajectoryJsonl = jsonl;
+          },
+        });
 
-      branch.solutionCritique = critiqueOutput;
+        branch.solutionCritique = critiqueOutput;
 
-      if (!this.state.solutionCritiques) this.state.solutionCritiques = [];
-      this.state.solutionCritiques.push({
-        id: `critique-${branch.id}-${iteration}`,
-        mainStrategyId: branch.id,
-        globalIteration: iteration,
-        status: 'completed',
-        critiqueResponse: critiqueOutput,
-        critiqueResponseDisplay: critiqueOutput,
-      });
-      this.state.solutionCritiquesStatus = 'completed';
+        if (!this.state.solutionCritiques) this.state.solutionCritiques = [];
+        this.state.solutionCritiques.push({
+          id: `critique-${branch.id}-${iteration}`,
+          mainStrategyId: branch.id,
+          globalIteration: iteration,
+          status: 'completed',
+          critiqueResponse: critiqueOutput,
+          critiqueResponseDisplay: critiqueOutput,
+        });
+        this.state.solutionCritiquesStatus = 'completed';
 
-      branch.iterationHistory.iterations[0].critique = critiqueOutput;
-      branch.iterationHistory.iterations[0].timestamp = Date.now();
-      (branch.iterationHistory.iterations[0] as any).critiqueTrajectoryJsonl = critiqueTrajectoryJsonl;
-      branch.iterationHistory.status = 'completed';
+        if (currentIterEntry) {
+          currentIterEntry.critique = critiqueOutput;
+          currentIterEntry.timestamp = Date.now();
+          (currentIterEntry as any).critiqueTrajectoryJsonl = critiqueTrajectoryJsonl;
+        }
+        iterHistory.status = 'completed';
+      }
+
+      const newBranchCommit = await this.commitBranchIterationIfNeeded(slotIndex, iteration);
+      if (newBranchCommit) {
+        this.commitHashesPerIteration.set(newBranchCommitKey, newBranchCommit);
+        this.commitHashesPerIteration.set(`${slotIndex}:start_${nextWindowStart}`, newBranchCommit);
+        this.syncCheckpointState(iteration, heartbeatNo);
+        this.callbacks.onStateChange?.(this.state);
+      }
     }));
 
     await Promise.all([distillationPromise, newBranchesPromise]);
 
-    const nextWindowStart = iteration + 1;
-    for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
-      const strat = this.state.initialStrategies[slotIdx];
-      const contextFiles: DeepthinkResultsContextFile[] = [
-        {
-          path: `Strategy-${slotIdx + 1}/strategy.md`,
-          content: `# Strategy ${slotIdx + 1} (${strat.id})\n\n${strat.strategyText}\n`,
-        },
-      ];
-      const commit = await this.gitHarness.commitWindowStart(slotIdx, nextWindowStart, contextFiles);
-      this.commitHashesPerIteration.set(`${slotIdx}:start_${nextWindowStart}`, commit);
-    }
-
     let stepIiDosOutput: DosOutput | undefined;
+    const stepIiFiles: DeepthinkResultsContextFile[] = [];
+    const stepIiDosFilePath = `DOS_history/DOS_global_update_${paddedGu}_step_ii.md`;
+
     if (config.modulesCount > 0) {
-      const postUpdateState = this.state.initialStrategies.map(s => ({
-        branchId: s.id,
-        strategyText: s.strategyText,
-        latestCorrection: s.refinedSolution || s.solutionAttempt || 'None',
-        latestCritique: s.solutionCritique || 'None',
-      }));
+      const existingStepIiDos = this.state.dosOutputs?.find(
+        d => d.callType === 'step_ii' && d.iteration === iteration
+      );
+      let stepIiDosTrajectoryJsonl = (existingStepIiDos as any)?.trajectoryJsonl || '';
 
-      const stepIiPrompt = buildContextForDos(this.state.challenge, 'step_ii', postUpdateState, {
-        previousHeartbeat: this.state.heartbeats[this.state.heartbeats.length - 1],
-        slotStatuses: consolidatedDecisions.map(d => ({
-          slotId: d.slotId,
-          action: d.decision,
-          form: d.form,
-          rollbackTo: d.rollbackTo,
-        })),
-        stepIOutput: stepIDosOutput,
-      });
+      if (existingStepIiDos) {
+        stepIiDosOutput = existingStepIiDos.output;
+      } else {
+        const postUpdateState = this.state.initialStrategies.map(s => ({
+          branchId: s.id,
+          strategyText: s.strategyText,
+          latestCorrection: s.refinedSolution || s.solutionAttempt || 'None',
+          latestCritique: s.solutionCritique || 'None',
+        }));
 
-      const stepIiDosContract: OutputValidationContract<DosOutput> = {
-        name: 'StepIiDosContract',
-        validate: (parsed) => {
-          if (!parsed || typeof parsed !== 'object') {
-            throw new Error('Step-ii DOS response must be an object.');
-          }
-        },
-      };
+        const stepIiPrompt = buildContextForDos(this.state.challenge, 'step_ii', postUpdateState, {
+          previousHeartbeat: this.state.heartbeats[this.state.heartbeats.length - 1],
+          slotStatuses: consolidatedDecisions.map(d => ({
+            slotId: d.slotId,
+            action: d.decision,
+            form: d.form,
+            rollbackTo: d.rollbackTo,
+          })),
+          stepIOutput: stepIDosOutput,
+        });
 
-      let stepIiDosTrajectoryJsonl = '';
-      const rawStepIiDos = await this.callAgentModelWithRetry({
-        kind: 'dos',
-        promptText: stepIiPrompt,
-        stepDescription: `Step-ii DOS (Global Update ${updateNumber})`,
-        jsonResponse: true,
-        isCritical: true,
-        contract: stepIiDosContract,
-        executionGroupId: `group-global-update-${updateNumber}-step-ii`,
-        executionGroupName: `Global Update ${updateNumber}: Step-ii DOS Synthesis`,
-        onTrajectoryJsonl: (jsonl) => {
-          stepIiDosTrajectoryJsonl = jsonl;
-        },
-      });
-
-      stepIiDosOutput = this.parseJsonStrict<DosOutput>(rawStepIiDos, `Step-ii DOS (Global Update ${updateNumber})`);
-      this.state.dosOutputs.push({ callType: 'step_ii', iteration, output: stepIiDosOutput });
-
-      await this.gitHarness.writeFilesAndCommit(
-        `Step-ii DOS for Global Update ${updateNumber}`,
-        [
-          {
-            path: `DOS_history/DOS_global_update_${String(updateNumber).padStart(2, '0')}_step_ii.md`,
-            content: `# Step-ii DOS Output (Global Update ${updateNumber})\n\n\`\`\`json\n${JSON.stringify(stepIiDosOutput, null, 2)}\n\`\`\``,
+        const stepIiDosContract: OutputValidationContract<DosOutput> = {
+          name: 'StepIiDosContract',
+          validate: (parsed) => {
+            if (!parsed || typeof parsed !== 'object') {
+              throw new Error('Step-ii DOS response must be an object.');
+            }
           },
-          {
-            path: `DOS_history/DOS_global_update_${String(updateNumber).padStart(2, '0')}_step_ii.jsonl`,
-            content: stepIiDosTrajectoryJsonl,
+        };
+
+        const rawStepIiDos = await this.callAgentModelWithRetry({
+          kind: 'dos',
+          promptText: stepIiPrompt,
+          stepDescription: `Step-ii DOS (Global Update ${updateNumber})`,
+          jsonResponse: true,
+          isCritical: true,
+          contract: stepIiDosContract,
+          executionGroupId: `group-global-update-${updateNumber}-step-ii`,
+          executionGroupName: `Global Update ${updateNumber}: Step-ii DOS Synthesis`,
+          onTrajectoryJsonl: (jsonl) => {
+            stepIiDosTrajectoryJsonl = jsonl;
           },
-        ]
+        });
+
+        stepIiDosOutput = this.parseJsonStrict<DosOutput>(rawStepIiDos, `Step-ii DOS (Global Update ${updateNumber})`);
+        this.state.dosOutputs.push({
+          callType: 'step_ii',
+          iteration,
+          output: stepIiDosOutput,
+          trajectoryJsonl: stepIiDosTrajectoryJsonl,
+        } as any);
+        this.callbacks.onStateChange?.(this.state);
+      }
+
+      stepIiFiles.push(
+        {
+          path: stepIiDosFilePath,
+          content: `# Step-ii DOS Output (Global Update ${updateNumber})\n\n\`\`\`json\n${JSON.stringify(stepIiDosOutput, null, 2)}\n\`\`\``,
+        },
+        {
+          path: `DOS_history/DOS_global_update_${paddedGu}_step_ii.jsonl`,
+          content: stepIiDosTrajectoryJsonl,
+        }
       );
 
       const previousHeartbeat = this.state.heartbeats[this.state.heartbeats.length - 1];
       if (stepIiDosOutput.module_feedback && previousHeartbeat) {
-        await this.attachRealizedDosFeedback(stepIiDosOutput.module_feedback, previousHeartbeat.heartbeat_no);
+        stepIiFiles.push(...this.collectRealizedDosFeedbackFiles(stepIiDosOutput.module_feedback, previousHeartbeat.heartbeat_no));
       }
     }
 
-    const stepIiDosFilePath = `DOS_history/DOS_global_update_${String(updateNumber).padStart(2, '0')}_step_ii.md`;
-    await this.runCuratedContextHeartbeat(iteration, heartbeatNo, stepIiDosOutput, stepIiDosFilePath);
+    await this.runCuratedContextHeartbeat(
+      iteration,
+      heartbeatNo,
+      stepIiDosOutput,
+      stepIiDosFilePath,
+      stepIiFiles,
+      `Global Update ${updateNumber}: Step-ii DOS & Curated Context Heartbeat ${heartbeatNo}`
+    );
   }
 
-  private async attachRealizedDosFeedback(
+  private collectRealizedDosFeedbackFiles(
     dosFeedback: DosModuleFeedbackItem[],
     targetHeartbeatNo: number
-  ): Promise<void> {
+  ): DeepthinkResultsContextFile[] {
     const heartbeatBlock = this.state.heartbeats.find(h => h.heartbeat_no === targetHeartbeatNo);
-    if (!heartbeatBlock) return;
+    if (!heartbeatBlock) return [];
 
     const filesToWrite: DeepthinkResultsContextFile[] = [];
 
@@ -2316,21 +2280,18 @@ export class DeepthinkPipelineOrchestrator {
       }
     }
 
-    if (filesToWrite.length > 0) {
-      await this.gitHarness.writeFilesAndCommit(
-        `Realized module feedback for Heartbeat ${targetHeartbeatNo}`,
-        filesToWrite
-      );
-    }
+    return filesToWrite;
   }
 
-  private async updateStrategiesUsedSoFarFile(): Promise<void> {
+  private buildStrategiesUsedSoFarFile(): DeepthinkResultsContextFile {
     const markdown = [
       '# Strategies Finalized and Used So Far',
       ...this.strategiesUsedSoFar.map(s => `## Slot ${s.slotId} (Iteration ${s.iterationFinalized})\n${s.text}`),
     ].join('\n\n');
-
-    await this.gitHarness.commitStrategyHistory('strategies_finalized_and_used_so_far.md', markdown);
+    return {
+      path: 'strategies_history/strategies_finalized_and_used_so_far.md',
+      content: markdown,
+    };
   }
 
   private recordWindowEventsToLedger(branchId: string, report?: BsrReport): void {
@@ -2366,48 +2327,55 @@ export class DeepthinkPipelineOrchestrator {
     this.state.branchLedgers[branchId] = ledger;
   }
 
-  private async commitIterationBarriers(iteration: number): Promise<void> {
-    for (let slotIdx = 0; slotIdx < this.state.initialStrategies.length; slotIdx++) {
-      const commitKey = `${slotIdx}:${iteration}`;
-      if (this.commitHashesPerIteration.has(commitKey)) {
-        continue;
-      }
-      const branch = this.state.initialStrategies[slotIdx];
-      const historyEntry = branch.iterationHistory?.iterations.find(it => it.iterationNumber === iteration);
-
-      const files: DeepthinkResultsContextFile[] = [];
-      if (historyEntry) {
-        const paddedIter = String(iteration).padStart(2, '0');
-        files.push({
-          path: `Strategy-${slotIdx + 1}/history/iteration_${paddedIter}.md`,
-          content: [
-            `# Strategy ${branch.id} - Iteration ${iteration}`,
-            `## Solution\n${historyEntry.correctedSolution}`,
-            ...(historyEntry.critique ? [`\n## Critique\n${historyEntry.critique}`] : []),
-          ].join('\n\n'),
-        });
-        const solJsonl = (historyEntry as any).solutionTrajectoryJsonl || formatDirectCallTrajectoryJsonl({
-          userPrompt: `[Strategy ${branch.id} Iteration ${iteration} Solution]`,
-          assistantResponse: historyEntry.correctedSolution,
-        });
-        const critJsonl = (historyEntry as any).critiqueTrajectoryJsonl || (
-          historyEntry.critique
-            ? formatDirectCallTrajectoryJsonl({
-                userPrompt: `[Strategy ${branch.id} Iteration ${iteration} Critique]`,
-                assistantResponse: historyEntry.critique,
-              })
-            : ''
-        );
-        files.push({
-          path: `Strategy-${slotIdx + 1}/history/iteration_${paddedIter}.jsonl`,
-          content: [solJsonl, critJsonl].filter(Boolean).join('\n'),
-        });
-      }
-
-      const commit = await this.gitHarness.commitStrategyIteration(slotIdx, iteration, files);
-      this.commitHashesPerIteration.set(commitKey, commit);
+  private async commitBranchIterationIfNeeded(slotIdx: number, iteration: number): Promise<string | undefined> {
+    const commitKey = `${slotIdx}:${iteration}`;
+    const existing = this.commitHashesPerIteration.get(commitKey);
+    if (existing) {
+      return existing;
     }
+    const branch = this.state.initialStrategies[slotIdx];
+    const historyEntry = branch?.iterationHistory?.iterations.find(it => it.iterationNumber === iteration);
+    if (!historyEntry) {
+      return undefined;
+    }
+
+    const paddedIter = String(iteration).padStart(2, '0');
+    const solJsonl = (historyEntry as any).solutionTrajectoryJsonl || formatDirectCallTrajectoryJsonl({
+      userPrompt: `[Strategy ${branch.id} Iteration ${iteration} Solution]`,
+      assistantResponse: historyEntry.correctedSolution,
+    });
+    const critJsonl = (historyEntry as any).critiqueTrajectoryJsonl || (
+      historyEntry.critique
+        ? formatDirectCallTrajectoryJsonl({
+            userPrompt: `[Strategy ${branch.id} Iteration ${iteration} Critique]`,
+            assistantResponse: historyEntry.critique,
+          })
+        : ''
+    );
+    const files: DeepthinkResultsContextFile[] = [
+      {
+        path: `Strategy-${slotIdx + 1}/history/iteration_${paddedIter}.md`,
+        content: [
+          `# Strategy ${branch.id} - Iteration ${iteration}`,
+          `## Solution\n${historyEntry.correctedSolution}`,
+          ...(historyEntry.critique ? [`\n## Critique\n${historyEntry.critique}`] : []),
+        ].join('\n\n'),
+      },
+      {
+        path: `Strategy-${slotIdx + 1}/history/iteration_${paddedIter}.jsonl`,
+        content: [solJsonl, critJsonl].filter(Boolean).join('\n'),
+      },
+    ];
+
+    const commit = await this.gitHarness.commit(
+      `Commit Strategy-${slotIdx + 1} at iteration ${iteration}`,
+      `slot${slotIdx}_it${iteration}`,
+      files
+    );
+    this.commitHashesPerIteration.set(commitKey, commit);
     this.syncCheckpointState(iteration);
+    this.callbacks.onStateChange?.(this.state);
+    return commit;
   }
 
   private async callAgentModelWithRetry<T = unknown>(args: {
@@ -2436,7 +2404,9 @@ export class DeepthinkPipelineOrchestrator {
     const systemInstruction = deepthinkAgentSystemInstruction(pairedAgentKind, prompts);
     const maxOutputTokens = deepthinkAgentMaxOutputTokens(args.kind);
     const metadata = DEEPTHINK_AGENT_REGISTRY[args.kind];
-    const displayAgentName = metadata ? `${metadata.label} Agent` : `${args.kind} Agent`;
+    const displayAgentName = metadata
+      ? (metadata.label.endsWith('Agent') ? metadata.label : `${metadata.label} Agent`)
+      : `${args.kind} Agent`;
     const executionId = args.executionId || `inv-${nanoid(10)}`;
 
     let lastError: unknown;

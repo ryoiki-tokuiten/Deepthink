@@ -697,7 +697,7 @@ const BsrParametersSection: React.FC<{
 };
 
 const CONFIG_WARNING_TEXT =
-    'The current default configuration is optimal for most of the situations and is finalized after doing a lot of experiments. Change the configuration only if you know exactly what you are doing and how it will impact the overall state, and, more importantly the costs. This is very sensitive configuration (doesnt matter whether you are using it with local models or with the frontier models). Small tweaks can waste your compute significantly.';
+    'The current default configuration is optimal for most of the situations and is finalized after doing a lot of experiments. Change the configuration only if you know exactly what you are doing and how it will impact the overall state, and, the costs. This is a very sensitive configuration (doesnt matter whether you are using it with local models or with the frontier models). Small tweaks can waste your money significantly.';
 
 const ConfigSensitivityWarningModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const openedAtRef = useRef(Date.now());

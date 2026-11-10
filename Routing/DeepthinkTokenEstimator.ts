@@ -14,9 +14,8 @@ export const SANDBOX_API_CALL_MULTIPLIER = { min: 12, max: 36 } as const;
 export interface DeepthinkApiCallBreakdown {
     initialStrategy: { min: number; max: number };
     strategyProximity: { min: number; max: number };
-    solutionAttempt: { min: number; max: number };
     solutionCritique: { min: number; max: number };
-    solutionCorrection: number;
+    solutionCorrection: { min: number; max: number };
     dos: number;
     modulesGeneration: number;
     modulesImpactReview: number;
@@ -91,15 +90,14 @@ export function calculateDeepthinkApiCallsFromParams(params: Partial<ModelParame
             min: strategyProximityLoops,
             max: strategyProximityLoops * (1 + globalUpdates),
         },
-        solutionAttempt: {
-            min: strategiesCount,
-            max: strategiesCount * (1 + globalUpdates),
-        },
         solutionCritique: {
             min: critiqueIterations * strategiesCount,
             max: (critiqueIterations + globalUpdates) * strategiesCount,
         },
-        solutionCorrection: Math.max(0, i - 1) * strategiesCount,
+        solutionCorrection: {
+            min: i * strategiesCount,
+            max: (i + globalUpdates) * strategiesCount,
+        },
         dos: standaloneHeartbeats * (modulesCount > 0 ? 1 : 0) + globalUpdates * (1 + (modulesCount > 0 ? 1 : 0)),
         modulesGeneration: totalHeartbeatsWithMod * (1 + modulesImpactReviewLoops),
         modulesImpactReview: totalHeartbeatsWithMod * modulesImpactReviewLoops,
@@ -183,12 +181,10 @@ const EXTENDED_ROLE_MAX_OUTPUT_TOKENS = 10_000;
 interface TokenProfile {
     promptBase: number;
     harnessNoteTokens: number;
-    reframedNoteTokens: number;
     strategyGenerationOutputPerStrategy: number;
     modulesGenerationOutputPerModule: number;
     strategyProximityOutput: number;
     modulesImpactReviewOutput: number;
-    solutionAttemptOutput: number;
     solutionCorrectionOutput: number;
     critiqueOutput: number;
     memoryOutput: number;
@@ -215,12 +211,10 @@ export function getRandomSandboxIterationNoise(): number {
 const WORST_PROFILE: TokenProfile = {
     promptBase: 5_000,
     harnessNoteTokens: 400,
-    reframedNoteTokens: 250,
     strategyGenerationOutputPerStrategy: 1_000,
     modulesGenerationOutputPerModule: 800,
     strategyProximityOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     modulesImpactReviewOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
-    solutionAttemptOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     solutionCorrectionOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
     critiqueOutput: DEFAULT_ROLE_MAX_OUTPUT_TOKENS,
     memoryOutput: EXTENDED_ROLE_MAX_OUTPUT_TOKENS,
@@ -236,12 +230,10 @@ const WORST_PROFILE: TokenProfile = {
 const AVERAGE_PROFILE: TokenProfile = {
     promptBase: 3_500,
     harnessNoteTokens: 250,
-    reframedNoteTokens: 150,
     strategyGenerationOutputPerStrategy: 550,
     modulesGenerationOutputPerModule: 450,
     strategyProximityOutput: 2_000,
     modulesImpactReviewOutput: 2_000,
-    solutionAttemptOutput: 3_200,
     solutionCorrectionOutput: 6_000,
     critiqueOutput: 2_400,
     memoryOutput: 5_500,
@@ -318,9 +310,7 @@ function simulatePipelineTokens(
     totalInput += seedLoop.inputTokens;
     totalOutput += seedLoop.outputTokens;
 
-    let priorStrategyProximityHistoryTokens = seedLoop.transcriptTokens;
     let strategiesFinalizedAndUsedCount = strategyCount;
-    let priorModulesImpactReviewHistoryTokens = 0;
     let modulesFinalizedAndUsedCount = 0;
 
     const branches: BranchSimState[] = Array.from({ length: strategyCount }, () => ({
@@ -348,13 +338,12 @@ function simulatePipelineTokens(
             hbActiveContextTokens += prevModAndTestsTokens + mappedPacketsSchemaTokens + realizedFeedbackTokens + usedSoFarTokens + profile.dosCoreSynthesisContext;
         }
 
-        const hbBaseInput = profile.promptBase + priorModulesImpactReviewHistoryTokens + hbActiveContextTokens;
+        const hbBaseInput = profile.promptBase + hbActiveContextTokens;
         const modGenTurnOutput = Math.min(DEFAULT_ROLE_MAX_OUTPUT_TOKENS, modulesCount * moduleItemTokens);
         const modLoop = computeProximityLoopTokens(hbBaseInput, modulesImpactReviewLoops, modGenTurnOutput, profile.modulesImpactReviewOutput);
         totalInput += modLoop.inputTokens;
         totalOutput += modLoop.outputTokens;
 
-        priorModulesImpactReviewHistoryTokens += profile.reframedNoteTokens + modLoop.transcriptTokens;
         modulesFinalizedAndUsedCount += modulesCount;
 
         totalInput += modulesCount * (profile.promptBase + moduleItemTokens);
@@ -364,15 +353,15 @@ function simulatePipelineTokens(
     for (let n = 1; n <= i; n++) {
         if (n === 1) {
             for (const branch of branches) {
-                const attemptInput = profile.promptBase + strategyTextTokens;
-                const attemptOutput = profile.solutionAttemptOutput;
-                const critiqueInput = profile.promptBase + strategyTextTokens + attemptOutput;
+                const execInput = profile.promptBase + strategyTextTokens;
+                const execOutput = profile.solutionCorrectionOutput;
+                const critiqueInput = profile.promptBase + strategyTextTokens + execOutput;
                 const critiqueOutput = profile.critiqueOutput;
-                totalInput += attemptInput + critiqueInput;
-                totalOutput += attemptOutput + critiqueOutput;
-                branch.latestSolutionTokens = attemptOutput;
+                totalInput += execInput + critiqueInput;
+                totalOutput += execOutput + critiqueOutput;
+                branch.latestSolutionTokens = execOutput;
                 branch.latestCritiqueTokens = critiqueOutput;
-                branch.windowHistoryTokens = attemptOutput + critiqueOutput;
+                branch.windowHistoryTokens = execOutput + critiqueOutput;
             }
         } else {
             const totalAllBranchesLatestPairs = branches.reduce((acc, b) => acc + strategyTextTokens + b.latestSolutionTokens + b.latestCritiqueTokens, 0);
@@ -441,12 +430,11 @@ function simulatePipelineTokens(
                 const consolidatedBsrDecisionsTokens = strategyCount * 250;
                 const strategiesUsedSoFarTokens = strategiesFinalizedAndUsedCount * strategyTextTokens;
                 const guContextTokens = profile.harnessNoteTokens + activeStrategiesAndLatestCorrections + consolidatedBsrDecisionsTokens + profile.dosCoreSynthesisContext + strategiesUsedSoFarTokens;
-                const guStratBaseInput = profile.promptBase + priorStrategyProximityHistoryTokens + guContextTokens;
+                const guStratBaseInput = profile.promptBase + guContextTokens;
                 const guStratGenTurnOutput = Math.min(DEFAULT_ROLE_MAX_OUTPUT_TOKENS, changedCount * strategyTextTokens);
                 const guStratLoop = computeProximityLoopTokens(guStratBaseInput, strategyProximityLoops, guStratGenTurnOutput, profile.strategyProximityOutput);
                 totalInput += guStratLoop.inputTokens;
                 totalOutput += guStratLoop.outputTokens;
-                priorStrategyProximityHistoryTokens += profile.reframedNoteTokens + guStratLoop.transcriptTokens;
                 strategiesFinalizedAndUsedCount += changedCount;
             }
 
@@ -462,16 +450,16 @@ function simulatePipelineTokens(
                     branch.windowHistoryTokens = 0;
                     branch.updatesSurvived += 1;
                 } else {
-                    const attemptInput = profile.promptBase + strategyTextTokens;
-                    const attemptOutput = profile.solutionAttemptOutput;
-                    const critiqueInput = profile.promptBase + strategyTextTokens + attemptOutput;
+                    const execInput = profile.promptBase + strategyTextTokens;
+                    const execOutput = profile.solutionCorrectionOutput;
+                    const critiqueInput = profile.promptBase + strategyTextTokens + execOutput;
                     const critiqueOutput = profile.critiqueOutput;
-                    totalInput += attemptInput + critiqueInput;
-                    totalOutput += attemptOutput + critiqueOutput;
+                    totalInput += execInput + critiqueInput;
+                    totalOutput += execOutput + critiqueOutput;
                     branch.hasMemoryBank = false;
-                    branch.latestSolutionTokens = attemptOutput;
+                    branch.latestSolutionTokens = execOutput;
                     branch.latestCritiqueTokens = critiqueOutput;
-                    branch.preUpdatePairTokens = attemptOutput + critiqueOutput;
+                    branch.preUpdatePairTokens = execOutput + critiqueOutput;
                     branch.windowHistoryTokens = 0;
                     branch.updatesSurvived = 0;
                 }

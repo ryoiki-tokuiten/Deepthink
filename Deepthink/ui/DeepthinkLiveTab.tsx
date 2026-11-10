@@ -79,10 +79,10 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) =
         const text = `${agentName || ''} ${stepDescription || ''}`.toLowerCase();
         if (text.includes('bsr') || text.includes('branch state')) return 'redteam';
         if (text.includes('dos') || text.includes('synthesis') || text.includes('critique') || text.includes('critic')) return 'critique';
-        if (text.includes('correction')) return 'correction';
+        if (text.includes('correction') || text.includes('execution')) return 'correction';
         if (text.includes('memory')) return 'strategy';
         if (text.includes('modules') || text.includes('tester')) return 'modules';
-        if (text.includes('strategy') || text.includes('attempt') || text.includes('execution') || text.includes('solver') || text.includes('proximity')) return 'strategy';
+        if (text.includes('strategy') || text.includes('attempt') || text.includes('solver') || text.includes('proximity')) return 'strategy';
         return 'general';
     };
 
@@ -97,8 +97,9 @@ export const DeepthinkLiveTab: React.FC<DeepthinkLiveTabProps> = ({ process }) =
             return filtered.length > 0 ? `${base} (${filtered.join(', ')})` : base;
         };
 
-        if (lowerName.includes('solution attempt')) return withParts('Initial Execution', [target, meta]);
-        if (lowerName.includes('solution correction')) return withParts('Correction Agent', [target, meta]);
+        if (lowerName.includes('execution agent') || lowerName.includes('solution correction') || lowerName.includes('solution attempt')) {
+            return withParts('Execution Agent', [target, meta]);
+        }
         if (lowerName.includes('solution critique')) return withParts('Critique Agent', [target, meta]);
         if (lowerName.includes('dissected observations') || lowerName.includes('synthesis')) {
             const prefix = desc.toLowerCase().includes('step-i') ? 'step-i, For ' : 'For ';
