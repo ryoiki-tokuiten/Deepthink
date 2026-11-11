@@ -122,7 +122,7 @@ You can set up all providers and models directly from the frontend UI without to
 - **Google Gemini.** Add your key in the frontend or set `GEMINI_API_KEY`.
 - **OpenAI.** Add your key in the frontend or set `OPENAI_API_KEY`.
 - **Anthropic.** Add your key in the frontend or set `ANTHROPIC_API_KEY`.
-- **OpenAI-compatible endpoints.** Add any number of custom endpoints in the UI with a display name, base URL, optional API key, and model IDs. Works with OpenRouter, Together, Groq, Fireworks, DeepSeek, vLLM, LiteLLM, and custom gateways.
+- **OpenAI-compatible endpoints.** Add any number of custom endpoints in the UI with a display name, base URL, optional API key, and model IDs. Works with Atlas Cloud (one-click **Use Atlas Cloud** preset in the UI: `https://api.atlascloud.ai/v1`, starting with `deepseek-ai/deepseek-v4-flash`), OpenRouter, Together, Groq, Fireworks, DeepSeek, vLLM, LiteLLM, and custom gateways.
 - **Local models through an endpoint URL.** Point the Local Models provider in the UI at a local server URL such as `http://localhost:11434` for Ollama, `http://localhost:1234` for LM Studio, or a local llama.cpp or vLLM server, and list the model IDs you want to use.
 
 
